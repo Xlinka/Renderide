@@ -64,11 +64,6 @@ fn is_pose_valid(
         && pose.position.y.abs() < POSE_VALIDATION_THRESHOLD
         && pose.position.z.abs() < POSE_VALIDATION_THRESHOLD;
     if !pos_ok {
-        crate::log::log_write(&format!(
-            "[POSE VALIDATION] frame {} scene_id={} transform_id={} REJECTED: invalid position ({:.2},{:.2},{:.2})",
-            frame_index, scene_id, transform_id,
-            pose.position.x, pose.position.y, pose.position.z
-        ));
         return false;
     }
     let scale_ok = pose.scale.x.is_finite()
@@ -78,11 +73,6 @@ fn is_pose_valid(
         && pose.scale.y.abs() < POSE_VALIDATION_THRESHOLD
         && pose.scale.z.abs() < POSE_VALIDATION_THRESHOLD;
     if !scale_ok {
-        crate::log::log_write(&format!(
-            "[POSE VALIDATION] frame {} scene_id={} transform_id={} REJECTED: invalid scale ({:.2},{:.2},{:.2})",
-            frame_index, scene_id, transform_id,
-            pose.scale.x, pose.scale.y, pose.scale.z
-        ));
         return false;
     }
     let rot_ok = pose.rotation.i.is_finite()
@@ -90,10 +80,6 @@ fn is_pose_valid(
         && pose.rotation.k.is_finite()
         && pose.rotation.w.is_finite();
     if !rot_ok {
-        crate::log::log_write(&format!(
-            "[POSE VALIDATION] frame {} scene_id={} transform_id={} REJECTED: invalid rotation",
-            frame_index, scene_id, transform_id
-        ));
         return false;
     }
     true
@@ -148,8 +134,6 @@ impl SceneGraph {
         shm: &mut SharedMemoryAccessor,
         data: &crate::shared::FrameSubmitData,
     ) {
-        let diag_frame = std::env::var("RENDERIDE_DIAG_FULL").is_ok() || data.frame_index % 30 == 0;
-
         for update in &data.render_spaces {
             let is_new = !self.scenes.contains_key(&update.id);
             let total_before = self.scenes.len();
@@ -157,13 +141,6 @@ impl SceneGraph {
                 .scenes
                 .entry(update.id)
                 .or_insert_with(Scene::default);
-
-            if is_new && diag_frame {
-                crate::log::log_write(&format!(
-                    "[RENDER SPACE] frame {} space_id={} ADDED (total_spaces={})",
-                    data.frame_index, update.id, total_before + 1
-                ));
-            }
 
             scene.id = update.id;
             scene.is_active = update.is_active;
@@ -180,15 +157,6 @@ impl SceneGraph {
                 Self::apply_transforms_update(scene, shm, transforms_update, frame_index);
                 self.world_matrices.remove(&update.id);
                 self.world_matrices_dirty.insert(update.id);
-            }
-            if scene.id == 2 && scene.nodes.len() > 82 && frame_index % 30 == 0 {
-                for &idx in &[70usize, 73, 82] {
-                    let n = &scene.nodes[idx];
-                    crate::log::log_write(&format!(
-                        "[LOCAL POSE] scene_id={} node_id={} pos=({:.2},{:.2},{:.2})",
-                        scene.id, idx, n.position.x, n.position.y, n.position.z
-                    ));
-                }
             }
             if let Some(ref mesh_update) = update.mesh_renderers_update {
                 Self::apply_mesh_renderables_update(scene, shm, mesh_update, frame_index);
@@ -207,12 +175,6 @@ impl SceneGraph {
             }
         }
         for id in &self.spaces_to_remove {
-            if diag_frame {
-                crate::log::log_write(&format!(
-                    "[RENDER SPACE] frame {} space_id={} REMOVED (remaining={})",
-                    data.frame_index, id, self.scenes.len() - 1
-                ));
-            }
             self.scenes.remove(id);
             self.world_matrices.remove(id);
             self.world_matrices_dirty.remove(id);
@@ -246,10 +208,6 @@ impl SceneGraph {
                 offset += TASK_STRIDE;
             }
         }) {
-            crate::log::log_write(&format!(
-                "[REFLECTION PROBE SH2] access_mut_bytes failed for buffer_id={}",
-                sh2_tasks.tasks.buffer_id
-            ));
         }
     }
 
@@ -300,34 +258,14 @@ impl SceneGraph {
                         scene.node_parents.swap_remove(idx);
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[TRANSFORM REMOVALS] frame {} scene_id={} CRITICAL: access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
 
-        let nodes_before = scene.nodes.len();
         while (scene.nodes.len() as i32) < update.target_transform_count {
             scene.nodes.push(render_transform_identity());
             scene.node_parents.push(-1);
         }
-        let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-        if (diag_full || frame_index % 30 == 0)
-            && (update.target_transform_count - nodes_before as i32).abs() > 10
-        {
-            crate::log::log_write(&format!(
-                "[TRANSFORM COUNT] frame {} scene_id={} nodes_before={} target={} nodes_after={}",
-                frame_index,
-                scene.id,
-                nodes_before,
-                update.target_transform_count,
-                scene.nodes.len()
-            ));
-        }
-
         if update.parent_updates.length > 0 {
             match shm.access_copy_diagnostic::<TransformParentUpdate>(&update.parent_updates) {
                 Ok(parents) => {
@@ -340,12 +278,7 @@ impl SceneGraph {
                         }
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[TRANSFORM PARENT UPDATES] frame {} scene_id={} CRITICAL: access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
 
@@ -366,66 +299,11 @@ impl SceneGraph {
                             written_ids.push(pu.transform_id);
                         }
                     }
-                    if frame_index % 30 == 0 {
-                        crate::log::log_write(&format!(
-                            "[POSE UPDATE] frame {} scene_id={} pose_updates_received={} actually_written={}",
-                            frame_index, scene.id, poses.len(), written
-                        ));
-                        let sample: Vec<i32> = written_ids
-                            .iter()
-                            .take(5)
-                            .chain(written_ids.iter().rev().take(5))
-                            .copied()
-                            .collect();
-                        crate::log::log_write(&format!(
-                            "[POSE UPDATE] frame {} scene_id={} written_transform_ids_sample={:?}",
-                            frame_index, scene.id, sample
-                        ));
-                    }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[POSE UPDATE] frame {} scene_id={} CRITICAL: access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
 
-        let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-        if diag_full || frame_index % 30 == 0 {
-            let removals_count = if update.removals.length > 0 {
-                shm.access_copy::<i32>(&update.removals)
-                    .map(|r| r.iter().take_while(|&&i| i >= 0).count())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-            let pose_count = if update.pose_updates.length > 0 {
-                shm.access_copy::<TransformPoseUpdate>(&update.pose_updates)
-                    .map(|p| p.iter().take_while(|pu| pu.transform_id >= 0).count())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-            let parent_count = if update.parent_updates.length > 0 {
-                shm.access_copy::<TransformParentUpdate>(&update.parent_updates)
-                    .map(|p| p.iter().take_while(|pu| pu.transform_id >= 0).count())
-                    .unwrap_or(0)
-            } else {
-                0
-            };
-            crate::log::log_write(&format!(
-                "[TRANSFORM] frame {} scene_id={} nodes_count={} target={} removals={} pose_updates={} parent_updates={}",
-                frame_index,
-                scene.id,
-                scene.nodes.len(),
-                update.target_transform_count,
-                removals_count,
-                pose_count,
-                parent_count
-            ));
-        }
     }
 
     fn apply_mesh_renderables_update(
@@ -449,12 +327,7 @@ impl SceneGraph {
                         }
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[MESH RENDERABLES REMOVALS] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
         if update.additions.length > 0 {
@@ -475,25 +348,8 @@ impl SceneGraph {
                             bone_transform_ids: None,
                         });
                     }
-                    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-                    if (diag_full || frame_index % 30 == 0) && !added_node_ids.is_empty() {
-                        let sample: Vec<i32> = added_node_ids.iter().take(5).copied().collect();
-                        crate::log::log_write(&format!(
-                            "[MESH RENDERABLES] frame {} scene_id={} additions={} drawables_len={} sample_node_ids={:?}",
-                            frame_index,
-                            scene.id,
-                            added_node_ids.len(),
-                            scene.drawables.len(),
-                            sample
-                        ));
-                    }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[MESH RENDERABLES ADDITIONS] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
         if update.mesh_states.length > 0 {
@@ -515,12 +371,7 @@ impl SceneGraph {
                         }
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[MESH RENDERABLES STATES] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
     }
@@ -546,12 +397,7 @@ impl SceneGraph {
                         }
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[SKINNED RENDERABLES REMOVALS] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
         if update.additions.length > 0 {
@@ -573,24 +419,8 @@ impl SceneGraph {
                         });
                     }
                     let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-                    if (diag_full || frame_index % 30 == 0) && !added_node_ids.is_empty() {
-                        let sample: Vec<i32> = added_node_ids.iter().take(5).copied().collect();
-                        crate::log::log_write(&format!(
-                            "[SKINNED RENDERABLES] frame {} scene_id={} additions={} skinned_drawables_len={} sample_node_ids={:?}",
-                            frame_index,
-                            scene.id,
-                            added_node_ids.len(),
-                            scene.skinned_drawables.len(),
-                            sample
-                        ));
-                    }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[SKINNED RENDERABLES ADDITIONS] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
         if update.mesh_states.length > 0 {
@@ -613,12 +443,7 @@ impl SceneGraph {
                         }
                     }
                 }
-                Err(e) => {
-                    crate::log::log_write(&format!(
-                        "[SKINNED RENDERABLES STATES] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                Err(_e) => {}
             }
         }
         if update.bone_assignments.length > 0 {
@@ -647,23 +472,8 @@ impl SceneGraph {
                         }
                         index_offset += bone_count;
                     }
-                    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-                    if (diag_full || frame_index % 30 == 0) && assigned_count > 0 {
-                        crate::log::log_write(&format!(
-                            "[SKINNED BONE ASSIGNMENTS] frame {} scene_id={} assignments_processed={} skinned_drawables_with_bones={}",
-                            frame_index,
-                            scene.id,
-                            assignments_processed,
-                            assigned_count
-                        ));
-                    }
                 }
-                (Err(e), _) | (_, Err(e)) => {
-                    crate::log::log_write(&format!(
-                        "[SKINNED BONE ASSIGNMENTS] frame {} scene_id={} access_copy failed: {}",
-                        frame_index, scene.id, e
-                    ));
-                }
+                (Err(_e), _) | (_, Err(_e)) => {}
             }
         }
     }
@@ -715,18 +525,6 @@ impl SceneGraph {
             }
         }
 
-        // Diagnostic: log parent state when all nodes unreachable (scene_id=2).
-        if roots.is_empty() && scene.id == 2 {
-            let parents_len = scene.node_parents.len();
-            let sample: Vec<i32> = (0..n.min(10))
-                .map(|i| scene.node_parents.get(i).copied().unwrap_or(-999))
-                .collect();
-            crate::log::log_write(&format!(
-                "[WORLD COMPUTE] roots=0 nodes={} node_parents_len={} sample_parents={:?}",
-                n, parents_len, sample
-            ));
-        }
-
         // If no roots (cycle or bad parent data), find a node that is never a child of any other.
         // That node is the logical root (breaks the cycle). Fallback to 0 if none found.
         if roots.is_empty() {
@@ -734,12 +532,6 @@ impl SceneGraph {
                 .filter(|&i| !children.iter().any(|c| c.contains(&i)))
                 .collect();
             let candidate = never_child.into_iter().next().unwrap_or(0);
-            if scene.id == 2 {
-                crate::log::log_write(&format!(
-                    "[WORLD COMPUTE] forcing root: candidate={} (no roots, cycle or bad parent)",
-                    candidate
-                ));
-            }
             roots.push(candidate);
         }
 
@@ -763,55 +555,6 @@ impl SceneGraph {
             for &child in &children[i] {
                 queue.push_back(child);
             }
-        }
-
-        // Safety check: were any nodes unreachable? (cycle or bad parent).
-        let unvisited: Vec<usize> = (0..n).filter(|&i| !visited[i]).collect();
-        if !unvisited.is_empty() && scene.id == 2 {
-            crate::log::log_write(&format!(
-                "[WORLD COMPUTE] WARNING: {} nodes unreachable (possible cycle or bad parent index)",
-                unvisited.len()
-            ));
-        }
-
-        // Threshold beyond which world translation is considered corrupt (stretched vertices).
-        const WORLD_TRANSLATION_WARN_THRESHOLD: f32 = 1e5;
-        let bad: Vec<(usize, f32, f32, f32)> = world
-            .iter()
-            .enumerate()
-            .filter_map(|(i, m)| {
-                let tx: f32 = m[(0, 3)];
-                let ty: f32 = m[(1, 3)];
-                let tz: f32 = m[(2, 3)];
-                if tx.abs() > WORLD_TRANSLATION_WARN_THRESHOLD
-                    || ty.abs() > WORLD_TRANSLATION_WARN_THRESHOLD
-                    || tz.abs() > WORLD_TRANSLATION_WARN_THRESHOLD
-                {
-                    Some((i, tx, ty, tz))
-                } else {
-                    None
-                }
-            })
-            .take(5)
-            .collect();
-        if !bad.is_empty() {
-            crate::log::log_write(&format!(
-                "[WORLD COMPUTE] WARNING: scene_id={} {} node(s) with world translation > {} (possible corrupt pose in parent chain). Sample: {:?}",
-                scene.id,
-                bad.len(),
-                WORLD_TRANSLATION_WARN_THRESHOLD,
-                bad
-            ));
-        }
-
-        // Debug: specifically check node 70 (we know it has real local pose from logs).
-        if let Some(m) = world.get(70) {
-            crate::log::log_write(&format!(
-                "[WORLD DEBUG] node_70 world_pos=({:.3},{:.3},{:.3})",
-                m[(0, 3)],
-                m[(1, 3)],
-                m[(2, 3)]
-            ));
         }
 
         world

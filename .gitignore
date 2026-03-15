@@ -455,5 +455,6 @@ target
 
 #### Other .gitignore rules
 .cursor/
-logs/
+.vscode/
+*.log
 references_external/

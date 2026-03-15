@@ -95,16 +95,11 @@ impl Session {
 
     /// Initializes the session. Call once at startup.
     pub fn init(&mut self) -> Result<(), InitError> {
-        crate::log::log_write("[Renderide] Session init: starting");
         if !take_singleton_init() {
-            crate::log::log_write("[Renderide] Session init: singleton already exists");
             return Err(InitError::SingletonAlreadyExists);
         }
 
         if get_connection_parameters().is_none() {
-            crate::log::log_write(
-                "[Renderide] Session init: no connection params, running standalone",
-            );
             self.is_standalone = true;
             self.init_finalized = true;
             return Ok(());
@@ -115,21 +110,18 @@ impl Session {
             self.is_standalone = true;
             self.init_finalized = true;
         }
-        crate::log::log_write("[Renderide] Session init: connected, waiting for RendererInitData");
         Ok(())
     }
 
     /// Per-frame update. Returns Some(exit_code) to request exit.
     pub fn update(&mut self) -> Option<i32> {
         if self.shutdown {
-            crate::log::log_write("Shutting down");
             return Some(0);
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_update())) {
             Ok(()) => None,
-            Err(e) => {
+            Err(_e) => {
                 self.fatal_error = true;
-                crate::log::log_write(&format!("FATAL Exception in update: {:?}", e));
                 Some(4)
             }
         }
@@ -190,14 +182,10 @@ impl Session {
                 }
                 TranslatedCommand::FrameSubmit(data) => {
                     if self.shared_memory.is_some() {
-                        if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        if let Err(_e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                             self.process_frame_data(data);
                         })) {
                             self.fatal_error = true;
-                            crate::log::log_write(&format!(
-                                "Exception in frame update (pre-init): {:?}",
-                                e
-                            ));
                         }
                     }
                 }
@@ -213,10 +201,6 @@ impl Session {
     fn apply_translated(&mut self, cmd: TranslatedCommand) {
         match cmd {
             TranslatedCommand::SessionInit(config) => {
-                crate::log::log_write(&format!(
-                    "[Renderide] SessionInit: shm_prefix={:?}",
-                    config.shared_memory_prefix
-                ));
                 if let Some(prefix) = config.shared_memory_prefix {
                     self.shared_memory = Some(SharedMemoryAccessor::new(prefix));
                 }
@@ -226,11 +210,10 @@ impl Session {
             TranslatedCommand::InitFinalize => self.init_finalized = true,
             TranslatedCommand::FrameSubmit(data) => {
                 if self.init_finalized {
-                    if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    if let Err(_e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         self.process_frame_data(data);
                     })) {
                         self.fatal_error = true;
-                        crate::log::log_write(&format!("Exception in frame update: {:?}", e));
                     } else {
                         self.last_frame_data_processed = true;
                     }
@@ -290,11 +273,6 @@ impl Session {
             .filter(|u| u.is_active && !u.is_overlay)
             .collect();
         if active_non_overlay.len() > 1 {
-            let ids: Vec<i32> = active_non_overlay.iter().map(|u| u.id).collect();
-            crate::log::log_write(&format!(
-                "[RENDER SPACE] FATAL: multiple active non-overlay spaces (RenderingManager expects exactly one). Active space_ids={:?}",
-                ids
-            ));
             self.fatal_error = true;
             return;
         }
@@ -325,21 +303,6 @@ impl Session {
         self.pending_render_tasks = data.render_tasks;
         self.primary_camera_task = self.pending_render_tasks.first().cloned();
 
-        let diag_frame = std::env::var("RENDERIDE_DIAG_FULL").is_ok() || data.frame_index % 30 == 0;
-        if diag_frame {
-            let space_ids: Vec<i32> = data.render_spaces.iter().map(|u| u.id).collect();
-            let active_id = data
-                .render_spaces
-                .iter()
-                .find(|u| u.is_active && !u.is_overlay)
-                .map(|u| u.id);
-            crate::log::log_write(&format!(
-                "[FRAME] frame_index={} spaces={:?} primary_view_space_id={:?}",
-                data.frame_index,
-                space_ids,
-                active_id.or(self.primary_view_space_id)
-            ));
-        }
     }
 
     fn send_renderer_init_result(&mut self) {
@@ -479,24 +442,11 @@ impl Session {
                     Some(m) => m,
                     None => {
                         if idx >= scene.nodes.len() {
-                            crate::log::log_write(&format!(
-                                "[DRAW BATCH] skip drawable node_id={} out of bounds (nodes_len={})",
-                                entry.node_id,
-                                scene.nodes.len()
-                            ));
                             continue;
                         }
                         let local =
                             crate::core::render_transform_to_matrix(&scene.nodes[idx]);
-                        // Gloobie-style: hierarchy only, no root applied.
-                        let fallback = local;
-                        if frame_index % 30 == 0 && idx % 10 == 0 {
-                            crate::log::log_write(&format!(
-                                "[WORLD FALLBACK] space_id={} node_id={} using local→root fallback",
-                                space_id, idx
-                            ));
-                        }
-                        fallback
+                        local
                     }
                 };
                 let material_id = entry.material_handle.unwrap_or(-1);
@@ -515,24 +465,11 @@ impl Session {
                     Some(m) => m,
                     None => {
                         if idx >= scene.nodes.len() {
-                            crate::log::log_write(&format!(
-                                "[DRAW BATCH] skip skinned drawable node_id={} out of bounds (nodes_len={})",
-                                entry.node_id,
-                                scene.nodes.len()
-                            ));
                             continue;
                         }
                         let local =
                             crate::core::render_transform_to_matrix(&scene.nodes[idx]);
-                        // Gloobie-style: hierarchy only, no root applied.
-                        let fallback = local;
-                        if frame_index % 30 == 0 && idx % 10 == 0 {
-                            crate::log::log_write(&format!(
-                                "[WORLD FALLBACK] space_id={} node_id={} using local→root fallback",
-                                space_id, idx
-                            ));
-                        }
-                        fallback
+                        local
                     }
                 };
                 let material_id = entry.material_handle.unwrap_or(-1);
@@ -550,20 +487,6 @@ impl Session {
             }
 
             if !draws.is_empty() {
-                if frame_index % 30 == 0 {
-                    let world_sample: Vec<String> = draws
-                        .iter()
-                        .take(5)
-                        .map(|(wm, _, _, _, _)| {
-                            let c = wm.column(3);
-                            format!("({:.2},{:.2},{:.2})", c.x, c.y, c.z)
-                        })
-                        .collect();
-                    crate::log::log_write(&format!(
-                        "[WORLD SAMPLE] space_id={} first_5_positions={:?}",
-                        space_id, world_sample
-                    ));
-                }
                 if draw_batch_samples.is_none() && !samples.is_empty() {
                     draw_batch_samples = Some((
                         space_id,
@@ -579,24 +502,6 @@ impl Session {
                     view_transform: scene.view_transform,
                     draws,
                 });
-            }
-        }
-
-        let frame_index = self.last_frame_index;
-        let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-        if diag_full || frame_index % 30 == 0 {
-            if let Some((space_id, transforms_count, drawables_count, total_draws, samples)) =
-                draw_batch_samples
-            {
-                crate::log::log_write(&format!(
-                    "[DRAW BATCH] frame {} space_id={} transforms_count={} drawables_count={} total_draws={} sample_node_worldpos={:?}",
-                    frame_index,
-                    space_id,
-                    transforms_count,
-                    drawables_count,
-                    total_draws,
-                    samples
-                ));
             }
         }
 

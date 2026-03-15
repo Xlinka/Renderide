@@ -1,10 +1,9 @@
 use std::io::Write;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use nalgebra::{Matrix4, Orthographic3, Point3, UnitQuaternion, Vector2, Vector3};
 use crate::shared::{
     CameraProjection, CameraRenderTask, IndexBufferFormat, InputState, Key, KeyboardState,
-    MouseState, RenderTransform, VertexAttributeType, WindowState,
+    MouseState, RenderTransform, WindowState,
 };
 use crate::session::Session;
 use winit::application::ApplicationHandler;
@@ -28,7 +27,6 @@ mod view;
 
 fn main() {
     log::init_log();
-    log::log_write("[Renderide] main: starting");
 
     // Panic hook: write panics to Renderide.log before default stderr output.
     let log_path = log::log_path();
@@ -48,11 +46,9 @@ fn main() {
     let event_loop = EventLoop::new().unwrap();
     let mut app = RenderideApp::new();
 
-    if let Err(e) = app.session.init() {
-        log::log_write(&format!("[Renderide] main: Failed to initialize Session: {}", e));
+    if let Err(_e) = app.session.init() {
         std::process::exit(1);
     }
-    log::log_write("[Renderide] main: init OK, entering event loop");
 
     let _ = event_loop.run_app(&mut app);
 
@@ -135,9 +131,6 @@ impl WindowInputState {
 
 /// Global render frame counter (used by proof logs).
 static mut RENDER_COUNT: u64 = 0;
-/// Whether we have logged set_cursor_position failure (Wayland: cursor position only when locked).
-static CURSOR_POSITION_ERROR_LOGGED: AtomicBool = AtomicBool::new(false);
-
 struct RenderideApp {
     session: Session,
     window: Option<Window>,
@@ -224,14 +217,7 @@ impl ApplicationHandler for RenderideApp {
                         // Use only DeviceEvent::MouseMotion for direct_delta when locked - avoid
                         // position-based delta which causes "absolute" head rotation.
                         let center_phys = PhysicalPosition::new(size.width / 2, size.height / 2);
-                        if let Err(e) = window.set_cursor_position(center_phys) {
-                            if !CURSOR_POSITION_ERROR_LOGGED.swap(true, Ordering::Relaxed) {
-                                log::log_write(&format!(
-                                    "[Renderide] set_cursor_position: {:?} (Wayland: cursor position only when locked; further errors suppressed)",
-                                    e
-                                ));
-                            }
-                        }
+                        let _ = window.set_cursor_position(center_phys);
                         self.input.window_position = center;
                     } else {
                         let _ = window.set_cursor_grab(CursorGrabMode::None);
@@ -248,11 +234,6 @@ impl ApplicationHandler for RenderideApp {
                     m.is_active = m.is_active || self.session.cursor_lock_requested();
                 }
                 self.session.set_pending_input(input);
-                static mut FRAME: u64 = 0;
-                unsafe { FRAME += 1; }
-                if unsafe { FRAME } % log::DIAG_FRAME_INTERVAL == 0 {
-                    log::log_write(&format!("[Renderide] redraw frame {}", unsafe { FRAME }));
-                }
                 if let Some(code) = self.session.update() {
                     self.exit_code = Some(code);
                     event_loop.exit();
@@ -264,16 +245,14 @@ impl ApplicationHandler for RenderideApp {
                 if let (Some(window), None) = (&self.window, &self.gpu) {
                     match pollster::block_on(init_gpu(window)) {
                         Ok(gpu) => self.gpu = Some(gpu),
-                        Err(e) => log::log_write(&format!("wgpu init error: {:?}", e)),
+                        Err(_e) => {}
                     }
                 }
                 if let Some(ref mut gpu) = self.gpu {
                     for asset_id in self.session.drain_pending_mesh_unloads() {
                         gpu.mesh_buffer_cache.remove(&asset_id);
                     }
-                    if let Err(e) = render_frame(gpu, &mut self.session) {
-                        log::log_write(&format!("wgpu render error: {}", e));
-                    }
+                    let _ = render_frame(gpu, &mut self.session);
                 }
             }
             WindowEvent::Resized(size) => {
@@ -374,9 +353,7 @@ impl ApplicationHandler for RenderideApp {
                         for asset_id in self.session.drain_pending_mesh_unloads() {
                             gpu.mesh_buffer_cache.remove(&asset_id);
                         }
-                        if let Err(e) = render_frame(gpu, &mut self.session) {
-                            log::log_write(&format!("wgpu render error: {}", e));
-                        }
+                        let _ = render_frame(gpu, &mut self.session);
                     }
                 }
             }
@@ -640,461 +617,6 @@ fn winit_key_to_renderite_key(physical_key: PhysicalKey) -> Option<Key> {
     })
 }
 
-/// Winding diagnostics: for first few meshes (floor-like and curved), log first triangle indices,
-/// vertex positions, computed face normal, and winding hint (Y+ = top face when viewed from above).
-fn log_winding_diagnostics(
-    draw_batches: &[crate::session::SpaceDrawBatch],
-    mesh_assets: &crate::assets::AssetRegistry,
-    render_count: u64,
-) {
-    if render_count % log::DIAG_FRAME_INTERVAL != 0 {
-        return;
-    }
-    use crate::shared::VertexAttributeType;
-    let mut logged_meshes: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    let mut count = 0;
-    for batch in draw_batches {
-        for (model, mesh_asset_id, _, _, _) in &batch.draws {
-            if *mesh_asset_id < 0 || count >= 5 {
-                continue;
-            }
-            let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) else { continue };
-            if mesh.vertex_count < 3 || mesh.index_count < 3 || logged_meshes.contains(mesh_asset_id) {
-                continue;
-            }
-            logged_meshes.insert(*mesh_asset_id);
-
-            let (pos_off, _) = crate::assets::attribute_offset_and_size(&mesh.vertex_attributes, VertexAttributeType::position)
-                .unwrap_or((0, 12));
-            let stride = mesh.vertex_data.len() / mesh.vertex_count.max(1) as usize;
-            let idx_bytes = match mesh.index_format {
-                IndexBufferFormat::u_int16 => 2,
-                IndexBufferFormat::u_int32 => 4,
-            };
-
-            let read_idx = |i: usize| -> Option<u32> {
-                let base = i * idx_bytes;
-                if base + idx_bytes > mesh.index_data.len() {
-                    return None;
-                }
-                match mesh.index_format {
-                    IndexBufferFormat::u_int16 => {
-                        Some(u16::from_le_bytes(mesh.index_data[base..base + 2].try_into().ok()?) as u32)
-                    }
-                    IndexBufferFormat::u_int32 => {
-                        Some(u32::from_le_bytes(mesh.index_data[base..base + 4].try_into().ok()?))
-                    }
-                }
-            };
-            let read_pos = |vi: u32| -> Option<(f32, f32, f32)> {
-                let base = vi as usize * stride + pos_off;
-                if base + 12 > mesh.vertex_data.len() {
-                    return None;
-                }
-                let x = f32::from_le_bytes(mesh.vertex_data[base..base + 4].try_into().ok()?);
-                let y = f32::from_le_bytes(mesh.vertex_data[base + 4..base + 8].try_into().ok()?);
-                let z = f32::from_le_bytes(mesh.vertex_data[base + 8..base + 12].try_into().ok()?);
-                Some((x, y, z))
-            };
-
-            let i0 = match read_idx(0) {
-                Some(x) => x,
-                None => continue,
-            };
-            let i1 = match read_idx(1) {
-                Some(x) => x,
-                None => continue,
-            };
-            let i2 = match read_idx(2) {
-                Some(x) => x,
-                None => continue,
-            };
-            let v0 = match read_pos(i0) {
-                Some(x) => x,
-                None => continue,
-            };
-            let v1 = match read_pos(i1) {
-                Some(x) => x,
-                None => continue,
-            };
-            let v2 = match read_pos(i2) {
-                Some(x) => x,
-                None => continue,
-            };
-
-            let e1 = (v1.0 - v0.0, v1.1 - v0.1, v1.2 - v0.2);
-            let e2 = (v2.0 - v0.0, v2.1 - v0.1, v2.2 - v0.2);
-            let nx = e1.1 * e2.2 - e1.2 * e2.1;
-            let ny = e1.2 * e2.0 - e1.0 * e2.2;
-            let nz = e1.0 * e2.1 - e1.1 * e2.0;
-            let len = (nx * nx + ny * ny + nz * nz).sqrt().max(1e-6);
-            let (nx, ny, nz) = (nx / len, ny / len, nz / len);
-
-            let ext = &mesh.bounds.extents;
-            let is_floor_like = ext.y < 0.1 && ext.x > 1.0 && ext.z > 1.0;
-            let winding_hint = if ny > 0.5 { "normal_up_top_face" } else if ny < -0.5 { "normal_down_bottom_face" } else { "normal_lateral" };
-
-            log::log_write(&format!(
-                "[Renderide] winding[{}]: mesh_id={} floor_like={} tri0=({},{},{}) v0=({:.2},{:.2},{:.2}) v1=({:.2},{:.2},{:.2}) v2=({:.2},{:.2},{:.2}) face_normal=({:.3},{:.3},{:.3}) {} front_face=Cw_culls_CCW",
-                render_count, mesh_asset_id, is_floor_like, i0, i1, i2,
-                v0.0, v0.1, v0.2, v1.0, v1.1, v1.2, v2.0, v2.1, v2.2,
-                nx, ny, nz, winding_hint
-            ));
-            count += 1;
-        }
-    }
-}
-
-/// Mesh diagnostics: log draw index, mesh_id, position, vertex/index counts, bounds, is_skinned (every DIAG_FRAME_INTERVAL frames).
-fn log_mesh_diagnostics(
-    draw_batches: &[crate::session::SpaceDrawBatch],
-    mesh_assets: &crate::assets::AssetRegistry,
-    render_count: u64,
-) {
-    if render_count % log::DIAG_FRAME_INTERVAL != 0 {
-        return;
-    }
-    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-    let total_draws: usize = draw_batches.iter().map(|b| b.draws.len()).sum();
-    if total_draws == 0 {
-        return;
-    }
-    let (first_n, last_n) = if diag_full {
-        (total_draws, 0)
-    } else if total_draws <= 35 {
-        (total_draws, 0)
-    } else {
-        (25, 10)
-    };
-    let mut global_idx: usize = 0;
-    for batch in draw_batches {
-        for draw in &batch.draws {
-            let (model, mesh_asset_id, is_skinned, _material_id, _) = draw;
-            let tx = model[(0, 3)];
-            let ty = model[(1, 3)];
-            let tz = model[(2, 3)];
-            let (verts, indices, bounds_c, bounds_ext) = if *mesh_asset_id >= 0 {
-                if let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) {
-                    (
-                        mesh.vertex_count,
-                        mesh.index_count,
-                        format!("({:.2},{:.2},{:.2})", mesh.bounds.center.x, mesh.bounds.center.y, mesh.bounds.center.z),
-                        format!("({:.2},{:.2},{:.2})", mesh.bounds.extents.x, mesh.bounds.extents.y, mesh.bounds.extents.z),
-                    )
-                } else {
-                    (0, 0, "(?,?,?)".to_string(), "(?,?,?)".to_string())
-                }
-            } else {
-                (0, 0, "(?,?,?)".to_string(), "(?,?,?)".to_string())
-            };
-            let should_log = diag_full
-                || global_idx < first_n
-                || (last_n > 0 && global_idx >= total_draws.saturating_sub(last_n));
-            if should_log {
-                log::log_write(&format!(
-                    "[Renderide] mesh_diag[{}]: draw {} mesh_id={} pos=({:.2},{:.2},{:.2}) verts={} indices={} bounds_c={} ext={} skinned={}",
-                    render_count,
-                    global_idx,
-                    mesh_asset_id,
-                    tx, ty, tz,
-                    verts,
-                    indices,
-                    bounds_c,
-                    bounds_ext,
-                    is_skinned
-                ));
-            }
-            global_idx += 1;
-        }
-    }
-}
-
-/// Mesh assets summary: for each mesh_asset_id in draw batches, log (mesh_id, vertex_count, index_count, bounds). Include meshes with verts=0.
-fn log_mesh_assets_summary(
-    draw_batches: &[crate::session::SpaceDrawBatch],
-    mesh_assets: &crate::assets::AssetRegistry,
-    render_count: u64,
-) {
-    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-    let proof_enabled = std::env::var("RENDERIDE_RENDER_PROOF").is_ok();
-    if !diag_full && !proof_enabled && render_count % log::DIAG_FRAME_INTERVAL != 0 {
-        return;
-    }
-    let mut mesh_ids: std::collections::HashSet<i32> = std::collections::HashSet::new();
-    for batch in draw_batches {
-        for (_, mesh_asset_id, _, _, _) in &batch.draws {
-            mesh_ids.insert(*mesh_asset_id);
-        }
-    }
-    let limit = if diag_full { usize::MAX } else { 60 };
-    for (i, &mesh_id) in mesh_ids.iter().take(limit).enumerate() {
-        let (verts, indices, bounds_c, bounds_ext) = if mesh_id >= 0 {
-            if let Some(mesh) = mesh_assets.get_mesh(mesh_id) {
-                (
-                    mesh.vertex_count,
-                    mesh.index_count,
-                    format!("({:.2},{:.2},{:.2})", mesh.bounds.center.x, mesh.bounds.center.y, mesh.bounds.center.z),
-                    format!("({:.2},{:.2},{:.2})", mesh.bounds.extents.x, mesh.bounds.extents.y, mesh.bounds.extents.z),
-                )
-            } else {
-                (-1, -1, "(missing)".to_string(), "(missing)".to_string())
-            }
-        } else {
-            (-1, -1, "(negative_id)".to_string(), "(negative_id)".to_string())
-        };
-        log::log_write(&format!(
-            "[Renderide] mesh_assets_summary[{}]: mesh_id={} verts={} indices={} bounds_c={} ext={}",
-            i, mesh_id, verts, indices, bounds_c, bounds_ext
-        ));
-    }
-    if mesh_ids.len() > limit {
-        log::log_write(&format!(
-            "[Renderide] mesh_assets_summary: ... and {} more (total {} unique mesh_ids)",
-            mesh_ids.len() - limit, mesh_ids.len()
-        ));
-    }
-}
-
-/// Mesh render summary: vertex/index totals, positions, bounds for first N draws.
-/// Throttled every 30 frames. Helps debug empty buffers, extreme positions, wrong bounds.
-fn log_mesh_render_summary(
-    draw_batches: &[crate::session::SpaceDrawBatch],
-    mesh_assets: &crate::assets::AssetRegistry,
-    frame: u64,
-) {
-    if frame % 30 != 0 {
-        return;
-    }
-    let total_draws: usize = draw_batches.iter().map(|b| b.draws.len()).sum();
-    let mut total_verts: i64 = 0;
-    let mut total_indices: i64 = 0;
-    for batch in draw_batches {
-        for (_, mesh_asset_id, _, _, _) in &batch.draws {
-            if *mesh_asset_id >= 0 {
-                if let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) {
-                    total_verts += mesh.vertex_count as i64;
-                    total_indices += mesh.index_count as i64;
-                }
-            }
-        }
-    }
-    log::log_write(&format!(
-        "[MESH RENDER] frame {} batches={} total_draws={} mesh_assets={} total_verts={} total_indices={}",
-        frame,
-        draw_batches.len(),
-        total_draws,
-        mesh_assets.mesh_count(),
-        total_verts,
-        total_indices,
-    ));
-    let mut draw_idx: usize = 0;
-    let sample_limit = 15;
-    for batch in draw_batches {
-        for (model, mesh_asset_id, _, _, _) in &batch.draws {
-            if draw_idx >= sample_limit {
-                break;
-            }
-            let tx = model[(0, 3)];
-            let ty = model[(1, 3)];
-            let tz = model[(2, 3)];
-            let (verts, indices, bounds_c, bounds_ext) = if *mesh_asset_id >= 0 {
-                if let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) {
-                    (
-                        mesh.vertex_count,
-                        mesh.index_count,
-                        format!("({:.2},{:.2},{:.2})", mesh.bounds.center.x, mesh.bounds.center.y, mesh.bounds.center.z),
-                        format!("({:.2},{:.2},{:.2})", mesh.bounds.extents.x, mesh.bounds.extents.y, mesh.bounds.extents.z),
-                    )
-                } else {
-                    (0, 0, "(missing)".to_string(), "(missing)".to_string())
-                }
-            } else {
-                (0, 0, "(neg_id)".to_string(), "(neg_id)".to_string())
-            };
-            log::log_write(&format!(
-                "[MESH RENDER] draw {} mesh_id={} pos=({:.2},{:.2},{:.2}) bounds_c={} ext={} verts={} indices={}",
-                draw_idx, mesh_asset_id, tx, ty, tz, bounds_c, bounds_ext, verts, indices
-            ));
-            draw_idx += 1;
-        }
-        if draw_idx >= sample_limit {
-            break;
-        }
-    }
-}
-
-/// Render proof: mathematically verify why geometry may not show. Logs view_proj, MVP, clip-space,
-/// NDC, frustum checks, pipeline config. Run when RENDERIDE_RENDER_PROOF=1 or every DIAG_FRAME_INTERVAL.
-fn log_render_proof(
-    draw_batches: &[crate::session::SpaceDrawBatch],
-    mesh_assets: &crate::assets::AssetRegistry,
-    primary_camera: Option<&CameraRenderTask>,
-    viewport_width: u32,
-    viewport_height: u32,
-    near: f32,
-    far: f32,
-    fov: f32,
-    render_count: u64,
-) {
-    let proof_enabled = std::env::var("RENDERIDE_RENDER_PROOF").is_ok();
-    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-    if !proof_enabled && !diag_full {
-        return;
-    }
-    let total_draws: usize = draw_batches.iter().map(|b| b.draws.len()).sum();
-    if total_draws == 0 {
-        log::log_write("[Renderide] render_proof: no draws, nothing to prove");
-        return;
-    }
-
-    log::log_write(&format!(
-        "[Renderide] render_proof[{}]: viewport={}x{} near={} far={} fov={}",
-        render_count, viewport_width, viewport_height, near, far, fov
-    ));
-    log::log_write("[Renderide] render_proof: depth_clear=0.0 depth_compare=GreaterEqual depth_format=Depth24Plus front_face=Cw cull=Back");
-
-    let mut draw_idx: usize = 0;
-    let mut in_ndc_count: usize = 0;
-    let mut behind_cam_count: usize = 0;
-    let mut head_height_sample_logged: bool = false;
-    for batch in draw_batches {
-        let view_proj = if let Some(cam) = primary_camera {
-            camera_view_proj(cam, viewport_width, viewport_height)
-        } else {
-            let mut vt = batch.view_transform;
-            if vt.position.y.abs() < 0.2 || vt.position.y > 1.5 {
-                vt.position.y = 1.0; // eye height for desktop mode
-            }
-            view_transform_to_view_proj(&vt, viewport_width, viewport_height, near, far, fov)
-        };
-        let view_pos = if let Some(cam) = primary_camera {
-            &cam.position
-        } else {
-            &batch.view_transform.position
-        };
-        if draw_idx == 0 {
-            log::log_write(&format!(
-                "[Renderide] render_proof: batch space_id={} view_pos=({:.2},{:.2},{:.2}) view_proj row0={:.4},{:.4},{:.4},{:.4}",
-                batch.space_id,
-                view_pos.x, view_pos.y, view_pos.z,
-                view_proj[(0,0)], view_proj[(0,1)], view_proj[(0,2)], view_proj[(0,3)]
-            ));
-            log::log_write(&format!(
-                "[Renderide] render_proof: view_proj full matrix:\n  row0=({:.4},{:.4},{:.4},{:.4})\n  row1=({:.4},{:.4},{:.4},{:.4})\n  row2=({:.4},{:.4},{:.4},{:.4})\n  row3=({:.4},{:.4},{:.4},{:.4})",
-                view_proj[(0,0)], view_proj[(0,1)], view_proj[(0,2)], view_proj[(0,3)],
-                view_proj[(1,0)], view_proj[(1,1)], view_proj[(1,2)], view_proj[(1,3)],
-                view_proj[(2,0)], view_proj[(2,1)], view_proj[(2,2)], view_proj[(2,3)],
-                view_proj[(3,0)], view_proj[(3,1)], view_proj[(3,2)], view_proj[(3,3)]
-            ));
-        }
-
-        for (model, mesh_asset_id, _, _, _) in &batch.draws {
-            let world_pos = Vector3::new(model[(0, 3)], model[(1, 3)], model[(2, 3)]);
-            let mvp = view_proj * model;
-
-            let clip_pos = mvp * nalgebra::Vector4::new(world_pos.x, world_pos.y, world_pos.z, 1.0);
-            let ndc_w = clip_pos.w;
-            let ndc_x = if ndc_w.abs() > 1e-6 { clip_pos.x / ndc_w } else { f32::NAN };
-            let ndc_y = if ndc_w.abs() > 1e-6 { clip_pos.y / ndc_w } else { f32::NAN };
-            let ndc_z = if ndc_w.abs() > 1e-6 { clip_pos.z / ndc_w } else { f32::NAN };
-
-            let in_ndc_x = ndc_x >= -1.0 && ndc_x <= 1.0 && ndc_x.is_finite();
-            let in_ndc_y = ndc_y >= -1.0 && ndc_y <= 1.0 && ndc_y.is_finite();
-            // Standard projection (nalgebra Perspective3) produces NDC z in [-1, 1], not [0, 1].
-            let in_ndc_z = ndc_z >= -1.0 && ndc_z <= 1.0 && ndc_z.is_finite();
-            let in_ndc = in_ndc_x && in_ndc_y && in_ndc_z;
-
-            let behind_camera = ndc_w <= 0.0;
-            if in_ndc { in_ndc_count += 1; }
-            if behind_camera { behind_cam_count += 1; }
-
-            let vert_count = mesh_assets.get_mesh(*mesh_asset_id).map(|m| m.vertex_count).unwrap_or(-1);
-
-            let near_head_height = world_pos.y >= 1.4 && world_pos.y <= 2.2;
-            if near_head_height && !head_height_sample_logged {
-                log::log_write(&format!(
-                    "[Renderide] render_proof: head_height_sample draw[{}] mesh_id={} world=({:.2},{:.2},{:.2}) clip=({:.2},{:.2},{:.2},{:.2}) ndc=({:.3},{:.3},{:.3}) in_ndc={} behind_cam={} verts={}",
-                    draw_idx, mesh_asset_id,
-                    world_pos.x, world_pos.y, world_pos.z,
-                    clip_pos.x, clip_pos.y, clip_pos.z, clip_pos.w,
-                    ndc_x, ndc_y, ndc_z,
-                    in_ndc, behind_camera, vert_count
-                ));
-                head_height_sample_logged = true;
-            }
-
-            let should_log_detail = proof_enabled || (diag_full && draw_idx < 5);
-            if should_log_detail {
-                log::log_write(&format!(
-                    "[Renderide] render_proof: draw[{}] mesh_id={} world=({:.2},{:.2},{:.2}) clip=({:.2},{:.2},{:.2},{:.2}) ndc=({:.3},{:.3},{:.3}) in_ndc={} behind_cam={} verts={}",
-                    draw_idx, mesh_asset_id,
-                    world_pos.x, world_pos.y, world_pos.z,
-                    clip_pos.x, clip_pos.y, clip_pos.z, clip_pos.w,
-                    ndc_x, ndc_y, ndc_z,
-                    in_ndc, behind_camera, vert_count
-                ));
-
-                if draw_idx == 0 && vert_count > 0 {
-                    if let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) {
-                        let first_vert = crate::assets::attribute_offset_and_size(&mesh.vertex_attributes, VertexAttributeType::position)
-                            .and_then(|(pos_off, pos_size)| {
-                                if pos_size >= 12 && mesh.vertex_data.len() >= pos_off + 12 {
-                                    let px = f32::from_le_bytes(mesh.vertex_data[pos_off..pos_off+4].try_into().unwrap_or([0;4]));
-                                    let py = f32::from_le_bytes(mesh.vertex_data[pos_off+4..pos_off+8].try_into().unwrap_or([0;4]));
-                                    let pz = f32::from_le_bytes(mesh.vertex_data[pos_off+8..pos_off+12].try_into().unwrap_or([0;4]));
-                                    Some(format!("local_first_vert=({:.2},{:.2},{:.2})", px, py, pz))
-                                } else {
-                                    None
-                                }
-                            })
-                            .unwrap_or_else(|| "local_first_vert=(no_pos_attr)".to_string());
-                        log::log_write(&format!("[Renderide] render_proof: draw[0] {}", first_vert));
-                        // Per-vertex NDC for first draw: verify all vertices are in [-1,1]^3
-                        if let Some((pos_off, pos_size)) = crate::assets::attribute_offset_and_size(&mesh.vertex_attributes, VertexAttributeType::position) {
-                            if pos_size >= 12 {
-                                let stride = mesh.vertex_data.len() / mesh.vertex_count.max(1) as usize;
-                                let vert_limit = proof_enabled.then_some(mesh.vertex_count as usize).unwrap_or(8.min(mesh.vertex_count as usize));
-                                for vi in 0..vert_limit {
-                                    let base = vi * stride + pos_off;
-                                    if base + 12 <= mesh.vertex_data.len() {
-                                        let lx = f32::from_le_bytes(mesh.vertex_data[base..base+4].try_into().unwrap_or([0;4]));
-                                        let ly = f32::from_le_bytes(mesh.vertex_data[base+4..base+8].try_into().unwrap_or([0;4]));
-                                        let lz = f32::from_le_bytes(mesh.vertex_data[base+8..base+12].try_into().unwrap_or([0;4]));
-                                        let world = model * nalgebra::Vector4::new(lx, ly, lz, 1.0);
-                                        let clip = mvp * nalgebra::Vector4::new(lx, ly, lz, 1.0);
-                                        let (ndc_x, ndc_y, ndc_z) = if clip.w.abs() > 1e-6 {
-                                            (clip.x / clip.w, clip.y / clip.w, clip.z / clip.w)
-                                        } else {
-                                            (f32::NAN, f32::NAN, f32::NAN)
-                                        };
-                                        let in_cube = ndc_x >= -1.0 && ndc_x <= 1.0 && ndc_y >= -1.0 && ndc_y <= 1.0 && ndc_z >= -1.0 && ndc_z <= 1.0 && ndc_x.is_finite();
-                                        log::log_write(&format!(
-                                            "[Renderide] render_proof: draw[0] vert[{}] local=({:.2},{:.2},{:.2}) world=({:.2},{:.2},{:.2}) clip_w={:.4} ndc=({:.3},{:.3},{:.3}) in_ndc_cube={}",
-                                            vi, lx, ly, lz, world.x, world.y, world.z, clip.w, ndc_x, ndc_y, ndc_z, in_cube
-                                        ));
-                                    }
-                                }
-                                if mesh.vertex_count as usize > vert_limit {
-                                    log::log_write(&format!("[Renderide] render_proof: draw[0] ... and {} more vertices (total {})", mesh.vertex_count as usize - vert_limit, mesh.vertex_count));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            draw_idx += 1;
-        }
-    }
-
-    log::log_write(&format!(
-        "[Renderide] render_proof: summary: total_draws={} in_ndc_count={} (should_be_visible) behind_cam_count={} (culled) in_ndc means visible in viewport; behind_cam=true means culled",
-        total_draws, in_ndc_count, behind_cam_count
-    ));
-}
-
-/// Build view-projection matrix from CameraRenderTask.
-/// Host uses +Z forward (Unity left-handed); we use look_at_lh then apply handedness fix.
 fn camera_view_proj(
     task: &CameraRenderTask,
     viewport_width: u32,
@@ -1225,25 +747,6 @@ fn render_frame(
         .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
     let mesh_assets = session.asset_registry();
-    log_mesh_render_summary(&draw_batches, mesh_assets, frame);
-    let diag_full = std::env::var("RENDERIDE_DIAG_FULL").is_ok();
-    if diag_full {
-        log_mesh_diagnostics(&draw_batches, mesh_assets, unsafe { RENDER_COUNT });
-        log_mesh_assets_summary(&draw_batches, mesh_assets, unsafe { RENDER_COUNT });
-        log_winding_diagnostics(&draw_batches, mesh_assets, unsafe { RENDER_COUNT });
-    }
-    // Gated: keep only forced-cube NDC proof for now
-    // log_render_proof(
-    //     &draw_batches,
-    //     mesh_assets,
-    //     rendering_manager.primary_camera_task(),
-    //     gpu.config.width,
-    //     gpu.config.height,
-    //     rendering_manager.near_clip,
-    //     rendering_manager.far_clip,
-    //     rendering_manager.desktop_fov,
-    //     unsafe { RENDER_COUNT },
-    // );
 
     let depth_view = gpu
         .depth_texture
@@ -1273,51 +776,6 @@ fn render_frame(
         session.near_clip().max(0.01),
         session.far_clip(),
     );
-
-    if frame % 30 == 0 {
-        let q = UnitQuaternion::try_new(view_transform.rotation, 1e-8)
-            .unwrap_or_else(UnitQuaternion::identity);
-        let fwd = q.transform_vector(&Vector3::new(0.0, 0.0, -1.0));
-        let space_id = session.primary_view_space_id().unwrap_or(-1);
-        let override_pos = session.primary_view_override().unwrap_or(false);
-        let view_ext = session.primary_view_position_is_external().unwrap_or(false);
-        log::log_write(&format!(
-            "[HOST CAMERA] space_id={} override_view={} view_position_is_external={} pos=({:.2},{:.2},{:.2}) fwd=({:.3},{:.3},{:.3})",
-            space_id,
-            override_pos,
-            view_ext,
-            view_transform.position.x,
-            view_transform.position.y,
-            view_transform.position.z,
-            fwd.x,
-            fwd.y,
-            fwd.z
-        ));
-        if let Some(root) = session.primary_root_transform() {
-            let root_match = (view_transform.position.x - root.position.x).abs() < 1e-4
-                && (view_transform.position.y - root.position.y).abs() < 1e-4
-                && (view_transform.position.z - root.position.z).abs() < 1e-4;
-            if !root_match {
-                log::log_write(&format!(
-                    "[HOST CAMERA] view vs root differ: view_pos=({:.2},{:.2},{:.2}) root_pos=({:.2},{:.2},{:.2})",
-                    view_transform.position.x,
-                    view_transform.position.y,
-                    view_transform.position.z,
-                    root.position.x,
-                    root.position.y,
-                    root.position.z
-                ));
-            }
-        }
-        // Phase 4: When view_position_is_external is true and we use root (override=false, e.g. VR),
-        // the view may need to come from input/head state. We use root for now; future VR support
-        // may need head pose from output_state.vr or similar.
-        if view_ext && !override_pos {
-            log::log_write(
-                "[HOST CAMERA] view_position_is_external=true with override=false: using root for view; future VR may need head pose from output_state",
-            );
-        }
-    }
 
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1395,24 +853,6 @@ fn render_frame(
             }
         }
 
-        // Skinned draw proof: log counts every 30 frames.
-        if draw_data_len > 0 && frame % 30 == 0 {
-            let skinned_total: usize = draw_batches
-                .iter()
-                .flat_map(|b| &b.draws)
-                .filter(|(_, _, is_skinned, _, _)| *is_skinned)
-                .count();
-            let skinned_with_bones: usize = draw_batches
-                .iter()
-                .flat_map(|b| &b.draws)
-                .filter(|(_, _, is_skinned, _, bone_ids)| *is_skinned && bone_ids.is_some())
-                .count();
-            log::log_write(&format!(
-                "[SKINNED PROOF] frame {} skinned_draws_in_batch={} skinned_with_bone_ids={} (need both for skinned path)",
-                frame, skinned_total, skinned_with_bones
-            ));
-        }
-
         // Pass 2: collect draws and uniforms. Skinned draws use a separate path with bone matrices.
         struct BatchedDraw<'a> {
             vertex_buffer: &'a wgpu::Buffer,
@@ -1451,12 +891,6 @@ fn render_frame(
                         skip_reasons
                             .entry(*mesh_asset_id)
                             .or_insert("no_mesh_asset");
-                        if skipped_no_mesh_asset == 1 {
-                            log::log_write(&format!(
-                                "[MESH RENDER] missing mesh asset_id={} (drawable references mesh not yet uploaded)",
-                                mesh_asset_id
-                            ));
-                        }
                         continue;
                     };
                     if mesh.vertex_count <= 0 {
@@ -1478,12 +912,6 @@ fn render_frame(
                         skip_reasons
                             .entry(*mesh_asset_id)
                             .or_insert("buffer_cache_miss");
-                        if skipped_buffer_cache_miss == 1 {
-                            log::log_write(&format!(
-                                "[MESH RENDER] buffer_cache_miss asset_id={} (mesh exists but GPU buffers not created)",
-                                mesh_asset_id
-                            ));
-                        }
                         continue;
                     };
                     (b, mesh)
@@ -1530,43 +958,9 @@ fn render_frame(
                             buffers_ref.index_format,
                         );
                         skinned_path_taken += 1;
-                        if frame % 30 == 0 && skinned_path_taken <= 3 {
-                            log::log_write(&format!(
-                                "[SKINNED PATH] mesh_id={} bone_count={} (skinned draw taken)",
-                                mesh_asset_id,
-                                ids.len()
-                            ));
-                        }
-                        if std::env::var("RENDERIDE_DIAG_FULL").is_ok()
-                            && frame % 30 == 0
-                            && skinned_path_taken == 1
-                            && !bone_matrices.is_empty()
-                        {
-                            let b0 = &bone_matrices[0];
-                            log::log_write(&format!(
-                                "[SKINNED BONE DIAG] bone[0] matrix translation=({:.3},{:.3},{:.3}) (verify bone_matrix=world*bind_pose)",
-                                b0[0][3], b0[1][3], b0[2][3]
-                            ));
-                        }
                         continue;
                     } else {
                         skinned_fallback_missing_data += 1;
-                        let reasons: Vec<&str> = [
-                            (!has_vb).then_some("no_vb_skinned"),
-                            (!has_bind_poses).then_some("no_bind_poses"),
-                            (!has_bone_ids).then_some("no_bone_ids"),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .collect();
-                        if frame % 30 == 0 && skinned_fallback_missing_data <= 10 {
-                            log::log_write(&format!(
-                                "[SKINNED FALLBACK] mesh_id={} mesh.bone_count={} reasons=[{}] (rendered as rigid)",
-                                mesh_asset_id,
-                                mesh.bone_count,
-                                reasons.join(", ")
-                            ));
-                        }
                     }
                 }
 
@@ -1606,41 +1000,6 @@ fn render_frame(
                 d.is_skinned,
                 d.material_id,
             );
-        }
-
-        // Mesh render diagnostics: skip counts and draw summary (throttled every 30 frames).
-        if draw_data_len > 0 && frame % 30 == 0 {
-            let total_skipped = skipped_no_mesh_asset
-                + skipped_negative_asset
-                + skipped_bad_vertex_count
-                + skipped_bad_index_count
-                + skipped_buffer_cache_miss;
-            log::log_write(&format!(
-                "[MESH RENDER] vertex_buffers total_bytes={} total_index_count={} draws_submitted={} draw_data_len={} total_skipped={} (no_mesh_asset={} negative_asset={} bad_vertex_count={} bad_index_count={} buffer_cache_miss={}) skinned_path={} skinned_fallback_missing_data={}",
-                total_vertex_bytes,
-                total_index_count,
-                draws_submitted,
-                draw_data_len,
-                total_skipped,
-                skipped_no_mesh_asset,
-                skipped_negative_asset,
-                skipped_bad_vertex_count,
-                skipped_bad_index_count,
-                skipped_buffer_cache_miss,
-                skinned_path_taken,
-                skinned_fallback_missing_data
-            ));
-            if !skip_reasons.is_empty() {
-                let sample: Vec<String> = skip_reasons
-                    .iter()
-                    .take(15)
-                    .map(|(id, reason)| format!("{}:{}", id, reason))
-                    .collect();
-                log::log_write(&format!(
-                    "[MESH RENDER] skip_reasons (mesh_id:reason) sample={:?}",
-                    sample
-                ));
-            }
         }
 
         // Gated: drowning signal

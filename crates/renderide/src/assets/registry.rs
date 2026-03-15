@@ -42,10 +42,6 @@ impl AssetRegistry {
         data: MeshUploadData,
     ) -> (bool, bool) {
         if data.buffer.length <= 0 {
-            crate::log::log_write(&format!(
-                "[Renderide] MeshUploadData asset_id={} FAIL: buffer.length<=0",
-                data.asset_id
-            ));
             return (false, false);
         }
         let vertex_stride = mesh::compute_vertex_stride(&data.vertex_attributes);
@@ -70,22 +66,10 @@ impl AssetRegistry {
 
         let raw = match shm.access_copy::<u8>(&data.buffer) {
             Some(r) => r,
-            None => {
-                crate::log::log_write(&format!(
-                    "[Renderide] MeshUploadData asset_id={} FAIL: access_copy failed",
-                    data.asset_id
-                ));
-                return (false, false);
-            }
+            None => return (false, false),
         };
         let min_len = layout.bind_poses_start + layout.bind_poses_length;
         if raw.len() < min_len {
-            crate::log::log_write(&format!(
-                "[Renderide] MeshUploadData asset_id={} FAIL: raw.len()={} < needed={}",
-                data.asset_id,
-                raw.len(),
-                min_len
-            ));
             return (false, false);
         }
 
@@ -130,14 +114,6 @@ impl AssetRegistry {
             },
         );
         self.upload_count += 1;
-        if self.upload_count % crate::log::DIAG_FRAME_INTERVAL == 0 || self.upload_count <= 5 {
-            crate::log::log_write(&format!(
-                "[Renderide] assets: upload_count={} unload_count={} mesh_count={}",
-                self.upload_count,
-                self.unload_count,
-                self.meshes.len()
-            ));
-        }
         (true, existed_before)
     }
 
@@ -145,14 +121,6 @@ impl AssetRegistry {
     pub fn handle_mesh_unload(&mut self, asset_id: i32) {
         self.meshes.remove(&asset_id);
         self.unload_count += 1;
-        if self.unload_count % crate::log::DIAG_FRAME_INTERVAL == 0 || self.unload_count <= 5 {
-            crate::log::log_write(&format!(
-                "[Renderide] assets: upload_count={} unload_count={} (unloaded asset_id={})",
-                self.upload_count,
-                self.unload_count,
-                asset_id
-            ));
-        }
     }
 }
 

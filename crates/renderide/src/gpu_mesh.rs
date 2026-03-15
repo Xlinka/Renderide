@@ -757,8 +757,6 @@ impl MeshPipeline {
             }],
         });
 
-        crate::log::log_write("[GPU STATE PROOF] cull=Back front=Cw depth=GreaterEqual reverseZ=true clear=0.0");
-
         Self {
             pipeline,
             skinned_pipeline,

@@ -39,11 +39,6 @@ impl CommandReceiver {
             None => return Ok(()),
         };
 
-        crate::log::log_write(&format!(
-            "[Renderide] Connecting to queue {} (capacity={})",
-            params.queue_name, params.queue_capacity
-        ));
-
         let primary_sub = create_subscriber(&params, "Primary")?;
         let background_sub = create_subscriber(&params, "Background")?;
         let primary_pub = create_publisher(&params, "Primary")?;
