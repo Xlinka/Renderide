@@ -79,7 +79,9 @@ impl CommandDispatcher {
                 Box::new(FrameSubmitCommandHandler),
                 Box::new(MeshCommandHandler),
                 Box::new(DesktopConfigCommandHandler),
+                Box::new(FreeSharedMemoryCommandHandler),
                 Box::new(NoopCommandHandler),
+                Box::new(ExhaustiveStubCommandHandler),
             ],
         }
     }
@@ -204,6 +206,24 @@ impl CommandHandler for MeshCommandHandler {
     }
 }
 
+/// Handles `free_shared_memory_view`. Releases cached mmap views to avoid leaking shared memory.
+/// Mirrors SharedMemoryAccessor.ReleaseView in the C# host.
+struct FreeSharedMemoryCommandHandler;
+
+impl CommandHandler for FreeSharedMemoryCommandHandler {
+    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+        match cmd {
+            RendererCommand::free_shared_memory_view(x) => {
+                if let Some(shm) = ctx.shared_memory.as_mut() {
+                    shm.release_view(x.buffer_id);
+                }
+                CommandResult::Handled
+            }
+            _ => CommandResult::Ignored,
+        }
+    }
+}
+
 /// Handles `desktop_config`. Updates view state and render config. Post-finalize only.
 struct DesktopConfigCommandHandler;
 
@@ -242,6 +262,303 @@ impl CommandHandler for NoopCommandHandler {
             | RendererCommand::renderer_init_result(_)
             | RendererCommand::frame_start_data(_) => CommandResult::Handled,
             _ => CommandResult::Ignored,
+        }
+    }
+}
+
+/// Exhaustive stub handler for all RendererCommand variants. Documents the IPC surface and ensures
+/// the dispatcher never silently falls through. Each arm returns Handled; add real handlers above
+/// to implement features. Compiler will error when new variants are added.
+struct ExhaustiveStubCommandHandler;
+
+impl CommandHandler for ExhaustiveStubCommandHandler {
+    fn handle(&mut self, cmd: RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
+        match cmd {
+            // --- Already handled by earlier handlers; should not reach here ---
+            RendererCommand::renderer_init_data(_)
+            | RendererCommand::renderer_init_finalize_data(_)
+            | RendererCommand::renderer_shutdown(_)
+            | RendererCommand::renderer_shutdown_request(_)
+            | RendererCommand::frame_submit_data(_)
+            | RendererCommand::mesh_upload_data(_)
+            | RendererCommand::mesh_unload(_)
+            | RendererCommand::desktop_config(_)
+            | RendererCommand::free_shared_memory_view(_)
+            | RendererCommand::keep_alive(_)
+            | RendererCommand::renderer_init_progress_update(_)
+            | RendererCommand::renderer_engine_ready(_)
+            | RendererCommand::renderer_init_result(_)
+            | RendererCommand::frame_start_data(_) => CommandResult::Handled,
+
+            // --- Window ---
+            RendererCommand::renderer_parent_window(_) => {
+                // TODO: implement parent window embedding
+                CommandResult::Handled
+            }
+            RendererCommand::set_window_icon(_) => {
+                // TODO: implement window icon
+                CommandResult::Handled
+            }
+            RendererCommand::set_window_icon_result(_) => {
+                // Stub for: window icon result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::set_taskbar_progress(_) => {
+                // TODO: implement taskbar progress
+                CommandResult::Handled
+            }
+
+            // --- Config ---
+            RendererCommand::post_processing_config(_) => {
+                // TODO: implement post-processing config
+                CommandResult::Handled
+            }
+            RendererCommand::quality_config(_) => {
+                // TODO: implement quality config
+                CommandResult::Handled
+            }
+            RendererCommand::resolution_config(_) => {
+                // TODO: implement resolution config
+                CommandResult::Handled
+            }
+            RendererCommand::render_decoupling_config(_) => {
+                // TODO: implement render decoupling config
+                CommandResult::Handled
+            }
+            RendererCommand::gaussian_splat_config(_) => {
+                // TODO: implement gaussian splat config
+                CommandResult::Handled
+            }
+
+            // --- Response / no-op ---
+            RendererCommand::mesh_upload_result(_) => {
+                // Stub for: mesh upload result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+
+            // --- Shaders ---
+            RendererCommand::shader_upload(_) => {
+                // TODO: implement shader upload
+                CommandResult::Handled
+            }
+            RendererCommand::shader_unload(_) => {
+                // TODO: implement shader unload
+                CommandResult::Handled
+            }
+            RendererCommand::shader_upload_result(_) => {
+                // Stub for: shader upload result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+
+            // --- Materials ---
+            RendererCommand::material_property_id_request(_) => {
+                // TODO: implement material property ID request
+                CommandResult::Handled
+            }
+            RendererCommand::material_property_id_result(_) => {
+                // Stub for: material property ID result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::materials_update_batch(_) => {
+                // TODO: implement materials update batch
+                CommandResult::Handled
+            }
+            RendererCommand::materials_update_batch_result(_) => {
+                // Stub for: materials update batch result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_material(_) => {
+                // TODO: implement unload material
+                CommandResult::Handled
+            }
+            RendererCommand::unload_material_property_block(_) => {
+                // TODO: implement unload material property block
+                CommandResult::Handled
+            }
+
+            // --- Textures 2D ---
+            RendererCommand::set_texture_2d_format(_) => {
+                // TODO: implement texture 2D format
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_2d_properties(_) => {
+                // TODO: implement texture 2D properties
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_2d_data(_) => {
+                // TODO: implement texture 2D data
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_2d_result(_) => {
+                // Stub for: texture 2D result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_texture_2d(_) => {
+                // TODO: implement unload texture 2D
+                CommandResult::Handled
+            }
+
+            // --- Textures 3D ---
+            RendererCommand::set_texture_3d_format(_) => {
+                // TODO: implement texture 3D format
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_3d_properties(_) => {
+                // TODO: implement texture 3D properties
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_3d_data(_) => {
+                // TODO: implement texture 3D data
+                CommandResult::Handled
+            }
+            RendererCommand::set_texture_3d_result(_) => {
+                // Stub for: texture 3D result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_texture_3d(_) => {
+                // TODO: implement unload texture 3D
+                CommandResult::Handled
+            }
+
+            // --- Cubemaps ---
+            RendererCommand::set_cubemap_format(_) => {
+                // TODO: implement cubemap format
+                CommandResult::Handled
+            }
+            RendererCommand::set_cubemap_properties(_) => {
+                // TODO: implement cubemap properties
+                CommandResult::Handled
+            }
+            RendererCommand::set_cubemap_data(_) => {
+                // TODO: implement cubemap data
+                CommandResult::Handled
+            }
+            RendererCommand::set_cubemap_result(_) => {
+                // Stub for: cubemap result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_cubemap(_) => {
+                // TODO: implement unload cubemap
+                CommandResult::Handled
+            }
+
+            // --- Render textures ---
+            RendererCommand::set_render_texture_format(_) => {
+                // TODO: implement render texture format
+                CommandResult::Handled
+            }
+            RendererCommand::render_texture_result(_) => {
+                // Stub for: render texture result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_render_texture(_) => {
+                // TODO: implement unload render texture
+                CommandResult::Handled
+            }
+
+            // --- Desktop textures ---
+            RendererCommand::set_desktop_texture_properties(_) => {
+                // TODO: implement desktop texture properties
+                CommandResult::Handled
+            }
+            RendererCommand::desktop_texture_properties_update(_) => {
+                // TODO: implement desktop texture properties update
+                CommandResult::Handled
+            }
+            RendererCommand::unload_desktop_texture(_) => {
+                // TODO: implement unload desktop texture
+                CommandResult::Handled
+            }
+
+            // --- Point / trail buffers ---
+            RendererCommand::point_render_buffer_upload(_) => {
+                // TODO: implement point render buffer upload
+                CommandResult::Handled
+            }
+            RendererCommand::point_render_buffer_consumed(_) => {
+                // Stub for: point render buffer consumed (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::point_render_buffer_unload(_) => {
+                // TODO: implement point render buffer unload
+                CommandResult::Handled
+            }
+            RendererCommand::trail_render_buffer_upload(_) => {
+                // TODO: implement trail render buffer upload
+                CommandResult::Handled
+            }
+            RendererCommand::trail_render_buffer_consumed(_) => {
+                // Stub for: trail render buffer consumed (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::trail_render_buffer_unload(_) => {
+                // TODO: implement trail render buffer unload
+                CommandResult::Handled
+            }
+
+            // --- Gaussian splats ---
+            RendererCommand::gaussian_splat_upload_raw(_) => {
+                // TODO: implement gaussian splat upload raw
+                CommandResult::Handled
+            }
+            RendererCommand::gaussian_splat_upload_encoded(_) => {
+                // TODO: implement gaussian splat upload encoded
+                CommandResult::Handled
+            }
+            RendererCommand::gaussian_splat_result(_) => {
+                // Stub for: gaussian splat result (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::unload_gaussian_splat(_) => {
+                // TODO: implement unload gaussian splat
+                CommandResult::Handled
+            }
+
+            // --- Lights buffer ---
+            RendererCommand::lights_buffer_renderer_submission(_) => {
+                // TODO: implement lights buffer renderer submission
+                CommandResult::Handled
+            }
+            RendererCommand::lights_buffer_renderer_consumed(_) => {
+                // Stub for: lights buffer consumed (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+
+            // --- Reflection probes ---
+            RendererCommand::reflection_probe_render_result(_) => {
+                // TODO: implement reflection probe render result
+                CommandResult::Handled
+            }
+
+            // --- Video ---
+            RendererCommand::video_texture_load(_) => {
+                // TODO: implement video texture load
+                CommandResult::Handled
+            }
+            RendererCommand::video_texture_update(_) => {
+                // TODO: implement video texture update
+                CommandResult::Handled
+            }
+            RendererCommand::video_texture_ready(_) => {
+                // Stub for: video texture ready (renderer sends; host may echo)
+                CommandResult::Handled
+            }
+            RendererCommand::video_texture_changed(_) => {
+                // TODO: implement video texture changed
+                CommandResult::Handled
+            }
+            RendererCommand::video_texture_properties(_) => {
+                // TODO: implement video texture properties
+                CommandResult::Handled
+            }
+            RendererCommand::video_texture_start_audio_track(_) => {
+                // TODO: implement video texture start audio track
+                CommandResult::Handled
+            }
+            RendererCommand::unload_video_texture(_) => {
+                // TODO: implement unload video texture
+                CommandResult::Handled
+            }
         }
     }
 }
