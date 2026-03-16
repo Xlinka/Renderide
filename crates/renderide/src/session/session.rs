@@ -2,12 +2,14 @@
 //!
 //! Extension point for session state, draw batch collection.
 
-use crate::assets::AssetRegistry;
+use crate::assets::{self, AssetRegistry};
 use crate::config::RenderConfig;
+use crate::gpu::PipelineVariant;
 use crate::ipc::receiver::CommandReceiver;
 use crate::ipc::shared_memory::SharedMemoryAccessor;
-use crate::render::batch::SpaceDrawBatch;
+use crate::render::batch::{DrawEntry, SpaceDrawBatch};
 use crate::scene::{render_transform_to_matrix, SceneGraph};
+use crate::shared::VertexAttributeType;
 use crate::session::commands::{CommandContext, CommandDispatcher, CommandResult};
 use crate::session::init::{get_connection_parameters, InitError, take_singleton_init};
 use crate::session::state::ViewState;
@@ -354,6 +356,7 @@ impl Session {
 
             let mut draws = Vec::new();
             let mut samples = Vec::new();
+            let use_debug_uv = self.render_config.use_debug_uv;
             let _frame_index = self.last_frame_index;
             for entry in &scene.drawables {
                 if entry.node_id < 0 {
@@ -366,7 +369,7 @@ impl Session {
                         if idx >= scene.nodes.len() {
                             continue;
                         }
-                        
+
                         render_transform_to_matrix(&scene.nodes[idx])
                     }
                 };
@@ -375,7 +378,20 @@ impl Session {
                     let t = world_matrix.column(3);
                     samples.push((entry.node_id, format!("({:.2},{:.2},{:.2})", t.x, t.y, t.z)));
                 }
-                draws.push((world_matrix, entry.mesh_handle, false, material_id, None));
+                let pipeline_variant = compute_pipeline_variant(
+                    false,
+                    entry.mesh_handle,
+                    use_debug_uv,
+                    &self.asset_registry,
+                );
+                draws.push(DrawEntry {
+                    model_matrix: world_matrix,
+                    mesh_asset_id: entry.mesh_handle,
+                    is_skinned: false,
+                    material_id,
+                    bone_transform_ids: None,
+                    pipeline_variant,
+                });
             }
             for entry in &scene.skinned_drawables {
                 if entry.node_id < 0 {
@@ -388,7 +404,7 @@ impl Session {
                         if idx >= scene.nodes.len() {
                             continue;
                         }
-                        
+
                         render_transform_to_matrix(&scene.nodes[idx])
                     }
                 };
@@ -397,14 +413,19 @@ impl Session {
                     let t = world_matrix.column(3);
                     samples.push((entry.node_id, format!("({:.2},{:.2},{:.2})", t.x, t.y, t.z)));
                 }
-                draws.push((
-                    world_matrix,
-                    entry.mesh_handle,
-                    true,
+                draws.push(DrawEntry {
+                    model_matrix: world_matrix,
+                    mesh_asset_id: entry.mesh_handle,
+                    is_skinned: true,
                     material_id,
-                    entry.bone_transform_ids.clone(),
-                ));
+                    bone_transform_ids: entry.bone_transform_ids.clone(),
+                    pipeline_variant: PipelineVariant::Skinned,
+                });
             }
+
+            draws.sort_by_key(|d| {
+                (d.pipeline_variant.clone(), d.material_id, d.mesh_asset_id)
+            });
 
             if !draws.is_empty() {
                 if draw_batch_samples.is_none() && !samples.is_empty() {
@@ -433,5 +454,29 @@ impl Session {
 impl Default for Session {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Computes pipeline variant from is_skinned, mesh UVs, and use_debug_uv.
+fn compute_pipeline_variant(
+    is_skinned: bool,
+    mesh_asset_id: i32,
+    use_debug_uv: bool,
+    asset_registry: &AssetRegistry,
+) -> PipelineVariant {
+    if is_skinned {
+        return PipelineVariant::Skinned;
+    }
+    let has_uvs = asset_registry
+        .get_mesh(mesh_asset_id)
+        .and_then(|m| {
+            assets::attribute_offset_size_format(&m.vertex_attributes, VertexAttributeType::uv0)
+        })
+        .map(|(_, s, _)| s >= 4)
+        .unwrap_or(false);
+    if use_debug_uv && has_uvs {
+        PipelineVariant::UvDebug
+    } else {
+        PipelineVariant::NormalDebug
     }
 }

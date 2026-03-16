@@ -138,17 +138,12 @@ impl Default for RenderGraph {
 }
 
 /// Mesh render pass: draws meshes from draw batches using normal, UV, and skinned pipelines.
-pub struct MeshRenderPass {
-    /// When true, use UV debug pipeline for meshes that have UVs.
-    use_debug_uv: bool,
-}
+pub struct MeshRenderPass;
 
 impl MeshRenderPass {
     /// Creates a new mesh render pass.
     pub fn new() -> Self {
-        Self {
-            use_debug_uv: false,
-        }
+        Self
     }
 }
 
@@ -167,17 +162,17 @@ impl RenderPass for MeshRenderPass {
         let mesh_assets = ctx.session.asset_registry();
 
         for batch in ctx.draw_batches {
-            for (_, mesh_asset_id, _is_skinned, _material_id, _) in &batch.draws {
-                if *mesh_asset_id < 0 {
+            for d in &batch.draws {
+                if d.mesh_asset_id < 0 {
                     continue;
                 }
-                let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) else {
+                let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
                     continue;
                 };
                 if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
                     continue;
                 }
-                if !ctx.gpu.mesh_buffer_cache.contains_key(mesh_asset_id) {
+                if !ctx.gpu.mesh_buffer_cache.contains_key(&d.mesh_asset_id) {
                     let stride =
                         crate::assets::compute_vertex_stride(&mesh.vertex_attributes) as usize;
                     let stride = if stride > 0 {
@@ -187,7 +182,7 @@ impl RenderPass for MeshRenderPass {
                     };
                     if let Some(b) = crate::gpu::create_mesh_buffers(&ctx.gpu.device, mesh, stride)
                     {
-                        ctx.gpu.mesh_buffer_cache.insert(*mesh_asset_id, b);
+                        ctx.gpu.mesh_buffer_cache.insert(d.mesh_asset_id, b);
                     }
                 }
             }
@@ -197,10 +192,9 @@ impl RenderPass for MeshRenderPass {
             buffers: &'a GpuMeshBuffers,
             mvp: Matrix4<f32>,
             model: Matrix4<f32>,
-            use_uv_pipeline: bool,
+            pipeline_variant: PipelineVariant,
         }
-        let mut normal_draws: Vec<BatchedDraw<'_>> = Vec::new();
-        let mut uv_draws: Vec<BatchedDraw<'_>> = Vec::new();
+        let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
         let scene_graph = ctx.session.scene_graph();
 
         let frame_index = ctx.pipeline_manager.advance_frame();
@@ -245,17 +239,15 @@ impl RenderPass for MeshRenderPass {
             let view_mat = apply_view_handedness_fix(view_mat);
             let view_proj = ctx.proj * view_mat;
 
-            for (model, mesh_asset_id, is_skinned, _material_id, bone_transform_ids) in
-                &batch.draws
-            {
-                let (buffers_ref, mesh) = if *mesh_asset_id >= 0 {
-                    let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) else {
+            for d in &batch.draws {
+                let (buffers_ref, mesh) = if d.mesh_asset_id >= 0 {
+                    let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
                         continue;
                     };
                     if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
                         continue;
                     }
-                    let Some(b) = ctx.gpu.mesh_buffer_cache.get(mesh_asset_id) else {
+                    let Some(b) = ctx.gpu.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                         continue;
                     };
                     (b, mesh)
@@ -263,14 +255,14 @@ impl RenderPass for MeshRenderPass {
                     continue;
                 };
 
-                let model_mvp = view_proj * model;
+                let model_mvp = view_proj * d.model_matrix;
                 let skinned_mvp = view_proj;
 
-                if *is_skinned {
+                if d.is_skinned {
                     let Some(bind_poses) = mesh.bind_poses.as_ref() else {
                         continue;
                     };
-                    let Some(ids) = bone_transform_ids.as_deref() else {
+                    let Some(ids) = d.bone_transform_ids.as_deref() else {
                         continue;
                     };
                     let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
@@ -298,63 +290,50 @@ impl RenderPass for MeshRenderPass {
                     continue;
                 }
 
-                let use_uv_pipeline = self.use_debug_uv && buffers_ref.has_uvs;
-                let batched = BatchedDraw {
+                non_skinned_draws.push(BatchedDraw {
                     buffers: buffers_ref,
                     mvp: model_mvp,
-                    model: *model,
-                    use_uv_pipeline,
-                };
-                if use_uv_pipeline {
-                    uv_draws.push(batched);
-                } else {
-                    normal_draws.push(batched);
-                }
+                    model: d.model_matrix,
+                    pipeline_variant: d.pipeline_variant.clone(),
+                });
             }
         }
 
-        let mvp_models_normal: Vec<_> = normal_draws.iter().map(|d| (d.mvp, d.model)).collect();
-        let mvp_models_uv: Vec<_> = uv_draws.iter().map(|d| (d.mvp, d.model)).collect();
+        let mut i = 0;
+        while i < non_skinned_draws.len() {
+            let variant = non_skinned_draws[i].pipeline_variant.clone();
+            let group_end = non_skinned_draws[i..]
+                .iter()
+                .take_while(|d| d.pipeline_variant == variant)
+                .count();
+            let group = &non_skinned_draws[i..i + group_end];
 
-        let Some(normal_debug) = ctx.pipeline_manager.get_pipeline(
-            PipelineKey(None, PipelineVariant::NormalDebug),
-            &ctx.gpu.device,
-            &ctx.gpu.config,
-        ) else {
-            return Ok(());
-        };
-        let Some(uv_debug) = ctx.pipeline_manager.get_pipeline(
-            PipelineKey(None, PipelineVariant::UvDebug),
-            &ctx.gpu.device,
-            &ctx.gpu.config,
-        ) else {
-            return Ok(());
-        };
+            let pipeline_key = PipelineKey(None, variant);
+            let Some(pipeline) = ctx.pipeline_manager.get_pipeline(
+                pipeline_key,
+                &ctx.gpu.device,
+                &ctx.gpu.config,
+            ) else {
+                i += group_end;
+                continue;
+            };
 
-        normal_debug.upload_batch(&ctx.gpu.queue, &mvp_models_normal, frame_index);
-        uv_debug.upload_batch(&ctx.gpu.queue, &mvp_models_uv, frame_index);
+            let mvp_models: Vec<_> = group.iter().map(|d| (d.mvp, d.model)).collect();
+            pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
 
-        for (i, d) in normal_draws.iter().enumerate() {
-            normal_debug.bind(&mut pass, Some(i as u32), frame_index);
-            normal_debug.draw_mesh(
-                &mut pass,
-                d.buffers,
-                &UniformData::Simple {
-                    mvp: d.mvp,
-                    model: d.model,
-                },
-            );
-        }
-        for (i, d) in uv_draws.iter().enumerate() {
-            uv_debug.bind(&mut pass, Some(i as u32), frame_index);
-            uv_debug.draw_mesh(
-                &mut pass,
-                d.buffers,
-                &UniformData::Simple {
-                    mvp: d.mvp,
-                    model: d.model,
-                },
-            );
+            for (j, d) in group.iter().enumerate() {
+                pipeline.bind(&mut pass, Some(j as u32), frame_index);
+                pipeline.draw_mesh(
+                    &mut pass,
+                    d.buffers,
+                    &UniformData::Simple {
+                        mvp: d.mvp,
+                        model: d.model,
+                    },
+                );
+            }
+
+            i += group_end;
         }
 
         Ok(())

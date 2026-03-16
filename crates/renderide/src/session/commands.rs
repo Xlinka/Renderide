@@ -268,6 +268,7 @@ impl CommandHandler for DesktopConfigCommandHandler {
                     far_clip: 1024.0,
                     desktop_fov: 75.0,
                     vsync: x.v_sync,
+                    use_debug_uv: ctx.render_config.use_debug_uv,
                 };
                 CommandResult::Handled
             }

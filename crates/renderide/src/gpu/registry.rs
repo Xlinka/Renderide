@@ -15,7 +15,7 @@ use super::pipeline::{
 pub struct PipelineKey(pub Option<i32>, pub PipelineVariant);
 
 /// Variant of render pipeline (debug, skinned, material, PBR).
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[derive(Clone, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
 pub enum PipelineVariant {
     /// Normal debug: colors surfaces by smooth normal.
     NormalDebug,

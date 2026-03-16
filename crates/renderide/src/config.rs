@@ -15,6 +15,8 @@ pub struct RenderConfig {
     pub desktop_fov: f32,
     /// Whether vertical sync is enabled.
     pub vsync: bool,
+    /// When true, use UV debug pipeline for meshes that have UVs.
+    pub use_debug_uv: bool,
 }
 
 impl Default for RenderConfig {
@@ -24,6 +26,7 @@ impl Default for RenderConfig {
             far_clip: 1024.0,
             desktop_fov: 75.0,
             vsync: false,
+            use_debug_uv: false,
         }
     }
 }
