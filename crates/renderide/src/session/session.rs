@@ -433,6 +433,11 @@ impl Session {
                     } else {
                         None
                     },
+                    blendshape_weights: if is_skinned {
+                        entry.blend_shape_weights.clone()
+                    } else {
+                        None
+                    },
                     pipeline_variant,
                 });
             }

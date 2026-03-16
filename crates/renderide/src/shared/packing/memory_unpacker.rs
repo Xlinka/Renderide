@@ -135,7 +135,7 @@ impl<'a, 'pool, P: MemoryPackerEntityPool> MemoryUnpacker<'a, 'pool, P> {
         let count = self.read::<i32>() as usize;
         let mut list = Vec::with_capacity(count);
         for _ in 0..count {
-            list.push(unsafe { E::from_i32(self.read::<i32>()) });
+            list.push(E::from_i32(self.read::<i32>()));
         }
         list
     }

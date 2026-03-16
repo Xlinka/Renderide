@@ -24,6 +24,7 @@ impl CommandHandler for ConfigCommandHandler {
                     skinned_apply_mesh_root_transform: ctx.render_config.skinned_apply_mesh_root_transform,
                     skinned_use_root_bone: ctx.render_config.skinned_use_root_bone,
                     debug_skinned: ctx.render_config.debug_skinned,
+                    debug_blendshapes: ctx.render_config.debug_blendshapes,
                     skinned_flip_handedness: ctx.render_config.skinned_flip_handedness,
                 };
                 CommandResult::Handled

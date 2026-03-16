@@ -119,6 +119,10 @@ pub struct Drawable {
     pub bone_transform_ids: Option<Vec<i32>>,
     /// For skinned meshes: root bone transform ID for coordinate alignment (from BoneAssignment).
     pub root_bone_transform_id: Option<i32>,
+    /// Blendshape weights per blendshape index. Updated from `SkinnedMeshRenderablesUpdate` via
+    /// `blendshape_update_batches` and `blendshape_updates`. Resized as needed when applying updates.
+    /// Passed to the skinned pipeline for vertex deformation before bone skinning.
+    pub blend_shape_weights: Option<Vec<f32>>,
 }
 
 impl Default for Drawable {
@@ -131,6 +135,7 @@ impl Default for Drawable {
             is_skinned: false,
             bone_transform_ids: None,
             root_bone_transform_id: None,
+            blend_shape_weights: None,
         }
     }
 }

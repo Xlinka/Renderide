@@ -12,6 +12,7 @@ use super::texture::TextureAsset;
 /// Extensible for textures, materials, video, etc.
 pub struct AssetRegistry {
     meshes: AssetManager<MeshAsset>,
+    #[allow(dead_code)]
     textures: AssetManager<TextureAsset>,
     shaders: AssetManager<ShaderAsset>,
     upload_count: u64,
@@ -46,9 +47,11 @@ impl AssetRegistry {
     }
 
     /// Handles a mesh upload from shared memory.
+    ///
     /// Layout must match host's MeshBuffer.ComputeBufferLayout (vertices, indices, bone_counts,
-    /// bone_weights, bind_poses). Returns `(success, existed_before)` where `existed_before` is
-    /// true if the asset was replaced.
+    /// bone_weights, bind_poses, blendshape_data). When `upload_hint.blendshapes()` and
+    /// `blendshape_buffers` is non-empty, extracts blendshape offsets into `MeshAsset.blendshape_offsets`.
+    /// Returns `(success, existed_before)` where `existed_before` is true if the asset was replaced.
     pub fn handle_mesh_upload(
         &mut self,
         shm: &mut SharedMemoryAccessor,
@@ -68,14 +71,23 @@ impl AssetRegistry {
             crate::shared::IndexBufferFormat::u_int16 => 2,
             crate::shared::IndexBufferFormat::u_int32 => 4,
         };
-        let layout = mesh::compute_mesh_buffer_layout(
+        let use_blendshapes =
+            data.upload_hint.flags.blendshapes() && !data.blendshape_buffers.is_empty();
+        let layout = match mesh::compute_mesh_buffer_layout(
             vertex_stride,
             data.vertex_count,
             index_count,
             index_bytes,
             data.bone_count,
             data.bone_weight_count,
-        );
+            Some(&data.blendshape_buffers),
+        ) {
+            Ok(l) => l,
+            Err(e) => {
+                logger::error!("Mesh upload rejected: {}", e);
+                return (false, false);
+            }
+        };
 
         let raw = match shm.access_copy::<u8>(&data.buffer) {
             Some(r) => r,
@@ -99,15 +111,13 @@ impl AssetRegistry {
             );
             return (false, false);
         }
-        let min_len = layout.bind_poses_start + layout.bind_poses_length;
+        let min_len = layout.total_buffer_length;
         if raw.len() < min_len {
-            if data.bone_count > 0 {
-                logger::error!(
-                    "Mesh upload rejected: buffer too short for skinned mesh (need {} bytes, got {})",
-                    min_len,
-                    raw.len()
-                );
-            }
+            logger::error!(
+                "Mesh upload rejected: buffer too short (need {} bytes, got {})",
+                min_len,
+                raw.len()
+            );
             return (false, false);
         }
 
@@ -128,8 +138,25 @@ impl AssetRegistry {
                 [layout.bone_weights_start..layout.bone_weights_start + layout.bone_weights_length]
                 .to_vec();
             (bind_poses, Some(bone_counts), Some(bone_weights))
+        } else if use_blendshapes && data.vertex_count > 0 {
+            let (bp, bc, bw) =
+                mesh::synthetic_bone_data_for_blendshape_only(data.vertex_count);
+            (Some(bp), Some(bc), Some(bw))
         } else {
             (None, None, None)
+        };
+
+        let (blendshape_offsets, num_blendshapes) = if use_blendshapes {
+            mesh::extract_blendshape_offsets(
+                raw.as_slice(),
+                &layout,
+                &data.blendshape_buffers,
+                data.vertex_count,
+            )
+            .map(|(offsets, n)| (Some(offsets), n))
+            .unwrap_or((None, 0))
+        } else {
+            (None, 0)
         };
 
         let existed_before = self.meshes.contains_key(data.asset_id);
@@ -146,6 +173,8 @@ impl AssetRegistry {
             bind_poses,
             bone_counts,
             bone_weights,
+            blendshape_offsets,
+            num_blendshapes,
         };
         self.meshes.insert(asset);
         self.upload_count += 1;

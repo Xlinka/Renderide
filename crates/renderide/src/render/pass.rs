@@ -217,11 +217,14 @@ impl RenderPass for MeshRenderPass {
             buffers: &'a GpuMeshBuffers,
             mvp: Matrix4<f32>,
             bone_matrices: Vec<[[f32; 4]; 4]>,
+            blendshape_weights: Option<Vec<f32>>,
+            num_vertices: u32,
         }
         let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
         let mut skinned_draws: Vec<SkinnedBatchedDraw<'_>> = Vec::new();
         let scene_graph = ctx.session.scene_graph();
         let debug_skinned = ctx.session.render_config().debug_skinned;
+        let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
         let mut first_skinned_logged = false;
 
         let frame_index = ctx.pipeline_manager.advance_frame();
@@ -236,7 +239,7 @@ impl RenderPass for MeshRenderPass {
 
         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("mesh pass"),
-            timestamp_writes: timestamp_writes,
+            timestamp_writes,
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: ctx.render_target.color_view,
                 depth_slice: None,
@@ -335,7 +338,7 @@ impl RenderPass for MeshRenderPass {
                         let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
                         let first_bind = bind_poses.first().map(|b| format!("{:?}", b)).unwrap_or_else(|| "none".to_string());
                         let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
-                            let n = bc.get(0).copied().unwrap_or(0) as usize;
+                            let n = bc.first().copied().unwrap_or(0) as usize;
                             let n = n.min(4);
                             let mut indices = [0i32; 4];
                             let mut weights = [0.0f32; 4];
@@ -378,7 +381,7 @@ impl RenderPass for MeshRenderPass {
                     };
                     if ctx.session.render_config().skinned_flip_handedness {
                         let z_flip = Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, -1.0));
-                        skinned_mvp = skinned_mvp * z_flip;
+                        skinned_mvp *= z_flip;
                     }
                     let root_bone = if ctx.session.render_config().skinned_use_root_bone {
                         d.root_bone_transform_id
@@ -395,6 +398,8 @@ impl RenderPass for MeshRenderPass {
                         buffers: buffers_ref,
                         mvp: skinned_mvp,
                         bone_matrices,
+                        blendshape_weights: d.blendshape_weights.clone(),
+                        num_vertices: mesh.vertex_count.max(0) as u32,
                     });
                     continue;
                 }
@@ -414,13 +419,51 @@ impl RenderPass for MeshRenderPass {
                 &ctx.gpu.device,
                 &ctx.gpu.config,
             ) {
-                let mvp_bones: Vec<_> = skinned_draws
+                let items: Vec<_> = skinned_draws
                     .iter()
-                    .map(|d| (d.mvp, d.bone_matrices.as_slice()))
+                    .map(|d| {
+                        (
+                            d.mvp,
+                            d.bone_matrices.as_slice(),
+                            d.blendshape_weights.as_deref(),
+                            d.num_vertices,
+                        )
+                    })
                     .collect();
-                skinned.upload_skinned_batch(&ctx.gpu.queue, &mvp_bones, frame_index);
+                if debug_blendshapes {
+                    let count = skinned_draws.len();
+                    let first_with_weights = skinned_draws
+                        .iter()
+                        .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
+                    if let Some(d) = first_with_weights {
+                        let w = d.blendshape_weights.as_ref().unwrap();
+                        let preview: Vec<_> = w.iter().take(8).copied().collect();
+                        logger::debug!(
+                            "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
+                            count,
+                            w.len(),
+                            preview
+                        );
+                    } else {
+                        logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+                    }
+                }
+                skinned.upload_skinned_batch(&ctx.gpu.queue, &items, frame_index);
+                let draw_bind_groups: Vec<_> = skinned_draws
+                    .iter()
+                    .map(|d| {
+                        skinned
+                            .create_skinned_draw_bind_group(&ctx.gpu.device, d.buffers)
+                            .expect("skinned pipeline must create draw bind groups")
+                    })
+                    .collect();
                 for (j, d) in skinned_draws.iter().enumerate() {
-                    skinned.bind(&mut pass, Some(j as u32), frame_index);
+                    skinned.bind(
+                        &mut pass,
+                        Some(j as u32),
+                        frame_index,
+                        Some(&draw_bind_groups[j]),
+                    );
                     skinned.draw_skinned(
                         &mut pass,
                         d.buffers,
@@ -456,7 +499,7 @@ impl RenderPass for MeshRenderPass {
             pipeline.upload_batch(&ctx.gpu.queue, &mvp_models, frame_index);
 
             for (j, d) in group.iter().enumerate() {
-                pipeline.bind(&mut pass, Some(j as u32), frame_index);
+                pipeline.bind(&mut pass, Some(j as u32), frame_index, None);
                 pipeline.draw_mesh(
                     &mut pass,
                     d.buffers,

@@ -17,7 +17,8 @@ pub trait Asset: Send + Sync + 'static {
 }
 
 pub use mesh::{
-    MeshAsset, attribute_offset_and_size, attribute_offset_size_format, compute_vertex_stride,
+    BlendshapeOffset, MeshAsset, attribute_offset_and_size, attribute_offset_size_format,
+    compute_vertex_stride,
 };
 pub use registry::AssetRegistry;
 pub use shader::ShaderAsset;

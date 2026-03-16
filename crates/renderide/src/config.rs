@@ -25,6 +25,9 @@ pub struct RenderConfig {
     pub skinned_use_root_bone: bool,
     /// When true, log diagnostic info for the first skinned draw each frame.
     pub debug_skinned: bool,
+    /// When true, log blendshape batch count and first few weights each frame.
+    /// Can be enabled via RENDERIDE_DEBUG_BLENDSHAPES=1.
+    pub debug_blendshapes: bool,
     /// When true, apply an extra Z flip to skinned MVP for handedness correction.
     /// Use when skinned meshes appear mirrored vs non-skinned. Default false.
     pub skinned_flip_handedness: bool,
@@ -41,6 +44,7 @@ impl Default for RenderConfig {
             skinned_apply_mesh_root_transform: true,
             skinned_use_root_bone: false,
             debug_skinned: false,
+            debug_blendshapes: std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1"),
             skinned_flip_handedness: false,
         }
     }

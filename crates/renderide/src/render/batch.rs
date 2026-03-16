@@ -24,6 +24,8 @@ pub struct DrawEntry {
     pub bone_transform_ids: Option<Vec<i32>>,
     /// Root bone transform ID for skinned meshes (from BoneAssignment). Used when skinned_use_root_bone is enabled.
     pub root_bone_transform_id: Option<i32>,
+    /// Blendshape weights per blendshape index for skinned meshes.
+    pub blendshape_weights: Option<Vec<f32>>,
     /// Pipeline variant derived from is_skinned, use_debug_uv, and mesh has_uvs.
     pub pipeline_variant: PipelineVariant,
 }

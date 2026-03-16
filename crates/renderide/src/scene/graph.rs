@@ -10,8 +10,9 @@ use nalgebra::{Matrix4, UnitQuaternion, Vector3};
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::{Drawable, Scene, SceneId};
 use crate::shared::{
-    BoneAssignment, MeshRenderablesUpdate, ReflectionProbeSH2Task, RenderTransform,
-    SkinnedMeshRenderablesUpdate, TransformParentUpdate, TransformPoseUpdate, TransformsUpdate,
+    BlendshapeUpdate, BlendshapeUpdateBatch, BoneAssignment, MeshRenderablesUpdate,
+    ReflectionProbeSH2Task, RenderTransform, SkinnedMeshRenderablesUpdate, TransformParentUpdate,
+    TransformPoseUpdate, TransformsUpdate,
 };
 
 /// Layout-compatible with MeshRendererState for shared memory access.
@@ -497,6 +498,7 @@ impl SceneGraph {
                     is_skinned: false,
                     bone_transform_ids: None,
                     root_bone_transform_id: None,
+                    blend_shape_weights: None,
                 });
             }
         }
@@ -578,6 +580,7 @@ impl SceneGraph {
                     is_skinned: true,
                     bone_transform_ids: None,
                     root_bone_transform_id: None,
+                    blend_shape_weights: Some(vec![]),
                 });
             }
         }
@@ -629,6 +632,48 @@ impl SceneGraph {
                 index_offset += bone_count;
             }
         }
+
+        // Apply blendshape weight updates from host. Matches SkinnedMeshRendererManager:
+        // iterate BlendshapeUpdateBatch, apply BlendshapeUpdate entries to each drawable.
+        // Skip when either buffer is empty (host may not send updates every frame);
+        // drawables retain their previous blend_shape_weights. Never call access_copy_diagnostic
+        // with length-0 descriptors.
+        if !update.blendshape_update_batches.is_empty()
+            && !update.blendshape_updates.is_empty()
+        {
+            let batches = shm
+                .access_copy_diagnostic::<BlendshapeUpdateBatch>(&update.blendshape_update_batches)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            let updates = shm
+                .access_copy_diagnostic::<BlendshapeUpdate>(&update.blendshape_updates)
+                .map_err(SceneError::SharedMemoryAccess)?;
+            let mut update_offset = 0;
+            for batch in &batches {
+                if batch.renderable_index < 0 {
+                    break;
+                }
+                let idx = batch.renderable_index as usize;
+                let count = batch.blendshape_update_count.max(0) as usize;
+                if idx < scene.skinned_drawables.len()
+                    && update_offset + count <= updates.len()
+                {
+                    let drawable = &mut scene.skinned_drawables[idx];
+                    let weights = drawable
+                        .blend_shape_weights
+                        .get_or_insert_with(Vec::new);
+                    for upd in &updates[update_offset..update_offset + count] {
+                        let bi = upd.blendshape_index.max(0) as usize;
+                        let needed = bi + 1;
+                        if weights.len() < needed {
+                            weights.resize(needed, 0.0);
+                        }
+                        weights[bi] = upd.weight;
+                    }
+                }
+                update_offset += count;
+            }
+        }
+
         Ok(())
     }
 

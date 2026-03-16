@@ -32,18 +32,37 @@ pub struct VertexPosNormal {
     pub normal: [f32; 3],
 }
 
-/// Skinned vertex: position, normal, bone indices (4), bone weights (4).
+/// Skinned vertex: position, normal, tangent, bone indices (4), bone weights (4).
+///
+/// Tangent is used for blendshape tangent_offset application and normal mapping. Defaults to
+/// [1, 0, 0] when the mesh has no tangent attribute.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 pub struct VertexSkinned {
     pub position: [f32; 3],
     pub normal: [f32; 3],
+    pub tangent: [f32; 3],
     pub bone_indices: [i32; 4],
     pub bone_weights: [f32; 4],
 }
 
-/// Read a vec3 normal from vertex data at base+offset, converting from the given format to f32.
-fn read_normal(
+/// Per-vertex blendshape offset for storage buffer binding (48 bytes).
+///
+/// WGSL vec3 has 16-byte alignment, so layout is: position (0-12), pad, normal (16-28), pad,
+/// tangent (32-44), pad. Indexed in the shader as `blendshape_index * num_vertices + vertex_index`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct BlendshapeOffset {
+    pub position_offset: [f32; 3],
+    _pad0: f32,
+    pub normal_offset: [f32; 3],
+    _pad1: f32,
+    pub tangent_offset: [f32; 3],
+    _pad2: f32,
+}
+
+/// Read a vec3 (normal or tangent) from vertex data at base+offset, converting from the given format to f32.
+fn read_vec3(
     data: &[u8],
     base: usize,
     offset: usize,
@@ -198,6 +217,7 @@ fn half_to_f32(h: u16) -> f32 {
 }
 
 /// Fallback cube with position+normal for normal debug pipeline (8 vertices, 12 triangles, 36 indices).
+#[allow(dead_code)]
 fn fallback_cube_pos_normal() -> (Vec<VertexPosNormal>, Vec<u16>) {
     let s = 0.5f32;
     let n = [0.0f32, 1.0, 0.0];
@@ -243,6 +263,7 @@ fn fallback_cube_pos_normal() -> (Vec<VertexPosNormal>, Vec<u16>) {
 }
 
 /// Fallback cube mesh (8 vertices, 12 triangles, 36 indices).
+#[allow(dead_code)]
 fn fallback_cube() -> (Vec<Vertex>, Vec<u16>) {
     let s = 0.5f32;
     let vertices = vec![
@@ -279,6 +300,7 @@ fn fallback_cube() -> (Vec<Vertex>, Vec<u16>) {
 }
 
 /// Fallback cube with UVs for UV debug shader.
+#[allow(dead_code)]
 fn fallback_cube_with_uv() -> (Vec<VertexWithUv>, Vec<u16>) {
     let s = 0.5f32;
     let vertices = vec![
@@ -334,6 +356,11 @@ pub struct GpuMeshBuffers {
     pub submeshes: Vec<(u32, u32)>,
     pub index_format: wgpu::IndexFormat,
     pub has_uvs: bool,
+    /// Storage buffer for blendshape offsets (num_blendshapes × num_vertices × [`BlendshapeOffset`]).
+    /// Always `Some` for skinned meshes; uses a dummy 36-byte buffer when the mesh has no blendshapes.
+    pub blendshape_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Number of blendshape slots. Zero when mesh has no blendshapes (shader loop runs 0 times).
+    pub num_blendshapes: u32,
 }
 
 /// Creates GPU buffers for a mesh. Extracts position and smooth normal for normal debug shader.
@@ -365,17 +392,13 @@ pub fn create_mesh_buffers(
         assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::uv0);
 
     let (pos_off, _) = pos_info;
-    let (normal_off, normal_size, normal_format) = normal_info
-        .map(|(o, s, f)| (o, s, f))
-        .unwrap_or((0, 0, VertexAttributeFormat::float32));
+    let (normal_off, normal_size, normal_format) =
+        normal_info.unwrap_or((0, 0, VertexAttributeFormat::float32));
     let has_uvs = uv_info.map(|(_, s, _)| s >= 4).unwrap_or(false);
 
     let default_normal = [0.0f32, 1.0, 0.0];
     let default_uv = [0.0f32, 0.0];
-    let (uv_off, uv_size, uv_format) =
-        uv_info
-            .map(|(o, s, f)| (o, s, f))
-            .unwrap_or((0, 0, VertexAttributeFormat::float32));
+    let (uv_off, uv_size, uv_format) = uv_info.unwrap_or((0, 0, VertexAttributeFormat::float32));
 
     let mut vertices = Vec::with_capacity(mesh.vertex_count as usize);
     let mut vertices_uv: Option<Vec<VertexWithUv>> = if has_uvs {
@@ -406,7 +429,7 @@ pub fn create_mesh_buffers(
         );
 
         let mut normal = if normal_size > 0 {
-            read_normal(&mesh.vertex_data, base, normal_off, normal_format)
+            read_vec3(&mesh.vertex_data, base, normal_off, normal_format)
                 .unwrap_or(default_normal)
         } else {
             default_normal
@@ -526,6 +549,38 @@ pub fn create_mesh_buffers(
         }
     };
 
+    let (blendshape_buffer, num_blendshapes) = {
+        let num = mesh.num_blendshapes.max(0) as u32;
+        let expected_len = num as usize * vc * std::mem::size_of::<BlendshapeOffset>();
+        let has_valid_blendshapes = mesh
+            .blendshape_offsets
+            .as_ref()
+            .is_some_and(|d| num > 0 && d.len() >= expected_len);
+        if has_valid_blendshapes {
+            let data = mesh.blendshape_offsets.as_ref().unwrap();
+            let buffer = Arc::new(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh blendshape buffer"),
+                    contents: &data[..expected_len],
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                }),
+            );
+            (Some(buffer), num)
+        } else if vertex_buffer_skinned.is_some() {
+            let dummy = [0u8; std::mem::size_of::<BlendshapeOffset>()];
+            let buffer = Arc::new(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh blendshape buffer (dummy)"),
+                    contents: &dummy,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                }),
+            );
+            (Some(buffer), 0)
+        } else {
+            (None, 0)
+        }
+    };
+
     Some(GpuMeshBuffers {
         vertex_buffer,
         vertex_buffer_uv,
@@ -534,6 +589,8 @@ pub fn create_mesh_buffers(
         submeshes,
         index_format,
         has_uvs,
+        blendshape_buffer,
+        num_blendshapes,
     })
 }
 
@@ -545,10 +602,13 @@ struct BoneWeightPod {
     bone_index: i32,
 }
 
+/// Default tangent when mesh has no tangent attribute.
+const DEFAULT_TANGENT: [f32; 3] = [1.0, 0.0, 0.0];
+
 fn build_skinned_vertices(
     device: &wgpu::Device,
     mesh: &MeshAsset,
-    _vertex_stride: usize,
+    vertex_stride: usize,
     base_vertices: &[VertexPosNormal],
 ) -> Option<wgpu::Buffer> {
     let bone_counts = mesh.bone_counts.as_ref()?;
@@ -556,52 +616,40 @@ fn build_skinned_vertices(
     if bone_counts.len() != base_vertices.len() {
         return None;
     }
-    let bone_count = mesh.bone_count();
+    let tangent_info =
+        assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::tangent);
+    let (tangent_off, tangent_size, tangent_format) =
+        tangent_info.unwrap_or((0, 0, VertexAttributeFormat::float32));
+
     let vc = base_vertices.len();
     let mut skinned = Vec::with_capacity(vc);
     let mut weight_offset = 0;
-    let debug_skinned = std::env::var("RENDERIDE_DEBUG_SKINNED").as_deref() == Ok("1");
     for (i, v) in base_vertices.iter().enumerate() {
+        let tangent = if tangent_size > 0 {
+            let base = i * vertex_stride;
+            read_vec3(&mesh.vertex_data, base, tangent_off, tangent_format)
+                .unwrap_or(DEFAULT_TANGENT)
+        } else {
+            DEFAULT_TANGENT
+        };
+
         let n = bone_counts.get(i).copied().unwrap_or(0) as usize;
         let n = n.min(4);
         let mut indices = [0i32; 4];
         let mut weights = [0.0f32; 4];
-        let mut vertex_weight_sum = 0.0f32;
         for j in 0..n {
             if weight_offset + 8 <= bone_weights.len() {
                 let w: BoneWeightPod =
                     bytemuck::pod_read_unaligned(&bone_weights[weight_offset..weight_offset + 8]);
-                indices[j] = w.bone_index.max(0).min(255);
+                indices[j] = w.bone_index.clamp(0, 255);
                 weights[j] = w.weight;
-                vertex_weight_sum += w.weight;
-                if debug_skinned && i < 3 {
-                    let in_range = bone_count > 0 && w.bone_index >= 0 && w.bone_index < bone_count;
-                    logger::debug!(
-                        "skinned mesh {} vertex {} bone {}: index={} weight={} in_range={}",
-                        mesh.id,
-                        i,
-                        j,
-                        w.bone_index,
-                        w.weight,
-                        in_range
-                    );
-                }
                 weight_offset += 8;
             }
-        }
-        if debug_skinned && i < 3 {
-            let sum_ok = (vertex_weight_sum - 1.0).abs() < 0.01;
-            logger::debug!(
-                "skinned mesh {} vertex {} weight_sum={:.4} sum_ok={}",
-                mesh.id,
-                i,
-                vertex_weight_sum,
-                sum_ok
-            );
         }
         skinned.push(VertexSkinned {
             position: v.position,
             normal: v.normal,
+            tangent,
             bone_indices: indices,
             bone_weights: weights,
         });
