@@ -194,7 +194,14 @@ impl RenderPass for MeshRenderPass {
             model: Matrix4<f32>,
             pipeline_variant: PipelineVariant,
         }
+        /// Collected skinned draw for batch upload.
+        struct SkinnedBatchedDraw<'a> {
+            buffers: &'a GpuMeshBuffers,
+            mvp: Matrix4<f32>,
+            bone_matrices: Vec<[[f32; 4]; 4]>,
+        }
         let mut non_skinned_draws: Vec<BatchedDraw<'_>> = Vec::new();
+        let mut skinned_draws: Vec<SkinnedBatchedDraw<'_>> = Vec::new();
         let scene_graph = ctx.session.scene_graph();
 
         let frame_index = ctx.pipeline_manager.advance_frame();
@@ -259,7 +266,6 @@ impl RenderPass for MeshRenderPass {
                 let skinned_mvp = view_proj;
 
                 if d.is_skinned {
-                    // Future: batch skinned draws that share mesh and material into single bind + multiple draw calls.
                     let Some(bind_poses) = mesh.bind_poses.as_ref() else {
                         crate::warn!(
                             "Skinned draw skipped: mesh missing bind_poses (mesh={})",
@@ -288,25 +294,13 @@ impl RenderPass for MeshRenderPass {
                         );
                         continue;
                     };
-                    let Some(skinned) = ctx.pipeline_manager.get_pipeline(
-                        PipelineKey(None, PipelineVariant::Skinned),
-                        &ctx.gpu.device,
-                        &ctx.gpu.config,
-                    ) else {
-                        continue;
-                    };
                     let bone_matrices =
                         scene_graph.compute_bone_matrices(batch.space_id, ids, bind_poses);
-                    skinned.upload_skinned(&ctx.gpu.queue, skinned_mvp, &bone_matrices);
-                    skinned.bind(&mut pass, None, frame_index);
-                    skinned.draw_skinned(
-                        &mut pass,
-                        buffers_ref,
-                        &UniformData::Skinned {
-                            mvp: skinned_mvp,
-                            bone_matrices: &bone_matrices,
-                        },
-                    );
+                    skinned_draws.push(SkinnedBatchedDraw {
+                        buffers: buffers_ref,
+                        mvp: skinned_mvp,
+                        bone_matrices,
+                    });
                     continue;
                 }
 
@@ -316,6 +310,31 @@ impl RenderPass for MeshRenderPass {
                     model: d.model_matrix,
                     pipeline_variant: d.pipeline_variant.clone(),
                 });
+            }
+        }
+
+        if !skinned_draws.is_empty() {
+            if let Some(skinned) = ctx.pipeline_manager.get_pipeline(
+                PipelineKey(None, PipelineVariant::Skinned),
+                &ctx.gpu.device,
+                &ctx.gpu.config,
+            ) {
+                let mvp_bones: Vec<_> = skinned_draws
+                    .iter()
+                    .map(|d| (d.mvp, d.bone_matrices.as_slice()))
+                    .collect();
+                skinned.upload_skinned_batch(&ctx.gpu.queue, &mvp_bones, frame_index);
+                for (j, d) in skinned_draws.iter().enumerate() {
+                    skinned.bind(&mut pass, Some(j as u32), frame_index);
+                    skinned.draw_skinned(
+                        &mut pass,
+                        d.buffers,
+                        &UniformData::Skinned {
+                            mvp: d.mvp,
+                            bone_matrices: &d.bone_matrices,
+                        },
+                    );
+                }
             }
         }
 

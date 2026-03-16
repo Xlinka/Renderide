@@ -69,6 +69,15 @@ pub trait RenderPipeline {
         _bone_matrices: &[[[f32; 4]; 4]],
     ) {
     }
+
+    /// Uploads batched skinned uniforms to the ring buffer. No-op for pipelines that don't batch.
+    fn upload_skinned_batch(
+        &self,
+        _queue: &wgpu::Queue,
+        _mvp_bones: &[(Matrix4<f32>, &[[[f32; 4]; 4]])],
+        _frame_index: u64,
+    ) {
+    }
 }
 
 /// Alignment for dynamic uniform buffer offsets (wgpu/Vulkan minimum).
@@ -77,6 +86,11 @@ const UNIFORM_ALIGNMENT: u64 = 256;
 const NUM_FRAMES_IN_FLIGHT: usize = 3;
 /// Slots per frame region. Draws exceeding this are split into multiple chunks.
 const SLOTS_PER_FRAME: usize = 16_384;
+
+/// Slot stride for skinned uniforms (mvp + 256 bones). Aligned to 256 for dynamic offset.
+const SKINNED_SLOT_STRIDE: u64 = 16_640;
+/// Slots per frame for skinned draws. Smaller than `SLOTS_PER_FRAME` to limit memory (~25 MB).
+const SKINNED_SLOTS_PER_FRAME: usize = 512;
 
 /// MVP + model matrix for non-skinned pipelines.
 #[repr(C)]
@@ -150,6 +164,73 @@ impl UniformRingBuffer {
         let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
         let slot = region * SLOTS_PER_FRAME + slot_in_chunk;
         (slot as u64 * UNIFORM_ALIGNMENT) as u32
+    }
+}
+
+/// Ring buffer for batched skinned uniform data (mvp + bone_matrices[256] per slot).
+struct SkinnedUniformRingBuffer {
+    /// GPU buffer backing the ring.
+    buffer: wgpu::Buffer,
+}
+
+impl SkinnedUniformRingBuffer {
+    /// Creates a new ring buffer sized for `NUM_FRAMES_IN_FLIGHT * SKINNED_SLOTS_PER_FRAME` slots.
+    fn new(device: &wgpu::Device, label: &str) -> Self {
+        let size =
+            (NUM_FRAMES_IN_FLIGHT * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Self { buffer }
+    }
+
+    /// Uploads skinned uniforms to the ring buffer, chunking if needed. No limit panic.
+    fn upload(
+        &self,
+        queue: &wgpu::Queue,
+        mvp_bones: &[(Matrix4<f32>, &[[[f32; 4]; 4]])],
+        frame_index: u64,
+    ) {
+        if mvp_bones.is_empty() {
+            return;
+        }
+        let uniform_size = std::mem::size_of::<SkinnedUniforms>();
+        let region_base =
+            (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
+        for (chunk_idx, chunk) in mvp_bones.chunks(SKINNED_SLOTS_PER_FRAME).enumerate() {
+            let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
+            let buffer_offset =
+                (region * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
+            let mut aligned =
+                vec![0u8; (chunk.len() as u64 * SKINNED_SLOT_STRIDE) as usize];
+            for (i, (mvp, bone_matrices)) in chunk.iter().enumerate() {
+                let mut u = SkinnedUniforms {
+                    mvp: (*mvp).into(),
+                    bone_matrices: [[[0.0; 4]; 4]; 256],
+                };
+                let n = bone_matrices.len().min(256);
+                u.bone_matrices[..n].copy_from_slice(&bone_matrices[..n]);
+                let offset = (i as u64 * SKINNED_SLOT_STRIDE) as usize;
+                let bytes: &[u8] = bytemuck::bytes_of(&u);
+                aligned[offset..offset + uniform_size].copy_from_slice(bytes);
+            }
+            queue.write_buffer(&self.buffer, buffer_offset, &aligned);
+        }
+    }
+
+    /// Computes dynamic offset for draw index `i` given `frame_index`.
+    fn dynamic_offset(&self, batch_index: u32, frame_index: u64) -> u32 {
+        let i = batch_index as usize;
+        let chunk_idx = i / SKINNED_SLOTS_PER_FRAME;
+        let slot_in_chunk = i % SKINNED_SLOTS_PER_FRAME;
+        let region_base =
+            (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
+        let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
+        let slot = region * SKINNED_SLOTS_PER_FRAME + slot_in_chunk;
+        (slot as u64 * SKINNED_SLOT_STRIDE) as u32
     }
 }
 
@@ -578,7 +659,7 @@ impl RenderPipeline for UvDebugPipeline {
 /// Skinned mesh pipeline: transforms vertices by weighted bone matrices.
 pub struct SkinnedPipeline {
     pipeline: wgpu::RenderPipeline,
-    uniform_buffer: wgpu::Buffer,
+    uniform_ring: SkinnedUniformRingBuffer,
     bind_group: wgpu::BindGroup,
 }
 
@@ -595,7 +676,7 @@ impl SkinnedPipeline {
                 visibility: wgpu::ShaderStages::VERTEX,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: std::num::NonZeroU64::new(
                         std::mem::size_of::<SkinnedUniforms>() as u64,
                     ),
@@ -608,19 +689,15 @@ impl SkinnedPipeline {
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
         });
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("skinned mesh uniform buffer"),
-            size: std::mem::size_of::<SkinnedUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let uniform_ring =
+            SkinnedUniformRingBuffer::new(device, "skinned mesh uniform ring buffer");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("skinned mesh bind group"),
             layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer,
+                    buffer: &uniform_ring.buffer,
                     offset: 0,
                     size: wgpu::BufferSize::new(std::mem::size_of::<SkinnedUniforms>() as u64),
                 }),
@@ -692,7 +769,7 @@ impl SkinnedPipeline {
         });
         Self {
             pipeline,
-            uniform_buffer,
+            uniform_ring,
             bind_group,
         }
     }
@@ -702,11 +779,14 @@ impl RenderPipeline for SkinnedPipeline {
     fn bind(
         &self,
         pass: &mut wgpu::RenderPass,
-        _batch_index: Option<u32>,
-        _frame_index: u64,
+        batch_index: Option<u32>,
+        frame_index: u64,
     ) {
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, &self.bind_group, &[]);
+        let dynamic_offset = batch_index
+            .map(|i| self.uniform_ring.dynamic_offset(i, frame_index))
+            .unwrap_or(0);
+        pass.set_bind_group(0, &self.bind_group, &[dynamic_offset]);
     }
 
     fn draw_skinned(
@@ -725,19 +805,13 @@ impl RenderPipeline for SkinnedPipeline {
         }
     }
 
-    fn upload_skinned(
+    fn upload_skinned_batch(
         &self,
         queue: &wgpu::Queue,
-        mvp: Matrix4<f32>,
-        bone_matrices: &[[[f32; 4]; 4]],
+        mvp_bones: &[(Matrix4<f32>, &[[[f32; 4]; 4]])],
+        frame_index: u64,
     ) {
-        let mut u = SkinnedUniforms {
-            mvp: mvp.into(),
-            bone_matrices: [[[0.0; 4]; 4]; 256],
-        };
-        let n = bone_matrices.len().min(256);
-        u.bone_matrices[..n].copy_from_slice(&bone_matrices[..n]);
-        queue.write_buffer(&self.uniform_buffer, 0, bytemuck::bytes_of(&u));
+        self.uniform_ring.upload(queue, mvp_bones, frame_index);
     }
 }
 
