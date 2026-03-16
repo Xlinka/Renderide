@@ -187,6 +187,9 @@ impl Session {
         self.view_state.near_clip = data.near_clip;
         self.view_state.far_clip = data.far_clip;
         self.view_state.desktop_fov = data.desktop_fov;
+        self.render_config.near_clip = data.near_clip;
+        self.render_config.far_clip = data.far_clip;
+        self.render_config.desktop_fov = data.desktop_fov;
         self.primary_view_transform = None;
         self.primary_view_space_id = None;
         self.primary_view_override = None;

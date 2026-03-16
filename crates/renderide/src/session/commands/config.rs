@@ -15,13 +15,10 @@ impl CommandHandler for ConfigCommandHandler {
         }
         match cmd {
             RendererCommand::desktop_config(x) => {
-                ctx.view_state.near_clip = 0.01;
-                ctx.view_state.far_clip = 1024.0;
-                ctx.view_state.desktop_fov = 75.0;
                 *ctx.render_config = RenderConfig {
-                    near_clip: 0.01,
-                    far_clip: 1024.0,
-                    desktop_fov: 75.0,
+                    near_clip: ctx.view_state.near_clip,
+                    far_clip: ctx.view_state.far_clip,
+                    desktop_fov: ctx.view_state.desktop_fov,
                     vsync: x.v_sync,
                     use_debug_uv: ctx.render_config.use_debug_uv,
                 };
