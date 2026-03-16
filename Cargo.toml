@@ -4,4 +4,5 @@ members = [
     "crates/renderide",
     "crates/interprocess",
     "crates/bootstrapper",
+    "crates/logger",
 ]

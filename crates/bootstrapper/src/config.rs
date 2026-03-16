@@ -1,8 +1,11 @@
 //! Bootstrapper configuration: paths, shared memory prefix, Wine detection.
+//!
+//! Parses `--log-level` / `-l` for bootstrapper and Renderide verbosity; remaining args are passed to the Host.
 
 use std::env;
 use std::path::PathBuf;
 
+use logger::LogLevel;
 use crate::wine_helpers;
 
 fn generate_random_string(len: usize) -> String {
@@ -20,6 +23,31 @@ fn generate_random_string(len: usize) -> String {
         .collect()
 }
 
+/// Parses bootstrapper args, extracting `--log-level` / `-l` for bootstrapper and Renderide.
+/// Returns (args to pass to Host, optional log level).
+pub fn parse_args() -> (Vec<String>, Option<LogLevel>) {
+    let args: Vec<String> = env::args().skip(1).collect();
+    let mut host_args = Vec::new();
+    let mut log_level = None;
+    let mut i = 0;
+    while i < args.len() {
+        let arg = &args[i];
+        let arg_lower = arg.to_lowercase();
+        if arg_lower == "--log-level" || arg_lower == "-l" {
+            if i + 1 < args.len() {
+                if let Some(level) = LogLevel::parse(&args[i + 1]) {
+                    log_level = Some(level);
+                }
+                i += 2;
+                continue;
+            }
+        }
+        host_args.push(arg.clone());
+        i += 1;
+    }
+    (host_args, log_level)
+}
+
 /// Configuration for the bootstrapper run.
 pub struct ResoBootConfig {
     pub current_directory: PathBuf,
@@ -28,11 +56,14 @@ pub struct ResoBootConfig {
     pub renderite_executable: PathBuf,
     pub shared_memory_prefix: String,
     pub is_wine: bool,
+    /// Log level to pass to Renderide when spawning. None = use default (Trace).
+    pub renderide_log_level: Option<LogLevel>,
 }
 
 impl ResoBootConfig {
     /// Creates a new config from the current environment.
-    pub fn new() -> Self {
+    /// `renderide_log_level` is set from `parse_args()` when bootstrapping.
+    pub fn new(renderide_log_level: Option<LogLevel>) -> Self {
         let current_directory = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         let runtime_config = current_directory.join("Renderite.Host.runtimeconfig.json");
         let renderite_directory = current_directory.join("target").join("debug");
@@ -51,6 +82,7 @@ impl ResoBootConfig {
             renderite_executable,
             shared_memory_prefix,
             is_wine,
+            renderide_log_level,
         }
     }
 }

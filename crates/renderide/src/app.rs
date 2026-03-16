@@ -2,8 +2,10 @@
 //!
 //! Owns the RenderideApp handler that bridges winit events to the session, GPU, and render loop.
 
+use std::path::Path;
 use std::time::{Duration, Instant};
 
+use logger::LogLevel;
 use winit::application::ApplicationHandler;
 use winit::dpi::PhysicalPosition;
 use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, WindowEvent};
@@ -20,15 +22,35 @@ use crate::session::Session;
 const FOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 240);
 /// Target frame interval when unfocused (60 Hz).
 const UNFOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 60);
+/// Interval between log flushes.
+const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Path to Renderide.log in the logs folder at repo root (two levels up from crates/renderide).
+fn renderide_log_path() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .unwrap_or_else(|| Path::new("."))
+        .join("logs")
+        .join("Renderide.log")
+}
 
 /// Runs the Renderide application: initializes logging, panic hook, session, and event loop.
 /// Returns the exit code if the session requested one, otherwise runs until the window is closed.
 pub fn run() -> Option<i32> {
-    crate::logging::init();
+    let path = renderide_log_path();
+    logger::init(
+        &path,
+        logger::parse_log_level_from_args().unwrap_or(LogLevel::Trace),
+        true,
+    );
+    logger::info!("Logging to {}", path.display());
 
     let default_hook = std::panic::take_hook();
+    let log_path = path.clone();
     std::panic::set_hook(Box::new(move |info| {
-        crate::logging::log_panic(info);
+        logger::flush();
+        logger::log_panic(&log_path, info);
         default_hook(info);
     }));
 
@@ -110,7 +132,7 @@ impl FrameDiagnostic {
             Some(_) => "CPU",
             None => "CPU (GPU timing unavailable)",
         };
-        crate::info!(
+        logger::info!(
             "[frame diag] frames={} CPU: session={:.2}ms collect={:.2}ms render={:.2}ms present={:.2}ms total={:.2}ms | GPU mesh_pass={:.2}ms | Bottleneck: {}",
             self.frame_count,
             cpu_session_ms,
@@ -134,6 +156,7 @@ struct RenderideApp {
     exit_code: Option<i32>,
     input: WindowInputState,
     last_unfocused_redraw: Option<Instant>,
+    last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
 }
 
@@ -147,7 +170,21 @@ impl RenderideApp {
             exit_code: None,
             input: WindowInputState::default(),
             last_unfocused_redraw: None,
+            last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
+        }
+    }
+
+    /// Flushes logs if LOG_FLUSH_INTERVAL has passed since last flush.
+    fn maybe_flush_logs(&mut self) {
+        let now = Instant::now();
+        let should_flush = self
+            .last_log_flush
+            .map(|t| now.duration_since(t) >= LOG_FLUSH_INTERVAL)
+            .unwrap_or(true);
+        if should_flush {
+            logger::flush();
+            self.last_log_flush = Some(now);
         }
     }
 }
@@ -159,7 +196,7 @@ impl ApplicationHandler for RenderideApp {
             let attrs = WindowAttributes::default().with_title("Renderide");
             match event_loop.create_window(attrs) {
                 Ok(w) => self.window = Some(w),
-                Err(e) => crate::error!("Failed to create window: {}", e),
+                Err(e) => logger::error!("Failed to create window: {}", e),
             }
         }
     }
@@ -268,6 +305,7 @@ impl ApplicationHandler for RenderideApp {
                         self.frame_diagnostic.log_and_reset(gpu_ms);
                     }
                 }
+                self.maybe_flush_logs();
             }
             WindowEvent::Resized(size) => {
                 self.input.window_resolution = (size.width, size.height);
@@ -401,6 +439,7 @@ impl ApplicationHandler for RenderideApp {
                             self.frame_diagnostic.log_and_reset(gpu_ms);
                         }
                     }
+                    self.maybe_flush_logs();
                 }
             }
         }

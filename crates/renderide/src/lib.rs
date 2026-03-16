@@ -20,9 +20,6 @@ pub mod input;
 /// IPC: command receiver and shared memory access.
 pub mod ipc;
 
-/// Tiered logging for the renderer (file output, panic capture).
-pub mod logging;
-
 /// Render loop, draw batching, and render graph.
 pub mod render;
 

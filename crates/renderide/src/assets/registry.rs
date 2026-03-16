@@ -84,7 +84,7 @@ impl AssetRegistry {
         let expected_bone_weights_len = (data.bone_weight_count.max(0) * 8) as usize;
         let expected_bind_poses_len = (data.bone_count.max(0) * 64) as usize;
         if layout.bone_weights_length != expected_bone_weights_len {
-            crate::error!(
+            logger::error!(
                 "Mesh upload rejected: bone_weights layout mismatch (expected {} got {})",
                 expected_bone_weights_len,
                 layout.bone_weights_length
@@ -92,7 +92,7 @@ impl AssetRegistry {
             return (false, false);
         }
         if layout.bind_poses_length != expected_bind_poses_len {
-            crate::error!(
+            logger::error!(
                 "Mesh upload rejected: bind_poses layout mismatch (expected {} got {})",
                 expected_bind_poses_len,
                 layout.bind_poses_length
@@ -102,7 +102,7 @@ impl AssetRegistry {
         let min_len = layout.bind_poses_start + layout.bind_poses_length;
         if raw.len() < min_len {
             if data.bone_count > 0 {
-                crate::error!(
+                logger::error!(
                     "Mesh upload rejected: buffer too short for skinned mesh (need {} bytes, got {})",
                     min_len,
                     raw.len()

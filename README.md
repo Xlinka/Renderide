@@ -64,6 +64,12 @@ dotnet test SharedTypeGenerator.Tests/
 
 All logs under `logs/` (relative to bootstrapper CWD or repo root). Truncated at each run.
 
+**Renderide verbosity:** Pass `--log-level <level>` or `-l <level>` to the bootstrapper to control `logs/Renderide.log` verbosity. Levels: `error`, `warn`, `info`, `debug`, `trace` (default). The bootstrapper forwards this to Renderide when spawning.
+
+```bash
+cargo run --bin bootstrapper -- --log-level info
+```
+
 | Log | Path | Created By |
 |-----|------|------------|
 | Bootstrapper.log | `logs/Bootstrapper.log` | Bootstrapper crate — orchestration, queue commands, errors |

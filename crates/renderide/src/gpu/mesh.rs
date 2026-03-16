@@ -576,7 +576,7 @@ fn build_skinned_vertices(
                 vertex_weight_sum += w.weight;
                 if debug_skinned && i < 3 {
                     let in_range = bone_count > 0 && w.bone_index >= 0 && w.bone_index < bone_count;
-                    crate::debug!(
+                    logger::debug!(
                         "skinned mesh {} vertex {} bone {}: index={} weight={} in_range={}",
                         mesh.id,
                         i,
@@ -591,7 +591,7 @@ fn build_skinned_vertices(
         }
         if debug_skinned && i < 3 {
             let sum_ok = (vertex_weight_sum - 1.0).abs() < 0.01;
-            crate::debug!(
+            logger::debug!(
                 "skinned mesh {} vertex {} weight_sum={:.4} sum_ok={}",
                 mesh.id,
                 i,

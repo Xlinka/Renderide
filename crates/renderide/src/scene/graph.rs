@@ -201,7 +201,7 @@ impl SceneGraph {
         root_bone_transform_id: Option<i32>,
     ) -> Vec<[[f32; 4]; 4]> {
         if bone_transform_ids.len() > bind_poses.len() {
-            crate::warn!(
+            logger::trace!(
                 "Bone count mismatch: bone_transform_ids.len()={} > bind_poses.len()={}",
                 bone_transform_ids.len(),
                 bind_poses.len()
@@ -436,7 +436,7 @@ impl SceneGraph {
                     if validation.is_valid() {
                         scene.nodes[pu.transform_id as usize] = pu.pose;
                     } else {
-                        crate::error!(
+                        logger::error!(
                             "Invalid pose scene={} transform={} frame={}: using identity",
                             scene.id,
                             pu.transform_id,
@@ -839,7 +839,7 @@ impl SceneGraph {
                 };
 
                 if in_stack[p_usize] {
-                    crate::warn!(
+                    logger::trace!(
                         "Cycle detected in scene {} at transform {} (parent {}); treating as root",
                         scene.id,
                         i,

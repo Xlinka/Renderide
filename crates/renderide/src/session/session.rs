@@ -202,7 +202,7 @@ impl Session {
 
         if let Some(ref mut shm) = self.shared_memory
             && let Err(e) = self.scene_graph.apply_frame_update(shm, &data) {
-                crate::error!("Scene apply_frame_update: {}", e);
+                logger::error!("Scene apply_frame_update: {}", e);
             }
 
         let active_non_overlay: Vec<_> = data
@@ -353,7 +353,7 @@ impl Session {
 
         for space_id in active_space_ids {
             if let Err(e) = self.scene_graph.compute_world_matrices(space_id) {
-                crate::error!("Scene compute_world_matrices: {}", e);
+                logger::error!("Scene compute_world_matrices: {}", e);
                 continue;
             }
             let scene = match self.scene_graph.get_scene(space_id) {
@@ -374,7 +374,7 @@ impl Session {
                 }
                 if is_skinned {
                     if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
                             entry.node_id
                         );
@@ -382,7 +382,7 @@ impl Session {
                     }
                     if let Some(mesh) = self.asset_registry.get_mesh(entry.mesh_handle) {
                         if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
-                            crate::warn!(
+                            logger::trace!(
                                 "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
                                 entry.mesh_handle,
                                 entry.node_id

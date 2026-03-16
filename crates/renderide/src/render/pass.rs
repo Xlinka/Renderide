@@ -304,28 +304,28 @@ impl RenderPass for MeshRenderPass {
 
                 if d.is_skinned {
                     let Some(bind_poses) = mesh.bind_poses.as_ref() else {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: mesh missing bind_poses (mesh={})",
                             d.mesh_asset_id
                         );
                         continue;
                     };
                     let Some(ids) = d.bone_transform_ids.as_deref() else {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
                             d.mesh_asset_id
                         );
                         continue;
                     };
                     if ids.is_empty() {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
                             d.mesh_asset_id
                         );
                         continue;
                     }
                     if ids.len() > bind_poses.len() {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: bone_transform_ids.len()={} > bind_poses.len()={} (mesh={})",
                             ids.len(),
                             bind_poses.len(),
@@ -334,7 +334,7 @@ impl RenderPass for MeshRenderPass {
                         continue;
                     }
                     let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
-                        crate::warn!(
+                        logger::trace!(
                             "Skinned draw skipped: vertex_buffer_skinned missing (mesh={})",
                             d.mesh_asset_id
                         );
@@ -361,7 +361,7 @@ impl RenderPass for MeshRenderPass {
                         } else {
                             ("n/a".to_string(), "n/a".to_string())
                         };
-                        crate::debug!(
+                        logger::debug!(
                             "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
                             d.mesh_asset_id,
                             d.node_id,

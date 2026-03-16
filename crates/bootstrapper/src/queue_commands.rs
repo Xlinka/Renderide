@@ -8,7 +8,6 @@ use std::time::Duration;
 use interprocess::{Publisher, Subscriber};
 
 use crate::config::ResoBootConfig;
-use crate::logger::Logger;
 use crate::orphan;
 
 /// Parsed host command from the IPC queue.
@@ -46,19 +45,18 @@ pub fn handle_command(
     cmd: HostCommand,
     outgoing: &mut Publisher,
     config: &ResoBootConfig,
-    logger: &mut Logger,
 ) -> LoopAction {
     match cmd {
         HostCommand::Heartbeat => {
-            logger.log("Got heartbeat.");
+            logger::info!("Got heartbeat.");
             LoopAction::Continue
         }
         HostCommand::Shutdown => {
-            logger.log("Got shutdown command");
+            logger::info!("Got shutdown command");
             LoopAction::Break
         }
         HostCommand::GetText => {
-            logger.log("Getting clipboard text");
+            logger::info!("Getting clipboard text");
             let text = arboard::Clipboard::new()
                 .and_then(|mut c| c.get_text())
                 .unwrap_or_default();
@@ -66,14 +64,19 @@ pub fn handle_command(
             LoopAction::Continue
         }
         HostCommand::SetText(text) => {
-            logger.log("Setting clipboard text");
+            logger::info!("Setting clipboard text");
             if let Ok(mut clipboard) = arboard::Clipboard::new() {
                 let _ = clipboard.set_text(&text);
             }
             LoopAction::Continue
         }
         HostCommand::StartRenderer(ref renderer_args) => {
-            let args: Vec<&str> = renderer_args.iter().map(String::as_str).collect();
+            let mut args: Vec<String> = renderer_args.clone();
+            if let Some(ref level) = config.renderide_log_level {
+                args.push("-LogLevel".to_string());
+                args.push(level.as_arg().to_string());
+            }
+            let args_refs: Vec<&str> = args.iter().map(String::as_str).collect();
 
             #[cfg(target_os = "linux")]
             {
@@ -82,35 +85,32 @@ pub fn handle_command(
                 if target.exists() && (!symlink.exists() || fs::read_link(symlink).is_err()) {
                     let _ = fs::remove_file(symlink);
                     if let Err(e) = std::os::unix::fs::symlink("renderide", symlink) {
-                        logger.log(&format!(
-                            "Failed to create Renderite.Renderer symlink: {}",
-                            e
-                        ));
+                        logger::warn!("Failed to create Renderite.Renderer symlink: {}", e);
                     }
                 }
             }
 
-            logger.log(&format!(
+            logger::info!(
                 "Spawning renderer: {:?} with args: {:?}",
                 config.renderite_executable, args
-            ));
+            );
             match Command::new(&config.renderite_executable)
-                .args(&args)
+                .args(&args_refs)
                 .current_dir(&config.renderite_directory)
                 .spawn()
             {
                 Ok(process) => {
-                    logger.log(&format!(
+                    logger::info!(
                         "Renderer started PID {} with args: {}",
                         process.id(),
-                        renderer_args.join(" ")
-                    ));
-                    orphan::write_pid_file(process.id(), "renderer", logger);
+                        args.join(" ")
+                    );
+                    orphan::write_pid_file(process.id(), "renderer");
                     let response = format!("RENDERITE_STARTED:{}", process.id());
                     let _ = outgoing.try_enqueue(response.as_bytes());
                 }
                 Err(e) => {
-                    logger.log(&format!("Failed to start renderer: {}", e));
+                    logger::error!("Failed to start renderer: {}", e);
                 }
             }
             LoopAction::Continue
@@ -124,40 +124,44 @@ pub fn queue_loop(
     outgoing: &mut Publisher,
     config: &ResoBootConfig,
     cancel: &AtomicBool,
-    logger: &mut Logger,
 ) {
     let start = std::time::Instant::now();
     let mut last_wait_log = std::time::Instant::now();
+    let mut last_flush = std::time::Instant::now();
     let mut loop_iter: u64 = 0;
 
-    logger.log("Starting queue loop");
-    logger.log(
+    logger::info!("Starting queue loop");
+    logger::info!(
         "Expected: Host sends first msg (renderer args), then HEARTBEAT every 5s, SHUTDOWN on exit",
     );
-    logger.log("dequeue() blocks until message or cancel; empty msg = cancel was set");
+    logger::info!("dequeue() blocks until message or cancel; empty msg = cancel was set");
 
     while !cancel.load(Ordering::Relaxed) {
+        if last_flush.elapsed() >= Duration::from_secs(1) {
+            logger::flush();
+            last_flush = std::time::Instant::now();
+        }
         loop_iter += 1;
         if loop_iter <= 3 || loop_iter.is_multiple_of(1000) {
-            logger.log(&format!(
+            logger::info!(
                 "queue_loop iter {} elapsed={:.1}s cancel={}",
                 loop_iter,
                 start.elapsed().as_secs_f64(),
                 cancel.load(Ordering::Relaxed)
-            ));
+            );
         }
 
         let msg = incoming.dequeue(cancel);
         if msg.is_empty() {
             if cancel.load(Ordering::Relaxed) {
-                logger.log("Host process exited (cancel set), stopping queue loop");
+                logger::info!("Host process exited (cancel set), stopping queue loop");
                 break;
             }
             if last_wait_log.elapsed() >= Duration::from_secs(5) {
-                logger.log(&format!(
+                logger::info!(
                     "Still waiting for message from Host (elapsed {:.0}s). Check: Host started with -shmprefix? Host reached BootstrapperManager?",
                     start.elapsed().as_secs_f64()
-                ));
+                );
                 last_wait_log = std::time::Instant::now();
             }
             continue;
@@ -168,13 +172,10 @@ pub fn queue_loop(
             Err(_) => continue,
         };
 
-        logger.log(&format!("Received message: {}", arguments));
+        logger::info!("Received message: {}", arguments);
 
         let cmd = parse_host_command(&arguments);
-        if matches!(
-            handle_command(cmd, outgoing, config, logger),
-            LoopAction::Break
-        ) {
+        if matches!(handle_command(cmd, outgoing, config), LoopAction::Break) {
             break;
         }
     }

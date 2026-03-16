@@ -9,7 +9,6 @@ use std::process::{Child, Command, Stdio};
 use serde_json::Value;
 
 use crate::config::ResoBootConfig;
-use crate::logger::Logger;
 use crate::paths;
 
 /// Removes Microsoft.WindowsDesktop.App from runtime config for Wine compatibility.
@@ -65,15 +64,11 @@ pub fn spawn_output_drainer(
 }
 
 /// Spawns the Renderite Host process. Returns the child process or an error.
-pub fn spawn_host(
-    config: &ResoBootConfig,
-    args: &[String],
-    logger: &mut Logger,
-) -> std::io::Result<Child> {
+pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<Child> {
     if config.is_wine {
-        logger.log("Detected Wine; altering startup sequence accordingly.");
+        logger::info!("Detected Wine; altering startup sequence accordingly.");
         strip_windows_desktop_from_runtime_config(&config.runtime_config);
-        logger.log("Starting LinuxBootstrap.sh to check for dotnet and execute the main program.");
+        logger::info!("Starting LinuxBootstrap.sh to check for dotnet and execute the main program.");
         Command::new("start")
             .args(["/b", "/unix", "./LinuxBootstrap.sh"])
             .args(args)
@@ -88,17 +83,14 @@ pub fn spawn_host(
                 "Could not find Resonite installation. Set RESONITE_DIR or ensure Steam has Resonite installed.",
             )
         })?;
-        logger.log(&format!("Resonite dir: {:?}", resonite_dir));
-        logger.log(&format!("Starting Renderite.Host from {:?}", resonite_dir));
+        logger::info!("Resonite dir: {:?}", resonite_dir);
+        logger::info!("Starting Renderite.Host from {:?}", resonite_dir);
 
         #[cfg(target_os = "linux")]
         {
             let dotnet = paths::find_dotnet_for_host(&resonite_dir);
             let host_dll = resonite_dir.join(paths::RENDERITE_HOST_DLL);
-            logger.log(&format!(
-                "Using dotnet at {:?} to run Renderite.Host.dll",
-                dotnet
-            ));
+            logger::info!("Using dotnet at {:?} to run Renderite.Host.dll", dotnet);
             Command::new(&dotnet)
                 .arg(&host_dll)
                 .args(args)
