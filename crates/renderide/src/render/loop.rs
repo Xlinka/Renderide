@@ -2,7 +2,7 @@
 
 use nalgebra::{Matrix4, Vector3};
 
-use crate::gpu::GpuState;
+use crate::gpu::{GpuMeshBuffers, GpuState, RenderPipeline, UniformData};
 use crate::scene::{render_transform_to_matrix, SceneGraph};
 use crate::session::Session;
 
@@ -104,17 +104,14 @@ impl RenderLoop {
             }
 
             struct BatchedDraw<'a> {
-                vertex_buffer: &'a wgpu::Buffer,
-                index_buffer: &'a wgpu::Buffer,
-                submeshes: &'a [(u32, u32)],
-                index_format: wgpu::IndexFormat,
-                use_debug_uv: bool,
-                has_uvs: bool,
-                is_skinned: bool,
-                material_id: i32,
+                buffers: &'a GpuMeshBuffers,
+                mvp: Matrix4<f32>,
+                model: Matrix4<f32>,
+                use_uv_pipeline: bool,
             }
-            let mut batched_draws: Vec<BatchedDraw<'_>> = Vec::new();
-            let mut mvp_models: Vec<(Matrix4<f32>, Matrix4<f32>)> = Vec::new();
+            let mut normal_draws: Vec<BatchedDraw<'_>> = Vec::new();
+            let mut uv_draws: Vec<BatchedDraw<'_>> = Vec::new();
+            let mut skinned_draws: Vec<(GpuMeshBuffers, Matrix4<f32>, Vec<[[f32; 4]; 4]>)> = Vec::new();
             let scene_graph = session.scene_graph();
 
             for batch in &draw_batches {
@@ -127,14 +124,11 @@ impl RenderLoop {
                 let view_proj = proj * view_mat;
 
                 for (model, mesh_asset_id, is_skinned, material_id, bone_transform_ids) in &batch.draws {
-                    let buffers_ref = if *mesh_asset_id >= 0 {
+                    let (buffers_ref, mesh) = if *mesh_asset_id >= 0 {
                         let Some(mesh) = mesh_assets.get_mesh(*mesh_asset_id) else {
                             continue;
                         };
-                        if mesh.vertex_count <= 0 {
-                            continue;
-                        }
-                        if mesh.index_count <= 0 {
+                        if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
                             continue;
                         }
                         let Some(b) = gpu.mesh_buffer_cache.get(mesh_asset_id) else {
@@ -145,8 +139,6 @@ impl RenderLoop {
                         continue;
                     };
 
-                    let (buffers_ref, mesh) = buffers_ref;
-
                     let model_mvp = view_proj * model;
                     let skinned_mvp = view_proj;
 
@@ -155,7 +147,6 @@ impl RenderLoop {
                         let has_bind_poses = mesh.bind_poses.is_some();
                         let has_bone_ids = bone_transform_ids.is_some();
                         if has_vb && has_bind_poses && has_bone_ids {
-                            let vb_skinned = buffers_ref.vertex_buffer_skinned.as_ref().unwrap();
                             let bind_poses = mesh.bind_poses.as_ref().unwrap();
                             let ids = bone_transform_ids.as_ref().unwrap();
                             let bone_matrices = compute_bone_matrices(
@@ -164,51 +155,60 @@ impl RenderLoop {
                                 ids,
                                 bind_poses,
                             );
-                            gpu.mesh_pipeline.upload_skinned_uniforms(&gpu.queue, skinned_mvp, &bone_matrices);
-                            gpu.mesh_pipeline.draw_mesh_skinned(
-                                &mut pass,
-                                vb_skinned.as_ref(),
-                                buffers_ref.index_buffer.as_ref(),
-                                &buffers_ref.submeshes,
-                                buffers_ref.index_format,
-                            );
+                            skinned_draws.push((
+                                buffers_ref.clone(),
+                                skinned_mvp,
+                                bone_matrices,
+                            ));
                             continue;
                         }
+                        continue;
                     }
 
-                    let vb = if use_debug_uv && buffers_ref.has_uvs && !*is_skinned {
-                        buffers_ref.vertex_buffer_uv.as_ref().map(|b| b.as_ref()).unwrap_or(buffers_ref.vertex_buffer.as_ref())
-                    } else {
-                        buffers_ref.vertex_buffer.as_ref()
+                    let use_uv_pipeline = use_debug_uv && buffers_ref.has_uvs;
+                    let batched = BatchedDraw {
+                        buffers: buffers_ref,
+                        mvp: model_mvp,
+                        model: *model,
+                        use_uv_pipeline,
                     };
-
-                    mvp_models.push((model_mvp, *model));
-                    batched_draws.push(BatchedDraw {
-                        vertex_buffer: vb,
-                        index_buffer: buffers_ref.index_buffer.as_ref(),
-                        submeshes: &buffers_ref.submeshes,
-                        index_format: buffers_ref.index_format,
-                        use_debug_uv,
-                        has_uvs: buffers_ref.has_uvs,
-                        is_skinned: false,
-                        material_id: *material_id,
-                    });
+                    if use_uv_pipeline {
+                        uv_draws.push(batched);
+                    } else {
+                        normal_draws.push(batched);
+                    }
                 }
             }
 
-            gpu.mesh_pipeline.upload_uniforms_batch(&gpu.queue, &mvp_models);
-            for (i, d) in batched_draws.iter().enumerate() {
-                gpu.mesh_pipeline.draw_mesh_with_offset(
+            let mvp_models_normal: Vec<_> = normal_draws.iter().map(|d| (d.mvp, d.model)).collect();
+            let mvp_models_uv: Vec<_> = uv_draws.iter().map(|d| (d.mvp, d.model)).collect();
+
+            gpu.pipeline_manager.normal_debug.upload_batch(&gpu.queue, &mvp_models_normal);
+            gpu.pipeline_manager.uv_debug.upload_batch(&gpu.queue, &mvp_models_uv);
+
+            for (i, d) in normal_draws.iter().enumerate() {
+                gpu.pipeline_manager.normal_debug.bind(&mut pass, Some(i as u32));
+                gpu.pipeline_manager.normal_debug.draw_mesh(
                     &mut pass,
-                    d.vertex_buffer,
-                    d.index_buffer,
-                    d.submeshes,
-                    d.index_format,
-                    i as u32,
-                    d.use_debug_uv,
-                    d.has_uvs,
-                    d.is_skinned,
-                    d.material_id,
+                    d.buffers,
+                    &UniformData::Simple { mvp: d.mvp, model: d.model },
+                );
+            }
+            for (i, d) in uv_draws.iter().enumerate() {
+                gpu.pipeline_manager.uv_debug.bind(&mut pass, Some(i as u32));
+                gpu.pipeline_manager.uv_debug.draw_mesh(
+                    &mut pass,
+                    d.buffers,
+                    &UniformData::Simple { mvp: d.mvp, model: d.model },
+                );
+            }
+            for (buffers, mvp, bone_matrices) in &skinned_draws {
+                gpu.pipeline_manager.skinned.upload_skinned(&gpu.queue, *mvp, bone_matrices);
+                gpu.pipeline_manager.skinned.bind(&mut pass, None);
+                gpu.pipeline_manager.skinned.draw_skinned(
+                    &mut pass,
+                    buffers,
+                    &UniformData::Skinned { mvp: *mvp, bone_matrices },
                 );
             }
         }

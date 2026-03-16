@@ -1,8 +1,9 @@
-//! GPU state: surface, device, queue, and mesh pipeline.
+//! GPU state: surface, device, queue, and pipeline manager.
 
 use winit::window::Window;
 
-use super::mesh::{self, MeshPipeline};
+use super::mesh::GpuMeshBuffers;
+use super::PipelineManager;
 
 /// wgpu state for rendering.
 pub struct GpuState {
@@ -10,8 +11,8 @@ pub struct GpuState {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
-    pub mesh_pipeline: MeshPipeline,
-    pub mesh_buffer_cache: std::collections::HashMap<i32, mesh::GpuMeshBuffers>,
+    pub pipeline_manager: PipelineManager,
+    pub mesh_buffer_cache: std::collections::HashMap<i32, GpuMeshBuffers>,
     pub depth_texture: Option<wgpu::Texture>,
 }
 
@@ -39,7 +40,7 @@ pub async fn init_gpu(
     let mut config = surface.get_default_config(&adapter, size.width, size.height).unwrap();
     config.present_mode = wgpu::PresentMode::Fifo;
     surface.configure(&device, &config);
-    let mesh_pipeline = MeshPipeline::new(&device, &config);
+    let pipeline_manager = PipelineManager::new(&device, &config);
     let depth_texture = create_depth_texture(&device, &config);
 
     Ok(GpuState {
@@ -47,7 +48,7 @@ pub async fn init_gpu(
         device,
         queue,
         config,
-        mesh_pipeline,
+        pipeline_manager,
         mesh_buffer_cache: std::collections::HashMap::new(),
         depth_texture: Some(depth_texture),
     })
