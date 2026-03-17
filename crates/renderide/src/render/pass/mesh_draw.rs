@@ -7,6 +7,7 @@ use nalgebra::{Matrix4, Vector3};
 use glam::Mat4 as GlamMat4;
 
 use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant};
+use std::collections::HashMap;
 use crate::scene::render_transform_to_matrix;
 
 /// Converts nalgebra Matrix4 to glam Mat4 for fast SIMD multiply.
@@ -65,6 +66,9 @@ pub(crate) struct SkinnedBatchedDraw {
     pub(super) stencil_state: Option<crate::stencil::StencilState>,
 }
 
+/// Cache key for skinned bind groups.
+type SkinnedBindGroupCacheKey = (PipelineVariant, i32);
+
 /// Parameters for recording mesh draws; used to avoid borrowing ctx while encoder is active.
 pub(super) struct MeshDrawParams<'a> {
     pub(super) pipeline_manager: &'a mut PipelineManager,
@@ -73,6 +77,8 @@ pub(super) struct MeshDrawParams<'a> {
     pub(super) config: &'a wgpu::SurfaceConfiguration,
     pub(super) frame_index: u64,
     pub(super) mesh_buffer_cache: &'a std::collections::HashMap<i32, GpuMeshBuffers>,
+    /// Cache for skinned bind groups; keyed by (pipeline variant, mesh asset id).
+    pub(super) skinned_bind_group_cache: &'a mut HashMap<SkinnedBindGroupCacheKey, wgpu::BindGroup>,
     /// When true, overlay draws use depth-disabled pipelines for screen-space UI.
     pub(super) overlay_orthographic: bool,
     /// When true, non-overlay mesh pass uses MRT pipelines (NormalDebugMRT, UvDebugMRT, SkinnedMRT).
@@ -369,6 +375,7 @@ pub(super) fn record_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskWriteSkinned
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
+        skinned.bind_pipeline(pass);
         let mut order: Vec<usize> = (0..group.len()).collect();
         order.sort_by_key(|&idx| group[idx].mesh_asset_id);
         let mut last_mesh_asset_id: Option<i32> = None;
@@ -377,10 +384,15 @@ pub(super) fn record_skinned_draws(
             let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                 continue;
             };
-            let draw_bind_group = skinned
-                .create_skinned_draw_bind_group(params.device, buffers)
-                .expect("skinned pipeline must create draw bind groups");
-            skinned.bind(pass, Some(j as u32), params.frame_index, Some(&draw_bind_group));
+            let draw_bind_group = params
+                .skinned_bind_group_cache
+                .entry((pipeline_variant.clone(), d.mesh_asset_id))
+                .or_insert_with(|| {
+                    skinned
+                        .create_skinned_draw_bind_group(params.device, buffers)
+                        .expect("skinned pipeline must create draw bind groups")
+                });
+            skinned.bind_draw(pass, Some(j as u32), params.frame_index, Some(draw_bind_group));
             if let Some(ref stencil) = d.stencil_state {
                 pass.set_stencil_reference(stencil.reference as u32);
             } else if is_stencil_pipeline {
@@ -459,6 +471,7 @@ pub(super) fn record_non_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskWriteSkinned
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
+        pipeline.bind_pipeline(pass);
         let mut order: Vec<usize> = (0..group.len()).collect();
         order.sort_by_key(|&idx| group[idx].mesh_asset_id);
         let mut last_mesh_asset_id: Option<i32> = None;
@@ -467,7 +480,7 @@ pub(super) fn record_non_skinned_draws(
             let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                 continue;
             };
-            pipeline.bind(pass, Some(j as u32), params.frame_index, None);
+            pipeline.bind_draw(pass, Some(j as u32), params.frame_index, None);
             if let Some(ref stencil) = d.stencil_state {
                 pass.set_stencil_reference(stencil.reference as u32);
             } else if is_stencil_pipeline {

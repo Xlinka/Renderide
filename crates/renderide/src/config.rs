@@ -57,7 +57,7 @@ impl Default for RenderConfig {
             skinned_flip_handedness: false,
             rtao_enabled: true,
             rtao_strength: 1.0,
-            ao_radius: 0.5,
+            ao_radius: 1.0,
         }
     }
 }

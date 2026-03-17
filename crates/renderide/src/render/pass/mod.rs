@@ -384,6 +384,7 @@ impl RenderPass for MeshRenderPass {
             config: &ctx.gpu.config,
             frame_index: ctx.frame_index,
             mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
+            skinned_bind_group_cache: &mut ctx.gpu.skinned_bind_group_cache,
             overlay_orthographic: false,
             use_mrt,
         };
@@ -555,6 +556,7 @@ impl RenderPass for OverlayRenderPass {
             config: &ctx.gpu.config,
             frame_index: ctx.frame_index,
             mesh_buffer_cache: &ctx.gpu.mesh_buffer_cache,
+            skinned_bind_group_cache: &mut ctx.gpu.skinned_bind_group_cache,
             overlay_orthographic,
             use_mrt: false,
         };

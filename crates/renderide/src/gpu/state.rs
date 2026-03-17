@@ -9,6 +9,10 @@ use winit::window::Window;
 
 use super::accel::{AccelCache, RayTracingState};
 use super::mesh::GpuMeshBuffers;
+use super::registry::PipelineVariant;
+
+/// Cache key for skinned bind groups: (pipeline variant, mesh asset id).
+type SkinnedBindGroupCacheKey = (PipelineVariant, i32);
 
 /// wgpu state for rendering.
 pub struct GpuState {
@@ -17,6 +21,9 @@ pub struct GpuState {
     pub queue: wgpu::Queue,
     pub config: wgpu::SurfaceConfiguration,
     pub mesh_buffer_cache: std::collections::HashMap<i32, GpuMeshBuffers>,
+    /// Cached bind groups for skinned pipelines, keyed by (pipeline variant, mesh asset id).
+    /// Invalidated when meshes are unloaded via [`drain_pending_mesh_unloads`](crate::app).
+    pub skinned_bind_group_cache: std::collections::HashMap<SkinnedBindGroupCacheKey, wgpu::BindGroup>,
     pub depth_texture: Option<wgpu::Texture>,
     /// Dimensions of the current depth texture. Used to avoid recreation on resize when unchanged.
     pub depth_size: (u32, u32),
@@ -165,6 +172,7 @@ pub async fn init_gpu(
         queue,
         config,
         mesh_buffer_cache: std::collections::HashMap::new(),
+        skinned_bind_group_cache: std::collections::HashMap::new(),
         depth_texture: Some(depth_texture),
         depth_size,
         ray_tracing_available,

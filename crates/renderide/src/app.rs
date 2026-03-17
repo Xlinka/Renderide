@@ -284,6 +284,8 @@ impl ApplicationHandler for RenderideApp {
                     set_context(RenderingContext::user_view);
                     for asset_id in self.session.drain_pending_mesh_unloads() {
                         gpu.mesh_buffer_cache.remove(&asset_id);
+                        gpu.skinned_bind_group_cache
+                            .retain(|(_, mid), _| *mid != asset_id);
                         if let Some(ref mut accel) = gpu.accel_cache {
                             crate::gpu::remove_blas(accel, asset_id);
                         }
@@ -434,6 +436,8 @@ impl ApplicationHandler for RenderideApp {
                         set_context(RenderingContext::user_view);
                         for asset_id in self.session.drain_pending_mesh_unloads() {
                             gpu.mesh_buffer_cache.remove(&asset_id);
+                            gpu.skinned_bind_group_cache
+                                .retain(|(_, mid), _| *mid != asset_id);
                             if let Some(ref mut accel) = gpu.accel_cache {
                                 crate::gpu::remove_blas(accel, asset_id);
                             }

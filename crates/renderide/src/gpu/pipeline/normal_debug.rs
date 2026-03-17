@@ -127,14 +127,17 @@ impl NormalDebugPipeline {
 }
 
 impl RenderPipeline for NormalDebugPipeline {
-    fn bind(
+    fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
+        pass.set_pipeline(&self.pipeline);
+    }
+
+    fn bind_draw(
         &self,
         pass: &mut wgpu::RenderPass,
         batch_index: Option<u32>,
         frame_index: u64,
         _draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        pass.set_pipeline(&self.pipeline);
         let dynamic_offset = batch_index
             .map(|i| self.uniform_ring.dynamic_offset(i, frame_index))
             .unwrap_or(0);

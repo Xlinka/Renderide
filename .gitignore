@@ -460,3 +460,4 @@ target
 .vscode/
 *.log
 references_external/
+profile.json.gz

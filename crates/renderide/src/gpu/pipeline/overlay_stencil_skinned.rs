@@ -52,14 +52,18 @@ impl OverlayStencilMaskClearSkinnedPipeline {
 }
 
 impl RenderPipeline for OverlayStencilMaskWriteSkinnedPipeline {
-    fn bind(
+    fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
+        self.inner.bind_pipeline(pass);
+    }
+
+    fn bind_draw(
         &self,
         pass: &mut wgpu::RenderPass,
         batch_index: Option<u32>,
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind(pass, batch_index, frame_index, draw_bind_group);
+        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(
@@ -106,14 +110,18 @@ impl RenderPipeline for OverlayStencilMaskWriteSkinnedPipeline {
 }
 
 impl RenderPipeline for OverlayStencilMaskClearSkinnedPipeline {
-    fn bind(
+    fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
+        self.inner.bind_pipeline(pass);
+    }
+
+    fn bind_draw(
         &self,
         pass: &mut wgpu::RenderPass,
         batch_index: Option<u32>,
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind(pass, batch_index, frame_index, draw_bind_group);
+        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(
@@ -160,14 +168,18 @@ impl RenderPipeline for OverlayStencilMaskClearSkinnedPipeline {
 }
 
 impl RenderPipeline for OverlayStencilSkinnedPipeline {
-    fn bind(
+    fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
+        self.inner.bind_pipeline(pass);
+    }
+
+    fn bind_draw(
         &self,
         pass: &mut wgpu::RenderPass,
         batch_index: Option<u32>,
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind(pass, batch_index, frame_index, draw_bind_group);
+        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(

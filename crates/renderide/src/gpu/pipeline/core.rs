@@ -35,6 +35,23 @@ pub enum UniformData<'a> {
 
 /// Abstraction for a render pipeline (shader, bind groups, draw logic).
 pub trait RenderPipeline {
+    /// Binds this pipeline to the render pass. Call once per pipeline group.
+    fn bind_pipeline(&self, _pass: &mut wgpu::RenderPass) {
+        // Default: no-op for placeholder pipelines.
+    }
+
+    /// Binds per-draw bind group and dynamic offset. Call once per draw.
+    /// `batch_index` selects the uniform slot; `draw_bind_group` is used by skinned pipelines.
+    fn bind_draw(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _batch_index: Option<u32>,
+        _frame_index: u64,
+        _draw_bind_group: Option<&wgpu::BindGroup>,
+    ) {
+        // Default: no-op for placeholder pipelines.
+    }
+
     /// Binds this pipeline and its bind groups to the render pass.
     /// `frame_index` is used by batched pipelines for ring buffer offset; ignored by others.
     /// `draw_bind_group` is used by skinned pipeline for per-draw bind group (uniform + blendshape buffer).
@@ -44,7 +61,10 @@ pub trait RenderPipeline {
         batch_index: Option<u32>,
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
-    );
+    ) {
+        self.bind_pipeline(pass);
+        self.bind_draw(pass, batch_index, frame_index, draw_bind_group);
+    }
 
     /// Draws a non-skinned mesh. No-op for pipelines that only support skinned.
     fn draw_mesh(
