@@ -14,7 +14,10 @@ use super::target::RenderTarget;
 use super::view::ViewParams;
 use super::SpaceDrawBatch;
 use crate::session::Session;
-use mesh_draw::{collect_mesh_draws, record_non_skinned_draws, record_skinned_draws, MeshDrawParams};
+use mesh_draw::{
+    collect_mesh_draws, record_non_skinned_draws, record_skinned_draws, CollectMeshDrawsContext,
+    MeshDrawParams,
+};
 
 pub use composite::CompositePass;
 pub use projection::{
@@ -79,6 +82,13 @@ pub struct RenderPassContext<'a> {
     pub encoder: &'a mut wgpu::CommandEncoder,
     /// Optional timestamp query set for GPU pass timing.
     pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
+    /// Cached mesh draws from a single collect per frame. Mesh and overlay passes use this.
+    pub(crate) cached_mesh_draws: Option<(
+        Vec<mesh_draw::SkinnedBatchedDraw>,
+        Vec<mesh_draw::SkinnedBatchedDraw>,
+        Vec<mesh_draw::BatchedDraw>,
+        Vec<mesh_draw::BatchedDraw>,
+    )>,
 }
 
 /// MRT (Multiple Render Target) views for RTAO pass.
@@ -188,6 +198,15 @@ impl RenderGraph {
 
         ensure_mesh_buffers(ctx.gpu, ctx.session, ctx.draw_batches);
 
+        let collect_ctx = CollectMeshDrawsContext {
+            session: ctx.session,
+            draw_batches: ctx.draw_batches,
+            gpu: &*ctx.gpu,
+            proj: ctx.proj,
+            overlay_projection_override: ctx.overlay_projection_override.clone(),
+        };
+        let cached_mesh_draws = collect_mesh_draws(&collect_ctx);
+
         if let Some(ref mut ray_tracing) = ctx.gpu.ray_tracing_state {
             if let Some(ref accel) = ctx.gpu.accel_cache {
                 ray_tracing.tlas = crate::gpu::build_tlas(
@@ -212,6 +231,7 @@ impl RenderGraph {
             render_target,
             encoder: &mut encoder,
             timestamp_query_set: ctx.timestamp_query_set,
+            cached_mesh_draws: Some(cached_mesh_draws),
         };
 
         for pass in &mut self.passes {
@@ -350,7 +370,10 @@ impl RenderPass for MeshRenderPass {
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
-        let (non_overlay_skinned, _, non_overlay_non_skinned, _) = collect_mesh_draws(ctx);
+        let (non_overlay_skinned, _, non_overlay_non_skinned, _) = ctx
+            .cached_mesh_draws
+            .as_ref()
+            .expect("mesh pass requires cached_mesh_draws");
 
         let use_mrt = ctx.render_target.mrt_position_view.is_some()
             && ctx.render_target.mrt_normal_view.is_some();
@@ -515,7 +538,10 @@ impl RenderPass for OverlayRenderPass {
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext) -> Result<(), RenderPassError> {
-        let (_, overlay_skinned, _, overlay_non_skinned) = collect_mesh_draws(ctx);
+        let (_, overlay_skinned, _, overlay_non_skinned) = ctx
+            .cached_mesh_draws
+            .as_ref()
+            .expect("overlay pass requires cached_mesh_draws");
 
         if overlay_skinned.is_empty() && overlay_non_skinned.is_empty() {
             return Ok(());

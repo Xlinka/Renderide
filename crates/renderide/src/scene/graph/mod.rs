@@ -10,12 +10,58 @@ mod world_matrices;
 
 use std::collections::{HashMap, HashSet};
 
+use glam::Mat4 as GlamMat4;
 use nalgebra::Matrix4;
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::{Scene, SceneId};
 
 pub use error::SceneError;
+
+/// Converts nalgebra `Matrix4` to glam `Mat4` for fast SIMD multiply in the bone matrix hot path.
+#[inline(always)]
+fn matrix_na_to_glam(m: &Matrix4<f32>) -> GlamMat4 {
+    GlamMat4::from_cols_array(&[
+        m[(0, 0)], m[(1, 0)], m[(2, 0)], m[(3, 0)],
+        m[(0, 1)], m[(1, 1)], m[(2, 1)], m[(3, 1)],
+        m[(0, 2)], m[(1, 2)], m[(2, 2)], m[(3, 2)],
+        m[(0, 3)], m[(1, 3)], m[(2, 3)], m[(3, 3)],
+    ])
+}
+
+/// Builds glam `Mat4` from bind pose. Format: `bind[col][row]` = M[row][col] (Unity column-major).
+#[inline(always)]
+fn glam_mat4_from_bind_pose(bind: &[[f32; 4]; 4]) -> GlamMat4 {
+    GlamMat4::from_cols_array(&[
+        bind[0][0], bind[0][1], bind[0][2], bind[0][3],
+        bind[1][0], bind[1][1], bind[1][2], bind[1][3],
+        bind[2][0], bind[2][1], bind[2][2], bind[2][3],
+        bind[3][0], bind[3][1], bind[3][2], bind[3][3],
+    ])
+}
+
+/// Converts glam `Mat4` to bind pose format `[[f32;4];4]` for GPU upload.
+#[inline(always)]
+fn glam_mat4_to_bind_pose(m: GlamMat4) -> [[f32; 4]; 4] {
+    let a = m.to_cols_array();
+    [
+        [a[0], a[1], a[2], a[3]],
+        [a[4], a[5], a[6], a[7]],
+        [a[8], a[9], a[10], a[11]],
+        [a[12], a[13], a[14], a[15]],
+    ]
+}
+
+/// Identity matrix in bind pose format. Used when a bind pose slot is missing.
+fn identity_4x4() -> [[f32; 4]; 4] {
+    [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+}
+
 pub use pose::PoseValidation;
 
 #[allow(unused_imports)]
@@ -100,32 +146,31 @@ impl SceneGraph {
                 bind_poses.len()
             );
         }
-        let inv_root = root_bone_transform_id
+        let inv_root_na = root_bone_transform_id
             .filter(|&id| id >= 0)
             .and_then(|id| self.get_world_matrix(space_id, id as usize))
             .and_then(|m| m.try_inverse())
             .unwrap_or_else(Matrix4::identity);
+        let inv_root = matrix_na_to_glam(&inv_root_na);
         let use_root = root_bone_transform_id.is_some_and(|id| id >= 0);
 
         let mut out = Vec::with_capacity(bone_transform_ids.len().min(bind_poses.len()));
         for (i, &tid) in bone_transform_ids.iter().enumerate() {
-            let bind = bind_poses
-                .get(i)
-                .copied()
-                .unwrap_or(Matrix4::identity().into());
-            let bind_mat = Matrix4::from_fn(|r, c| bind[c][r]);
-            let world = if tid >= 0 {
+            let bind = bind_poses.get(i).copied().unwrap_or_else(identity_4x4);
+            let bind_mat = glam_mat4_from_bind_pose(&bind);
+            let world_na = if tid >= 0 {
                 self.get_world_matrix(space_id, tid as usize)
                     .unwrap_or_else(Matrix4::identity)
             } else {
                 Matrix4::identity()
             };
+            let world = matrix_na_to_glam(&world_na);
             let combined = if use_root {
                 world * inv_root * bind_mat
             } else {
                 world * bind_mat
             };
-            out.push(combined.into());
+            out.push(glam_mat4_to_bind_pose(combined));
         }
         out
     }

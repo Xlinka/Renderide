@@ -4,15 +4,45 @@
 
 use nalgebra::{Matrix4, Vector3};
 
-use super::RenderPassContext;
+use glam::Mat4 as GlamMat4;
+
 use crate::gpu::{
     GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant, UniformData,
 };
 use crate::scene::render_transform_to_matrix;
 
+/// Converts nalgebra Matrix4 to glam Mat4 for fast SIMD multiply.
+#[inline(always)]
+fn matrix_na_to_glam(m: &Matrix4<f32>) -> GlamMat4 {
+    GlamMat4::from_cols_array(&[
+        m[(0, 0)], m[(1, 0)], m[(2, 0)], m[(3, 0)],
+        m[(0, 1)], m[(1, 1)], m[(2, 1)], m[(3, 1)],
+        m[(0, 2)], m[(1, 2)], m[(2, 2)], m[(3, 2)],
+        m[(0, 3)], m[(1, 3)], m[(2, 3)], m[(3, 3)],
+    ])
+}
+
+/// Converts glam Mat4 back to nalgebra Matrix4.
+#[inline(always)]
+fn matrix_glam_to_na(m: GlamMat4) -> Matrix4<f32> {
+    let a = m.to_cols_array();
+    Matrix4::from_fn(|r, c| a[c * 4 + r])
+}
+
+/// Minimal context for mesh draw collection.
+///
+/// Used when caching results across passes so mesh and overlay passes share one collect per frame.
+pub(super) struct CollectMeshDrawsContext<'a> {
+    pub(super) session: &'a crate::session::Session,
+    pub(super) draw_batches: &'a [crate::render::SpaceDrawBatch],
+    pub(super) gpu: &'a crate::gpu::GpuState,
+    pub(super) proj: nalgebra::Matrix4<f32>,
+    pub(super) overlay_projection_override: Option<crate::render::ViewParams>,
+}
+
 /// Collected non-skinned draw for batch upload.
 /// Uses mesh_asset_id for buffer lookup to avoid borrowing ctx across pass boundaries.
-pub(super) struct BatchedDraw {
+pub(crate) struct BatchedDraw {
     pub(super) mesh_asset_id: i32,
     pub(super) mvp: Matrix4<f32>,
     pub(super) model: Matrix4<f32>,
@@ -24,7 +54,7 @@ pub(super) struct BatchedDraw {
 
 /// Collected skinned draw for batch upload.
 /// Uses mesh_asset_id for buffer lookup to avoid borrowing ctx across pass boundaries.
-pub(super) struct SkinnedBatchedDraw {
+pub(crate) struct SkinnedBatchedDraw {
     pub(super) mesh_asset_id: i32,
     pub(super) mvp: Matrix4<f32>,
     pub(super) bone_matrices: Vec<[[f32; 4]; 4]>,
@@ -54,7 +84,7 @@ pub(super) struct MeshDrawParams<'a> {
 /// Collects mesh draws from batches and partitions by overlay flag.
 ///
 /// Returns (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
-pub(super) fn collect_mesh_draws(ctx: &RenderPassContext) -> (
+pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
     Vec<SkinnedBatchedDraw>,
     Vec<SkinnedBatchedDraw>,
     Vec<BatchedDraw>,
@@ -65,8 +95,9 @@ pub(super) fn collect_mesh_draws(ctx: &RenderPassContext) -> (
     let debug_skinned = ctx.session.render_config().debug_skinned;
     let mut first_skinned_logged = false;
 
-    let mut non_skinned_draws: Vec<BatchedDraw> = Vec::new();
-    let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::new();
+    let total_draws: usize = ctx.draw_batches.iter().map(|b| b.draws.len()).sum();
+    let mut non_skinned_draws: Vec<BatchedDraw> = Vec::with_capacity(total_draws);
+    let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::with_capacity(total_draws);
 
     for batch in ctx.draw_batches {
         let mut batch_vt = batch.view_transform;
@@ -81,7 +112,7 @@ pub(super) fn collect_mesh_draws(ctx: &RenderPassContext) -> (
             .flatten()
             .map(|v| v.to_projection_matrix())
             .unwrap_or(ctx.proj);
-        let view_proj = proj * view_mat;
+        let view_proj_glam = matrix_na_to_glam(&proj) * matrix_na_to_glam(&view_mat);
 
         for d in &batch.draws {
             let (buffers_ref, mesh) = if d.mesh_asset_id >= 0 {
@@ -99,7 +130,7 @@ pub(super) fn collect_mesh_draws(ctx: &RenderPassContext) -> (
                 continue;
             };
 
-            let model_mvp = view_proj * d.model_matrix;
+            let model_mvp = matrix_glam_to_na(view_proj_glam * matrix_na_to_glam(&d.model_matrix));
 
             if d.is_skinned {
                 let Some(bind_poses) = mesh.bind_poses.as_ref() else {
@@ -172,21 +203,25 @@ pub(super) fn collect_mesh_draws(ctx: &RenderPassContext) -> (
                         buffers_ref.vertex_buffer_skinned.is_some()
                     );
                 }
-                let mut skinned_mvp = if ctx.session.render_config().skinned_use_root_bone {
+                let mut skinned_mvp_glam = if ctx.session.render_config().skinned_use_root_bone {
                     let root_id = d.root_bone_transform_id.filter(|&id| id >= 0);
                     match root_id.and_then(|id| {
                         scene_graph.get_world_matrix(batch.space_id, id as usize)
                     }) {
-                        Some(root_world) => view_proj * root_world,
-                        None => view_proj,
+                        Some(root_world) => {
+                            view_proj_glam * matrix_na_to_glam(&root_world)
+                        }
+                        None => view_proj_glam,
                     }
                 } else {
-                    view_proj
+                    view_proj_glam
                 };
                 if ctx.session.render_config().skinned_flip_handedness {
-                    let z_flip = Matrix4::new_nonuniform_scaling(&Vector3::new(1.0, 1.0, -1.0));
-                    skinned_mvp *= z_flip;
+                    let z_flip =
+                        GlamMat4::from_scale(glam::Vec3::new(1.0, 1.0, -1.0));
+                    skinned_mvp_glam *= z_flip;
                 }
+                let skinned_mvp = matrix_glam_to_na(skinned_mvp_glam);
                 let root_bone = if ctx.session.render_config().skinned_use_root_bone {
                     d.root_bone_transform_id
                 } else {
