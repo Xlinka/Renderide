@@ -6,9 +6,7 @@ use nalgebra::{Matrix4, Vector3};
 
 use glam::Mat4 as GlamMat4;
 
-use crate::gpu::{
-    GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant, UniformData,
-};
+use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant};
 use crate::scene::render_transform_to_matrix;
 
 /// Converts nalgebra Matrix4 to glam Mat4 for fast SIMD multiply.
@@ -371,7 +369,11 @@ pub(super) fn record_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskWriteSkinned
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
-        for (j, d) in group.iter().enumerate() {
+        let mut order: Vec<usize> = (0..group.len()).collect();
+        order.sort_by_key(|&idx| group[idx].mesh_asset_id);
+        let mut last_mesh_asset_id: Option<i32> = None;
+        for j in order {
+            let d = &group[j];
             let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                 continue;
             };
@@ -387,14 +389,11 @@ pub(super) fn record_skinned_draws(
                     "OverlayStencilSkinned draws must have stencil_state"
                 );
             }
-            skinned.draw_skinned(
-                pass,
-                buffers,
-                &UniformData::Skinned {
-                    mvp: d.mvp,
-                    bone_matrices: &d.bone_matrices,
-                },
-            );
+            if last_mesh_asset_id != Some(d.mesh_asset_id) {
+                skinned.set_skinned_buffers(pass, buffers);
+                last_mesh_asset_id = Some(d.mesh_asset_id);
+            }
+            skinned.draw_skinned_indexed(pass, buffers);
         }
         i += group_end;
     }
@@ -460,7 +459,11 @@ pub(super) fn record_non_skinned_draws(
                 | crate::gpu::PipelineVariant::OverlayStencilMaskWriteSkinned
                 | crate::gpu::PipelineVariant::OverlayStencilMaskClearSkinned
         );
-        for (j, d) in group.iter().enumerate() {
+        let mut order: Vec<usize> = (0..group.len()).collect();
+        order.sort_by_key(|&idx| group[idx].mesh_asset_id);
+        let mut last_mesh_asset_id: Option<i32> = None;
+        for j in order {
+            let d = &group[j];
             let Some(buffers) = params.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                 continue;
             };
@@ -473,14 +476,11 @@ pub(super) fn record_non_skinned_draws(
                     "Overlay stencil draws must have stencil_state"
                 );
             }
-            pipeline.draw_mesh(
-                pass,
-                buffers,
-                &UniformData::Simple {
-                    mvp: d.mvp,
-                    model: d.model,
-                },
-            );
+            if last_mesh_asset_id != Some(d.mesh_asset_id) {
+                pipeline.set_mesh_buffers(pass, buffers);
+                last_mesh_asset_id = Some(d.mesh_asset_id);
+            }
+            pipeline.draw_mesh_indexed(pass, buffers);
         }
 
         i += group_end;

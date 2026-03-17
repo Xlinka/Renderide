@@ -56,6 +56,22 @@ pub trait RenderPipeline {
         let _ = (pass, buffers, _uniforms);
     }
 
+    /// Sets vertex and index buffers for a non-skinned mesh.
+    ///
+    /// Used by the recording loop to avoid redundant buffer binding when consecutive draws
+    /// share the same mesh. No-op for pipelines that only support skinned.
+    fn set_mesh_buffers(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+        // Default: no-op for skinned-only pipelines.
+    }
+
+    /// Issues draw_indexed calls for a non-skinned mesh. Buffers must already be set.
+    ///
+    /// Used by the recording loop after optionally calling [`set_mesh_buffers`](Self::set_mesh_buffers).
+    /// No-op for pipelines that only support skinned.
+    fn draw_mesh_indexed(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+        // Default: no-op for skinned-only pipelines.
+    }
+
     /// Draws a skinned mesh. No-op for pipelines that only support non-skinned.
     fn draw_skinned(
         &self,
@@ -64,6 +80,22 @@ pub trait RenderPipeline {
         _uniforms: &UniformData<'_>,
     ) {
         let _ = (pass, buffers, _uniforms);
+    }
+
+    /// Sets vertex and index buffers for a skinned mesh.
+    ///
+    /// Used by the recording loop to avoid redundant buffer binding when consecutive draws
+    /// share the same mesh. No-op for pipelines that only support non-skinned.
+    fn set_skinned_buffers(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+        // Default: no-op for non-skinned pipelines.
+    }
+
+    /// Issues draw_indexed calls for a skinned mesh. Buffers must already be set.
+    ///
+    /// Used by the recording loop after optionally calling [`set_skinned_buffers`](Self::set_skinned_buffers).
+    /// No-op for pipelines that only support non-skinned.
+    fn draw_skinned_indexed(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+        // Default: no-op for non-skinned pipelines.
     }
 
     /// Uploads batched uniforms for non-skinned draws. No-op for pipelines that don't batch.

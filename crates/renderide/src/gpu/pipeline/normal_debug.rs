@@ -147,8 +147,16 @@ impl RenderPipeline for NormalDebugPipeline {
         buffers: &GpuMeshBuffers,
         _uniforms: &UniformData<'_>,
     ) {
+        self.set_mesh_buffers(pass, buffers);
+        self.draw_mesh_indexed(pass, buffers);
+    }
+
+    fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
         pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+    }
+
+    fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         for &(index_start, index_count) in &buffers.submeshes {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }

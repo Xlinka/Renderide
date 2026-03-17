@@ -162,8 +162,16 @@ impl RenderPipeline for NormalDebugMRTPipeline {
         buffers: &GpuMeshBuffers,
         _uniforms: &UniformData<'_>,
     ) {
+        self.set_mesh_buffers(pass, buffers);
+        self.draw_mesh_indexed(pass, buffers);
+    }
+
+    fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         pass.set_vertex_buffer(0, buffers.vertex_buffer.slice(..));
         pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+    }
+
+    fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         for &(index_start, index_count) in &buffers.submeshes {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
@@ -324,6 +332,11 @@ impl RenderPipeline for UvDebugMRTPipeline {
         buffers: &GpuMeshBuffers,
         _uniforms: &UniformData<'_>,
     ) {
+        self.set_mesh_buffers(pass, buffers);
+        self.draw_mesh_indexed(pass, buffers);
+    }
+
+    fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         let vb = buffers
             .vertex_buffer_uv
             .as_ref()
@@ -331,6 +344,9 @@ impl RenderPipeline for UvDebugMRTPipeline {
             .unwrap_or(buffers.vertex_buffer.as_ref());
         pass.set_vertex_buffer(0, vb.slice(..));
         pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+    }
+
+    fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         for &(index_start, index_count) in &buffers.submeshes {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
@@ -560,11 +576,19 @@ impl RenderPipeline for SkinnedMRTPipeline {
         buffers: &GpuMeshBuffers,
         _uniforms: &UniformData<'_>,
     ) {
+        self.set_skinned_buffers(pass, buffers);
+        self.draw_skinned_indexed(pass, buffers);
+    }
+
+    fn set_skinned_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         let Some(vb) = buffers.vertex_buffer_skinned.as_ref() else {
             return;
         };
         pass.set_vertex_buffer(0, vb.slice(..));
         pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+    }
+
+    fn draw_skinned_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         for &(index_start, index_count) in &buffers.submeshes {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }

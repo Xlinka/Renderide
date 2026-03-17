@@ -79,6 +79,22 @@ impl RenderPipeline for OverlayStencilMaskWriteSkinnedPipeline {
         self.inner.draw_skinned(pass, buffers, uniforms);
     }
 
+    fn set_skinned_buffers(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.set_skinned_buffers(pass, buffers);
+    }
+
+    fn draw_skinned_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.draw_skinned_indexed(pass, buffers);
+    }
+
     fn upload_skinned_batch(
         &self,
         queue: &wgpu::Queue,
@@ -117,6 +133,22 @@ impl RenderPipeline for OverlayStencilMaskClearSkinnedPipeline {
         self.inner.draw_skinned(pass, buffers, uniforms);
     }
 
+    fn set_skinned_buffers(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.set_skinned_buffers(pass, buffers);
+    }
+
+    fn draw_skinned_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.draw_skinned_indexed(pass, buffers);
+    }
+
     fn upload_skinned_batch(
         &self,
         queue: &wgpu::Queue,
@@ -153,6 +185,22 @@ impl RenderPipeline for OverlayStencilSkinnedPipeline {
         uniforms: &UniformData<'_>,
     ) {
         self.inner.draw_skinned(pass, buffers, uniforms);
+    }
+
+    fn set_skinned_buffers(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.set_skinned_buffers(pass, buffers);
+    }
+
+    fn draw_skinned_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &super::super::mesh::GpuMeshBuffers,
+    ) {
+        self.inner.draw_skinned_indexed(pass, buffers);
     }
 
     fn upload_skinned_batch(

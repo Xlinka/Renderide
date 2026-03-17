@@ -262,11 +262,19 @@ impl RenderPipeline for SkinnedPipeline {
         buffers: &GpuMeshBuffers,
         _uniforms: &UniformData<'_>,
     ) {
+        self.set_skinned_buffers(pass, buffers);
+        self.draw_skinned_indexed(pass, buffers);
+    }
+
+    fn set_skinned_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         let Some(vb) = buffers.vertex_buffer_skinned.as_ref() else {
             return;
         };
         pass.set_vertex_buffer(0, vb.slice(..));
         pass.set_index_buffer(buffers.index_buffer.slice(..), buffers.index_format);
+    }
+
+    fn draw_skinned_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
         for &(index_start, index_count) in &buffers.submeshes {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
