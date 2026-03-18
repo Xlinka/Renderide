@@ -5,6 +5,7 @@
 
 use std::fs;
 use std::io::Write;
+#[cfg(windows)]
 use std::process::Command;
 
 use crate::paths;

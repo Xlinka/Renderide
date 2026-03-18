@@ -307,6 +307,22 @@ impl StencilComparison {
     }
 }
 
+impl StencilOperation {
+    /// Converts to wgpu stencil operation.
+    pub fn to_wgpu(self) -> wgpu::StencilOperation {
+        match self {
+            Self::Keep => wgpu::StencilOperation::Keep,
+            Self::Replace => wgpu::StencilOperation::Replace,
+            Self::Zero => wgpu::StencilOperation::Zero,
+            Self::IncrementSaturate => wgpu::StencilOperation::IncrementClamp,
+            Self::DecrementSaturate => wgpu::StencilOperation::DecrementClamp,
+            Self::Invert => wgpu::StencilOperation::Invert,
+            Self::IncrementWrap => wgpu::StencilOperation::IncrementWrap,
+            Self::DecrementWrap => wgpu::StencilOperation::DecrementWrap,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -328,21 +344,5 @@ mod tests {
         let face = content.to_wgpu_stencil_face();
         assert_eq!(face.compare, wgpu::CompareFunction::Equal);
         assert_eq!(face.pass_op, wgpu::StencilOperation::Keep);
-    }
-}
-
-impl StencilOperation {
-    /// Converts to wgpu stencil operation.
-    pub fn to_wgpu(self) -> wgpu::StencilOperation {
-        match self {
-            Self::Keep => wgpu::StencilOperation::Keep,
-            Self::Replace => wgpu::StencilOperation::Replace,
-            Self::Zero => wgpu::StencilOperation::Zero,
-            Self::IncrementSaturate => wgpu::StencilOperation::IncrementClamp,
-            Self::DecrementSaturate => wgpu::StencilOperation::DecrementClamp,
-            Self::Invert => wgpu::StencilOperation::Invert,
-            Self::IncrementWrap => wgpu::StencilOperation::IncrementWrap,
-            Self::DecrementWrap => wgpu::StencilOperation::DecrementWrap,
-        }
     }
 }

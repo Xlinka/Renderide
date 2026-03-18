@@ -530,8 +530,7 @@ pub(super) fn record_non_skinned_draws(
                 pipeline.bind_draw(pass, Some(first_idx as u32), params.frame_index, None);
                 pipeline.draw_mesh_indexed_instanced(pass, buffers, run_len as u32);
             } else {
-                for k in run_start..run_end {
-                    let idx = order[k];
+                for idx in order[run_start..run_end].iter().copied() {
                     let d = &group[idx];
                     pipeline.bind_draw(pass, Some(idx as u32), params.frame_index, None);
                     if let Some(ref stencil) = d.stencil_state {

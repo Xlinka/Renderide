@@ -21,7 +21,10 @@ pub fn wine_get_version() -> Option<String> {
         }
         let sym = CString::new("wine_get_version").ok()?;
         let func = unsafe {
-            std::mem::transmute::<_, Option<WineGetVersion>>(libc::dlsym(handle, sym.as_ptr()))
+            std::mem::transmute::<*mut libc::c_void, Option<WineGetVersion>>(libc::dlsym(
+                handle,
+                sym.as_ptr(),
+            ))
         };
         let func = func?;
         let ptr = unsafe { func() };

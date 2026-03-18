@@ -124,6 +124,7 @@ fn open_queue_backing_unix(options: &QueueOptions) -> (MemoryBacking, SemHandle)
         .read(true)
         .write(true)
         .create(true)
+        .truncate(true)
         .open(&path)
         .expect("Failed to open queue file");
 

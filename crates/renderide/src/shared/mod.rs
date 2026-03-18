@@ -3,6 +3,8 @@
 //! Includes memory packing/unpacking and shared memory buffer
 //! descriptors. The shared memory accessor lives in ipc::shared_memory.
 
+#![allow(clippy::module_inception)]
+
 pub mod buffer;
 pub mod packing;
 pub mod shared;

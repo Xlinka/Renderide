@@ -33,14 +33,12 @@ pub fn parse_args() -> (Vec<String>, Option<LogLevel>) {
     while i < args.len() {
         let arg = &args[i];
         let arg_lower = arg.to_lowercase();
-        if arg_lower == "--log-level" || arg_lower == "-l" {
-            if i + 1 < args.len() {
-                if let Some(level) = LogLevel::parse(&args[i + 1]) {
-                    log_level = Some(level);
-                }
-                i += 2;
-                continue;
+        if (arg_lower == "--log-level" || arg_lower == "-l") && i + 1 < args.len() {
+            if let Some(level) = LogLevel::parse(&args[i + 1]) {
+                log_level = Some(level);
             }
+            i += 2;
+            continue;
         }
         host_args.push(arg.clone());
         i += 1;

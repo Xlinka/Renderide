@@ -122,10 +122,11 @@ impl Publisher {
 impl Drop for Publisher {
     fn drop(&mut self) {
         sem::close(&self.sem_handle);
-        if self.destroy_on_dispose && self.backing.has_file_to_remove() {
-            if let Some(path) = self.backing.file_path() {
-                let _ = fs::remove_file(&path);
-            }
+        if self.destroy_on_dispose
+            && self.backing.has_file_to_remove()
+            && let Some(path) = self.backing.file_path()
+        {
+            let _ = fs::remove_file(&path);
         }
     }
 }

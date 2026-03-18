@@ -133,6 +133,7 @@ pub struct RenderPassContext<'a> {
     /// Optional timestamp query set for GPU pass timing.
     pub timestamp_query_set: Option<&'a wgpu::QuerySet>,
     /// Cached mesh draws from a single collect per frame. Mesh and overlay passes use this.
+    #[allow(clippy::type_complexity)]
     pub(crate) cached_mesh_draws: Option<(
         &'a [mesh_draw::SkinnedBatchedDraw],
         &'a [mesh_draw::SkinnedBatchedDraw],
@@ -188,6 +189,7 @@ pub struct RenderGraphContext<'a> {
     /// When RTAO is enabled and ray tracing is available, MRT views for mesh pass.
     pub mrt_views: Option<MrtViews<'a>>,
     /// Pre-collected mesh draws from the collect phase. When `Some`, skips collect in execute.
+    #[allow(clippy::type_complexity)]
     pub(crate) pre_collected: Option<&'a (
         Vec<mesh_draw::SkinnedBatchedDraw>,
         Vec<mesh_draw::SkinnedBatchedDraw>,

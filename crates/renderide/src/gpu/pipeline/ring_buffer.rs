@@ -102,6 +102,7 @@ impl SkinnedUniformRingBuffer {
     }
 
     /// Uploads skinned uniforms to the ring buffer, chunking if needed. No limit panic.
+    #[allow(clippy::type_complexity)]
     pub fn upload(
         &self,
         queue: &wgpu::Queue,
@@ -182,6 +183,7 @@ impl OverlayStencilUniformRingBuffer {
         Self { buffer, scratch }
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn upload(
         &self,
         queue: &wgpu::Queue,

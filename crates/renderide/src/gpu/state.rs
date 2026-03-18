@@ -176,7 +176,9 @@ pub async fn init_gpu(
     let depth_size = (config.width, config.height);
 
     Ok(GpuState {
-        surface: unsafe { std::mem::transmute(surface) },
+        surface: unsafe {
+            std::mem::transmute::<wgpu::Surface<'_>, wgpu::Surface<'static>>(surface)
+        },
         device,
         queue,
         config,

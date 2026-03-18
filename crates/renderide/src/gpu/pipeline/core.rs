@@ -150,6 +150,7 @@ pub trait RenderPipeline {
 
     /// Uploads batched uniforms for overlay stencil draws (includes clip_rect).
     /// Default calls `upload_batch` with mvp_models only.
+    #[allow(clippy::type_complexity)]
     fn upload_batch_overlay(
         &self,
         queue: &wgpu::Queue,
@@ -170,6 +171,7 @@ pub trait RenderPipeline {
     }
 
     /// Uploads batched skinned uniforms to the ring buffer. No-op for pipelines that don't batch.
+    #[allow(clippy::type_complexity)]
     fn upload_skinned_batch(
         &self,
         _queue: &wgpu::Queue,

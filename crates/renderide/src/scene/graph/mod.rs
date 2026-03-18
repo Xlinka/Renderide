@@ -91,17 +91,17 @@ impl SceneGraph {
     /// Test-only: marks a transform and its descendants uncomputed to exercise incremental recompute.
     #[cfg(test)]
     pub fn test_invalidate_transform(&mut self, scene_id: SceneId, transform_id: usize) {
-        if let Some(cache) = self.scene_caches.get_mut(&scene_id) {
-            if transform_id < cache.computed.len() {
-                cache.computed[transform_id] = false;
-                if transform_id < cache.local_dirty.len() {
-                    cache.local_dirty[transform_id] = true;
-                }
-                if let Some(scene) = self.scenes.get(&scene_id) {
-                    mark_descendants_uncomputed(&scene.node_parents, &mut cache.computed);
-                }
-                self.world_matrices_dirty.insert(scene_id);
+        if let Some(cache) = self.scene_caches.get_mut(&scene_id)
+            && transform_id < cache.computed.len()
+        {
+            cache.computed[transform_id] = false;
+            if transform_id < cache.local_dirty.len() {
+                cache.local_dirty[transform_id] = true;
             }
+            if let Some(scene) = self.scenes.get(&scene_id) {
+                mark_descendants_uncomputed(&scene.node_parents, &mut cache.computed);
+            }
+            self.world_matrices_dirty.insert(scene_id);
         }
     }
 
@@ -312,6 +312,12 @@ impl SceneGraph {
     }
 }
 
+impl Default for SceneGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,14 +388,16 @@ mod tests {
 
     #[test]
     fn test_world_matrix_propagation_three_level_hierarchy() {
-        let mut scene = Scene::default();
-        scene.root_transform = make_transform((0.0, 0.0, 0.0));
-        scene.nodes = vec![
-            make_transform((1.0, 0.0, 0.0)),
-            make_transform((0.0, 2.0, 0.0)),
-            make_transform((0.0, 0.0, 3.0)),
-        ];
-        scene.node_parents = vec![-1, 0, 1];
+        let scene = Scene {
+            root_transform: make_transform((0.0, 0.0, 0.0)),
+            nodes: vec![
+                make_transform((1.0, 0.0, 0.0)),
+                make_transform((0.0, 2.0, 0.0)),
+                make_transform((0.0, 0.0, 3.0)),
+            ],
+            node_parents: vec![-1, 0, 1],
+            ..Default::default()
+        };
 
         let world = world_matrices::compute_world_matrices_from_scene(&scene);
 
@@ -414,10 +422,12 @@ mod tests {
     /// Root-level nodes use identity as parent; root_transform is for view only, not object hierarchy.
     #[test]
     fn test_world_matrix_root_level_uses_identity() {
-        let mut scene = Scene::default();
-        scene.root_transform = make_transform((10.0, 0.0, -5.0));
-        scene.nodes = vec![make_transform((1.0, 0.0, 0.0))];
-        scene.node_parents = vec![-1];
+        let scene = Scene {
+            root_transform: make_transform((10.0, 0.0, -5.0)),
+            nodes: vec![make_transform((1.0, 0.0, 0.0))],
+            node_parents: vec![-1],
+            ..Default::default()
+        };
 
         let world = world_matrices::compute_world_matrices_from_scene(&scene);
 
@@ -431,13 +441,15 @@ mod tests {
 
     #[test]
     fn test_world_matrix_parent_after_child_in_array() {
-        let mut scene = Scene::default();
-        scene.root_transform = make_transform((0.0, 0.0, 0.0));
-        scene.nodes = vec![
-            make_transform((0.0, 0.0, 1.0)),
-            make_transform((5.0, 0.0, 0.0)),
-        ];
-        scene.node_parents = vec![1, -1];
+        let scene = Scene {
+            root_transform: make_transform((0.0, 0.0, 0.0)),
+            nodes: vec![
+                make_transform((0.0, 0.0, 1.0)),
+                make_transform((5.0, 0.0, 0.0)),
+            ],
+            node_parents: vec![1, -1],
+            ..Default::default()
+        };
 
         let world = world_matrices::compute_world_matrices_from_scene(&scene);
 
@@ -450,13 +462,15 @@ mod tests {
 
     #[test]
     fn test_compute_world_matrices_cycle_detection() {
-        let mut scene = Scene::default();
-        scene.root_transform = make_transform((0.0, 0.0, 0.0));
-        scene.nodes = vec![
-            make_transform((1.0, 0.0, 0.0)),
-            make_transform((0.0, 2.0, 0.0)),
-        ];
-        scene.node_parents = vec![1, 0];
+        let scene = Scene {
+            root_transform: make_transform((0.0, 0.0, 0.0)),
+            nodes: vec![
+                make_transform((1.0, 0.0, 0.0)),
+                make_transform((0.0, 2.0, 0.0)),
+            ],
+            node_parents: vec![1, 0],
+            ..Default::default()
+        };
 
         let world = world_matrices::compute_world_matrices_from_scene(&scene);
 
@@ -468,14 +482,16 @@ mod tests {
     #[test]
     fn test_compute_world_matrices_incremental_after_pose_change() {
         let mut graph = SceneGraph::new();
-        let mut scene = Scene::default();
-        scene.id = 0;
-        scene.nodes = vec![
-            make_transform((1.0, 0.0, 0.0)),
-            make_transform((0.0, 2.0, 0.0)),
-            make_transform((0.0, 0.0, 3.0)),
-        ];
-        scene.node_parents = vec![-1, 0, 1];
+        let scene = Scene {
+            id: 0,
+            nodes: vec![
+                make_transform((1.0, 0.0, 0.0)),
+                make_transform((0.0, 2.0, 0.0)),
+                make_transform((0.0, 0.0, 3.0)),
+            ],
+            node_parents: vec![-1, 0, 1],
+            ..Default::default()
+        };
         graph.scenes.insert(0, scene);
 
         graph.compute_world_matrices(0).unwrap();
@@ -494,11 +510,5 @@ mod tests {
         assert!((pos2_after.x - 10.0).abs() < 1e-5);
         assert!((pos2_after.y - 2.0).abs() < 1e-5);
         assert!((pos2_after.z - 3.0).abs() < 1e-5);
-    }
-}
-
-impl Default for SceneGraph {
-    fn default() -> Self {
-        Self::new()
     }
 }

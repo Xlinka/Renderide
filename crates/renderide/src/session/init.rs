@@ -66,10 +66,12 @@ pub fn get_connection_parameters() -> Option<ConnectionParams> {
 
         i += 1;
 
-        if queue_name.is_some() && queue_capacity.is_some_and(|c| c > 0) {
+        if let (Some(name), Some(cap)) = (queue_name.as_ref(), queue_capacity.as_ref())
+            && *cap > 0
+        {
             return Some(ConnectionParams {
-                queue_name: queue_name.unwrap(),
-                queue_capacity: queue_capacity.unwrap(),
+                queue_name: name.clone(),
+                queue_capacity: *cap,
             });
         }
     }
@@ -104,7 +106,6 @@ pub fn send_renderer_init_result(receiver: &mut crate::ipc::receiver::CommandRec
         max_texture_size: 8192,
         is_gpu_texture_pot_byte_aligned: true,
         supported_texture_formats: vec![TextureFormat::rgba32],
-        ..Default::default()
     };
     receiver.send(RendererCommand::renderer_init_result(result));
 }

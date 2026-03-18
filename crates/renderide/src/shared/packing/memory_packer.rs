@@ -75,6 +75,7 @@ impl<'a> MemoryPacker<'a> {
     }
 
     /// Writes up to 8 bools packed into a single byte (bit0 = LSB).
+    #[allow(clippy::too_many_arguments)]
     pub fn write_packed_bools(
         &mut self,
         bit0: bool,
@@ -139,8 +140,8 @@ impl<'a> MemoryPacker<'a> {
         let count = list.as_deref().map(|l| l.len()).unwrap_or(0) as i32;
         self.write(&count);
         if let Some(list) = list {
-            for i in 0..list.len() {
-                list[i].pack(self);
+            for item in list.iter_mut() {
+                item.pack(self);
             }
         }
     }
@@ -150,8 +151,8 @@ impl<'a> MemoryPacker<'a> {
         let count = list.as_deref().map(|l| l.len()).unwrap_or(0) as i32;
         self.write(&count);
         if let Some(list) = list {
-            for i in 0..list.len() {
-                list[i].encode(self);
+            for item in list.iter_mut() {
+                item.encode(self);
             }
         }
     }

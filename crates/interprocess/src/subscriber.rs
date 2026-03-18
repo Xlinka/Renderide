@@ -149,8 +149,7 @@ impl Subscriber {
 
                 // Mark as locked (state=1) - we're consuming
                 let state_ptr = unsafe {
-                    &*(&(*(msg_header_ptr as *const MessageHeader)).state as *const i32
-                        as *const AtomicI32)
+                    &*(&(*msg_header_ptr).state as *const i32 as *const AtomicI32)
                 };
                 state_ptr.store(1, Ordering::SeqCst);
 
@@ -191,10 +190,11 @@ impl Subscriber {
 impl Drop for Subscriber {
     fn drop(&mut self) {
         sem::close(&self.sem_handle);
-        if self.destroy_on_dispose && self.backing.has_file_to_remove() {
-            if let Some(path) = self.backing.file_path() {
-                let _ = fs::remove_file(&path);
-            }
+        if self.destroy_on_dispose
+            && self.backing.has_file_to_remove()
+            && let Some(path) = self.backing.file_path()
+        {
+            let _ = fs::remove_file(&path);
         }
     }
 }

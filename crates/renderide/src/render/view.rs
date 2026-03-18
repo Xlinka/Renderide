@@ -63,7 +63,7 @@ impl ViewParams {
     /// Returns `Some(ViewParams)` when overlays should use orthographic projection:
     /// - If the primary camera task has orthographic params, uses those.
     /// - Else if any batch has `is_overlay`, uses `orthographic_viewport_fallback`.
-    /// Returns `None` when no overlay projection override is needed.
+    ///   Returns `None` when no overlay projection override is needed.
     pub fn overlay_projection_for_frame(
         session: &Session,
         draw_batches: &[SpaceDrawBatch],

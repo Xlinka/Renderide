@@ -122,7 +122,7 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
                 }
                 std::thread::sleep(Duration::from_secs(1));
             };
-            let timestamp = SystemTime::now()
+            let _timestamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|d| {
                     let s = d.as_secs();

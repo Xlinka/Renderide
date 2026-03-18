@@ -72,6 +72,7 @@ impl PipelineRegistry {
     }
 
     /// Registers builtin pipelines for the given device and surface configuration.
+    #[allow(clippy::arc_with_non_send_sync)]
     pub fn register_builtin(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
         self.pipelines.insert(
             PipelineKey(None, PipelineVariant::NormalDebug),
