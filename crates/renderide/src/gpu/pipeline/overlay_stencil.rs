@@ -2,11 +2,11 @@
 
 use nalgebra::Matrix4;
 
+use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
 use super::core::{RenderPipeline, UniformData};
 use super::ring_buffer::OverlayStencilUniformRingBuffer;
 use super::shaders::OVERLAY_STENCIL_SHADER_SRC;
 use super::uniforms::OverlayStencilUniforms;
-use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
 
 /// Stencil phase for GraphicsChunk RenderType flow.
 pub(crate) enum OverlayStencilPhase {
@@ -40,9 +40,9 @@ fn create_overlay_stencil_pipeline(
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
-                min_binding_size: std::num::NonZeroU64::new(
-                    std::mem::size_of::<OverlayStencilUniforms>() as u64,
-                ),
+                min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                    OverlayStencilUniforms,
+                >() as u64),
             },
             count: None,
         }],
@@ -150,9 +150,7 @@ fn create_overlay_stencil_pipeline(
             resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: &uniform_ring.buffer,
                 offset: 0,
-                size: wgpu::BufferSize::new(
-                    std::mem::size_of::<OverlayStencilUniforms>() as u64,
-                ),
+                size: wgpu::BufferSize::new(std::mem::size_of::<OverlayStencilUniforms>() as u64),
             }),
         }],
     });

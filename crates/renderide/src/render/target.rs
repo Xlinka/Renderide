@@ -112,7 +112,9 @@ impl RenderTarget {
     /// Returns the viewport dimensions (width, height).
     pub fn dimensions(&self) -> (u32, u32) {
         match self {
-            Self::Surface { surface_texture, .. } => {
+            Self::Surface {
+                surface_texture, ..
+            } => {
                 let size = surface_texture.texture.size();
                 (size.width, size.height)
             }
@@ -126,7 +128,9 @@ impl RenderTarget {
     /// Extracts the surface texture for presenting. Returns `Some` only for [`Surface`](Self::Surface).
     pub fn into_surface_texture(self) -> Option<wgpu::SurfaceTexture> {
         match self {
-            Self::Surface { surface_texture, .. } => Some(surface_texture),
+            Self::Surface {
+                surface_texture, ..
+            } => Some(surface_texture),
             Self::Offscreen { .. } => None,
         }
     }
@@ -142,7 +146,9 @@ impl RenderTarget {
     /// Returns the color texture for the target. Surface uses the swapchain texture.
     pub fn texture(&self) -> &wgpu::Texture {
         match self {
-            Self::Surface { surface_texture, .. } => &surface_texture.texture,
+            Self::Surface {
+                surface_texture, ..
+            } => &surface_texture.texture,
             Self::Offscreen { texture, .. } => texture,
         }
     }

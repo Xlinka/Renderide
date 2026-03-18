@@ -13,7 +13,8 @@ impl CommandHandler for ShutdownCommandHandler {
             return CommandResult::Ignored;
         }
         match cmd {
-            RendererCommand::renderer_shutdown(_) | RendererCommand::renderer_shutdown_request(_) => {
+            RendererCommand::renderer_shutdown(_)
+            | RendererCommand::renderer_shutdown_request(_) => {
                 *ctx.shutdown = true;
                 CommandResult::Handled
             }

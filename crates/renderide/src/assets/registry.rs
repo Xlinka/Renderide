@@ -143,8 +143,7 @@ impl AssetRegistry {
                 .to_vec();
             (bind_poses, Some(bone_counts), Some(bone_weights))
         } else if use_blendshapes && data.vertex_count > 0 {
-            let (bp, bc, bw) =
-                mesh::synthetic_bone_data_for_blendshape_only(data.vertex_count);
+            let (bp, bc, bw) = mesh::synthetic_bone_data_for_blendshape_only(data.vertex_count);
             (Some(bp), Some(bc), Some(bw))
         } else {
             (None, None, None)

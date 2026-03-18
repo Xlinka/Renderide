@@ -4,13 +4,13 @@
 
 use std::mem::size_of;
 
+use super::SpaceDrawBatch;
 use super::pass::{
     CompositePass, MeshRenderPass, OverlayRenderPass, PreCollectedFrameData, RenderGraph,
     RenderGraphContext, RtaoBlurPass, RtaoComputePass,
 };
-use super::view::ViewParams;
 use super::target::RenderTarget;
-use super::SpaceDrawBatch;
+use super::view::ViewParams;
 use crate::gpu::{GpuState, PipelineManager};
 use crate::session::Session;
 
@@ -158,14 +158,17 @@ impl RenderLoop {
             self.rtao_textures = None;
         }
 
-        let mrt_views = self.rtao_textures.as_ref().map(|cache| super::pass::MrtViews {
-            color_view: &cache.color_view,
-            color_texture: &cache.color_texture,
-            position_view: &cache.position_view,
-            normal_view: &cache.normal_view,
-            ao_raw_view: &cache.ao_raw_view,
-            ao_view: &cache.ao_view,
-        });
+        let mrt_views = self
+            .rtao_textures
+            .as_ref()
+            .map(|cache| super::pass::MrtViews {
+                color_view: &cache.color_view,
+                color_texture: &cache.color_texture,
+                position_view: &cache.position_view,
+                normal_view: &cache.normal_view,
+                ao_raw_view: &cache.ao_raw_view,
+                ao_view: &cache.ao_view,
+            });
 
         let mut ctx = RenderGraphContext {
             gpu,
@@ -241,9 +244,7 @@ impl RenderLoop {
         queue: &wgpu::Queue,
         staging: &wgpu::Buffer,
     ) -> Option<f64> {
-        staging
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, |_| {});
+        staging.slice(..).map_async(wgpu::MapMode::Read, |_| {});
         let poll_result = device.poll(wgpu::PollType::wait_indefinitely());
         if poll_result.is_err() {
             return None;

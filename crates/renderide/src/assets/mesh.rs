@@ -297,7 +297,8 @@ pub fn extract_blendshape_offsets(
                 return None;
             }
             for v in 0..vertex_count {
-                let out_offset = (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + POSITION_OFFSET;
+                let out_offset =
+                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + POSITION_OFFSET;
                 let src_offset = byte_offset + v * VECTOR3_BYTES;
                 out[out_offset..out_offset + VECTOR3_BYTES]
                     .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);
@@ -311,7 +312,8 @@ pub fn extract_blendshape_offsets(
                 return None;
             }
             for v in 0..vertex_count {
-                let out_offset = (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + NORMAL_OFFSET;
+                let out_offset =
+                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + NORMAL_OFFSET;
                 let src_offset = byte_offset + v * VECTOR3_BYTES;
                 out[out_offset..out_offset + VECTOR3_BYTES]
                     .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);
@@ -325,7 +327,8 @@ pub fn extract_blendshape_offsets(
                 return None;
             }
             for v in 0..vertex_count {
-                let out_offset = (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + TANGENT_OFFSET;
+                let out_offset =
+                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + TANGENT_OFFSET;
                 let src_offset = byte_offset + v * VECTOR3_BYTES;
                 out[out_offset..out_offset + VECTOR3_BYTES]
                     .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);

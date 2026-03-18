@@ -2,10 +2,10 @@
 
 use nalgebra::Matrix4;
 
-use super::core::{RenderPipeline, UniformData, UNIFORM_ALIGNMENT, MAX_INSTANCE_RUN};
+use super::super::mesh::{GpuMeshBuffers, VertexPosNormal};
+use super::core::{MAX_INSTANCE_RUN, RenderPipeline, UNIFORM_ALIGNMENT, UniformData};
 use super::ring_buffer::UniformRingBuffer;
 use super::shaders::NORMAL_SHADER_SRC;
-use super::super::mesh::{GpuMeshBuffers, VertexPosNormal};
 
 /// Normal debug pipeline: colors surfaces by smooth normal.
 pub struct NormalDebugPipeline {

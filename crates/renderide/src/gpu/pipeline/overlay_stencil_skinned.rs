@@ -17,8 +17,7 @@ pub struct OverlayStencilSkinnedPipeline {
 impl OverlayStencilSkinnedPipeline {
     /// Creates a skinned overlay stencil pipeline for the Content phase.
     pub fn new(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
-        let inner =
-            SkinnedPipeline::new(device, config, Some(OverlayStencilPhase::Content), false);
+        let inner = SkinnedPipeline::new(device, config, Some(OverlayStencilPhase::Content), false);
         Self { inner }
     }
 }
@@ -63,7 +62,8 @@ impl RenderPipeline for OverlayStencilMaskWriteSkinnedPipeline {
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
+        self.inner
+            .bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(
@@ -121,7 +121,8 @@ impl RenderPipeline for OverlayStencilMaskClearSkinnedPipeline {
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
+        self.inner
+            .bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(
@@ -179,7 +180,8 @@ impl RenderPipeline for OverlayStencilSkinnedPipeline {
         frame_index: u64,
         draw_bind_group: Option<&wgpu::BindGroup>,
     ) {
-        self.inner.bind_draw(pass, batch_index, frame_index, draw_bind_group);
+        self.inner
+            .bind_draw(pass, batch_index, frame_index, draw_bind_group);
     }
 
     fn create_skinned_draw_bind_group(

@@ -7,17 +7,29 @@ use glam::Mat4;
 use nalgebra::{Matrix4, Vector3};
 
 use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant};
-use std::collections::HashMap;
 use crate::scene::render_transform_to_matrix;
+use std::collections::HashMap;
 
 /// Converts nalgebra Matrix4 to glam Mat4 (for projection matrix from ctx).
 #[inline(always)]
 fn matrix_na_to_glam(m: &Matrix4<f32>) -> Mat4 {
     Mat4::from_cols_array(&[
-        m[(0, 0)], m[(1, 0)], m[(2, 0)], m[(3, 0)],
-        m[(0, 1)], m[(1, 1)], m[(2, 1)], m[(3, 1)],
-        m[(0, 2)], m[(1, 2)], m[(2, 2)], m[(3, 2)],
-        m[(0, 3)], m[(1, 3)], m[(2, 3)], m[(3, 3)],
+        m[(0, 0)],
+        m[(1, 0)],
+        m[(2, 0)],
+        m[(3, 0)],
+        m[(0, 1)],
+        m[(1, 1)],
+        m[(2, 1)],
+        m[(3, 1)],
+        m[(0, 2)],
+        m[(1, 2)],
+        m[(2, 2)],
+        m[(3, 2)],
+        m[(0, 3)],
+        m[(1, 3)],
+        m[(2, 3)],
+        m[(3, 3)],
     ])
 }
 
@@ -88,7 +100,9 @@ pub(super) struct MeshDrawParams<'a> {
 /// Collects mesh draws from batches and partitions by overlay flag.
 ///
 /// Returns (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
-pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
+pub(super) fn collect_mesh_draws(
+    ctx: &CollectMeshDrawsContext<'_>,
+) -> (
     Vec<SkinnedBatchedDraw>,
     Vec<SkinnedBatchedDraw>,
     Vec<BatchedDraw>,
@@ -174,16 +188,25 @@ pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
                 if debug_skinned && !first_skinned_logged {
                     first_skinned_logged = true;
                     let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
-                    let first_bind = bind_poses.first().map(|b| format!("{:?}", b)).unwrap_or_else(|| "none".to_string());
-                    let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
+                    let first_bind = bind_poses
+                        .first()
+                        .map(|b| format!("{:?}", b))
+                        .unwrap_or_else(|| "none".to_string());
+                    let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) =
+                        (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref())
+                    {
                         let n = bc.first().copied().unwrap_or(0) as usize;
                         let n = n.min(4);
                         let mut indices = [0i32; 4];
                         let mut weights = [0.0f32; 4];
                         for j in 0..n {
                             if j * 8 + 8 <= bw.len() {
-                                let idx = i32::from_le_bytes(bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]));
-                                let w = f32::from_le_bytes(bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]));
+                                let idx = i32::from_le_bytes(
+                                    bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]),
+                                );
+                                let w = f32::from_le_bytes(
+                                    bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]),
+                                );
                                 indices[j] = idx;
                                 weights[j] = w;
                             }
@@ -206,12 +229,10 @@ pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
                 }
                 let mut skinned_mvp_glam = if ctx.session.render_config().skinned_use_root_bone {
                     let root_id = d.root_bone_transform_id.filter(|&id| id >= 0);
-                    match root_id.and_then(|id| {
-                        scene_graph.get_world_matrix(batch.space_id, id as usize)
-                    }) {
-                        Some(root_world) => {
-                            view_proj_glam * root_world
-                        }
+                    match root_id
+                        .and_then(|id| scene_graph.get_world_matrix(batch.space_id, id as usize))
+                    {
+                        Some(root_world) => view_proj_glam * root_world,
                         None => view_proj_glam,
                     }
                 } else {
@@ -227,12 +248,8 @@ pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
                 } else {
                     None
                 };
-                let bone_matrices = scene_graph.compute_bone_matrices(
-                    batch.space_id,
-                    ids,
-                    bind_poses,
-                    root_bone,
-                );
+                let bone_matrices =
+                    scene_graph.compute_bone_matrices(batch.space_id, ids, bind_poses, root_bone);
                 skinned_draws.push(SkinnedBatchedDraw {
                     mesh_asset_id: d.mesh_asset_id,
                     mvp: skinned_mvp,
@@ -262,7 +279,12 @@ pub(super) fn collect_mesh_draws(ctx: &CollectMeshDrawsContext<'_>) -> (
     let (non_overlay_non_skinned, overlay_non_skinned): (Vec<_>, Vec<_>) =
         non_skinned_draws.into_iter().partition(|d| !d.is_overlay);
 
-    (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned)
+    (
+        non_overlay_skinned,
+        overlay_skinned,
+        non_overlay_non_skinned,
+        overlay_non_skinned,
+    )
 }
 
 /// Maps overlay pipeline variant to no-depth variant when orthographic overlay is used.
@@ -335,34 +357,34 @@ pub(super) fn record_skinned_draws(
             i += group_end;
             continue;
         };
-    let items: Vec<_> = group
-        .iter()
-        .map(|d| {
-            (
-                d.mvp,
-                d.bone_matrices.as_slice(),
-                d.blendshape_weights.as_deref(),
-                d.num_vertices,
-            )
-        })
-        .collect();
-    if debug_blendshapes {
-        let count = group.len();
-        let first_with_weights = group
+        let items: Vec<_> = group
             .iter()
-            .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
-        if let Some(d) = first_with_weights {
-            let w = d.blendshape_weights.as_ref().unwrap();
-            let preview: Vec<_> = w.iter().take(8).copied().collect();
-            logger::debug!(
-                "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
-                count,
-                w.len(),
-                preview
-            );
-        } else {
-            logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
-        }
+            .map(|d| {
+                (
+                    d.mvp,
+                    d.bone_matrices.as_slice(),
+                    d.blendshape_weights.as_deref(),
+                    d.num_vertices,
+                )
+            })
+            .collect();
+        if debug_blendshapes {
+            let count = group.len();
+            let first_with_weights = group
+                .iter()
+                .find(|d| d.blendshape_weights.as_ref().is_some_and(|w| !w.is_empty()));
+            if let Some(d) = first_with_weights {
+                let w = d.blendshape_weights.as_ref().unwrap();
+                let preview: Vec<_> = w.iter().take(8).copied().collect();
+                logger::debug!(
+                    "blendshape batch_count={} first_draw_weights_len={} preview={:?}",
+                    count,
+                    w.len(),
+                    preview
+                );
+            } else {
+                logger::debug!("blendshape batch_count={} first_draw_weights_len=0", count);
+            }
         }
         skinned.upload_skinned_batch(params.queue, &items, params.frame_index);
         let is_stencil_pipeline = matches!(
@@ -388,7 +410,12 @@ pub(super) fn record_skinned_draws(
                         .create_skinned_draw_bind_group(params.device, buffers)
                         .expect("skinned pipeline must create draw bind groups")
                 });
-            skinned.bind_draw(pass, Some(j as u32), params.frame_index, Some(draw_bind_group));
+            skinned.bind_draw(
+                pass,
+                Some(j as u32),
+                params.frame_index,
+                Some(draw_bind_group),
+            );
             if let Some(ref stencil) = d.stencil_state {
                 pass.set_stencil_reference(stencil.reference as u32);
             } else if is_stencil_pipeline {
@@ -427,11 +454,11 @@ pub(super) fn record_non_skinned_draws(
             params.overlay_orthographic && group.iter().any(|d| d.is_overlay),
         );
         let pipeline_key = PipelineKey(None, pipeline_variant.clone());
-        let Some(pipeline) = params.pipeline_manager.get_pipeline(
-            pipeline_key,
-            params.device,
-            params.config,
-        ) else {
+        let Some(pipeline) =
+            params
+                .pipeline_manager
+                .get_pipeline(pipeline_key, params.device, params.config)
+        else {
             i += group_end;
             continue;
         };
@@ -446,9 +473,10 @@ pub(super) fn record_non_skinned_draws(
             let items: Vec<_> = group
                 .iter()
                 .map(|d| {
-                    let clip = d.stencil_state.and_then(|s| s.clip_rect).map(|r| {
-                        [r.x, r.y, r.width, r.height]
-                    });
+                    let clip = d
+                        .stencil_state
+                        .and_then(|s| s.clip_rect)
+                        .map(|r| [r.x, r.y, r.width, r.height]);
                     (d.mvp, d.model, clip)
                 })
                 .collect();
@@ -481,7 +509,8 @@ pub(super) fn record_non_skinned_draws(
                 run_end += 1;
             }
             let run_len = run_end - run_start;
-            let run_has_stencil = (run_start..run_end).any(|k| group[order[k]].stencil_state.is_some());
+            let run_has_stencil =
+                (run_start..run_end).any(|k| group[order[k]].stencil_state.is_some());
             let use_instancing = run_len > 1
                 && pipeline.supports_instancing()
                 && !is_stencil_pipeline
@@ -498,12 +527,7 @@ pub(super) fn record_non_skinned_draws(
             }
 
             if use_instancing {
-                pipeline.bind_draw(
-                    pass,
-                    Some(first_idx as u32),
-                    params.frame_index,
-                    None,
-                );
+                pipeline.bind_draw(pass, Some(first_idx as u32), params.frame_index, None);
                 pipeline.draw_mesh_indexed_instanced(pass, buffers, run_len as u32);
             } else {
                 for k in run_start..run_end {

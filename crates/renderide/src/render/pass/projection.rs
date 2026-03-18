@@ -7,12 +7,7 @@ use nalgebra::Matrix4;
 use crate::shared::{CameraProjection, CameraRenderParameters};
 
 /// Reverse-Z projection matrix for the given aspect and frustum.
-pub fn reverse_z_projection(
-    aspect: f32,
-    vertical_fov: f32,
-    near: f32,
-    far: f32,
-) -> Matrix4<f32> {
+pub fn reverse_z_projection(aspect: f32, vertical_fov: f32, near: f32, far: f32) -> Matrix4<f32> {
     let vertical_half = vertical_fov / 2.0;
     let tan_vertical_half = vertical_half.tan();
     let horizontal_fov = (tan_vertical_half * aspect)

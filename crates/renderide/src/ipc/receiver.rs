@@ -95,9 +95,10 @@ impl CommandReceiver {
             total_len - packer.remaining_len()
         };
         if written > 0
-            && let Some(ref mut pub_) = self.primary_publisher {
-                let _ = pub_.try_enqueue(&self.send_buffer[..written]);
-            }
+            && let Some(ref mut pub_) = self.primary_publisher
+        {
+            let _ = pub_.try_enqueue(&self.send_buffer[..written]);
+        }
     }
 
     /// Sends an asset result command to the background queue (MeshUploadResult, etc.).
@@ -110,9 +111,10 @@ impl CommandReceiver {
             total_len - packer.remaining_len()
         };
         if written > 0
-            && let Some(ref mut pub_) = self.background_publisher {
-                let _ = pub_.try_enqueue(&self.send_buffer[..written]);
-            }
+            && let Some(ref mut pub_) = self.background_publisher
+        {
+            let _ = pub_.try_enqueue(&self.send_buffer[..written]);
+        }
     }
 }
 

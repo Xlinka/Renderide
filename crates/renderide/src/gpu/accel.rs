@@ -67,11 +67,11 @@ fn read_position(
             if base + offset + 12 <= data.len() {
                 Some([
                     f32::from_le_bytes(data[base + offset..base + offset + 4].try_into().ok()?),
+                    f32::from_le_bytes(data[base + offset + 4..base + offset + 8].try_into().ok()?),
                     f32::from_le_bytes(
-                        data[base + offset + 4..base + offset + 8].try_into().ok()?,
-                    ),
-                    f32::from_le_bytes(
-                        data[base + offset + 8..base + offset + 12].try_into().ok()?,
+                        data[base + offset + 8..base + offset + 12]
+                            .try_into()
+                            .ok()?,
                     ),
                 ])
             } else {
@@ -142,10 +142,8 @@ pub fn build_blas_for_mesh(
         return None;
     }
 
-    let (pos_off, _) = assets::attribute_offset_and_size(
-        &mesh.vertex_attributes,
-        VertexAttributeType::position,
-    )?;
+    let (pos_off, _) =
+        assets::attribute_offset_and_size(&mesh.vertex_attributes, VertexAttributeType::position)?;
     let (_, _, pos_format) = assets::attribute_offset_size_format(
         &mesh.vertex_attributes,
         VertexAttributeType::position,
@@ -220,7 +218,10 @@ pub fn build_blas_for_mesh(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("BLAS build encoder"),
     });
-    encoder.build_acceleration_structures(std::iter::once(&build_entry), std::iter::empty::<&wgpu::Tlas>());
+    encoder.build_acceleration_structures(
+        std::iter::once(&build_entry),
+        std::iter::empty::<&wgpu::Tlas>(),
+    );
     queue.submit(std::iter::once(encoder.finish()));
 
     Some(blas)
@@ -261,9 +262,7 @@ impl Default for RayTracingState {
 fn matrix4_to_affine_3x4(m: &Mat4) -> [f32; 12] {
     let a = m.to_cols_array();
     [
-        a[0], a[4], a[8], a[12],
-        a[1], a[5], a[9], a[13],
-        a[2], a[6], a[10], a[14],
+        a[0], a[4], a[8], a[12], a[1], a[5], a[9], a[13], a[2], a[6], a[10], a[14],
     ]
 }
 

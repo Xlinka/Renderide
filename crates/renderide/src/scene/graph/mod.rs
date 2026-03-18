@@ -21,10 +21,9 @@ pub use error::SceneError;
 #[inline(always)]
 fn glam_mat4_from_bind_pose(bind: &[[f32; 4]; 4]) -> Mat4 {
     Mat4::from_cols_array(&[
-        bind[0][0], bind[0][1], bind[0][2], bind[0][3],
-        bind[1][0], bind[1][1], bind[1][2], bind[1][3],
-        bind[2][0], bind[2][1], bind[2][2], bind[2][3],
-        bind[3][0], bind[3][1], bind[3][2], bind[3][3],
+        bind[0][0], bind[0][1], bind[0][2], bind[0][3], bind[1][0], bind[1][1], bind[1][2],
+        bind[1][3], bind[2][0], bind[2][1], bind[2][2], bind[2][3], bind[3][0], bind[3][1],
+        bind[3][2], bind[3][3],
     ])
 }
 
@@ -53,7 +52,7 @@ fn identity_4x4() -> [[f32; 4]; 4] {
 pub use pose::PoseValidation;
 
 #[allow(unused_imports)]
-use world_matrices::{compute_world_matrices_incremental, mark_descendants_uncomputed, SceneCache};
+use world_matrices::{SceneCache, compute_world_matrices_incremental, mark_descendants_uncomputed};
 
 /// Manages scenes (render spaces) and applies incremental updates from the host.
 pub struct SceneGraph {
@@ -99,10 +98,7 @@ impl SceneGraph {
                     cache.local_dirty[transform_id] = true;
                 }
                 if let Some(scene) = self.scenes.get(&scene_id) {
-                    mark_descendants_uncomputed(
-                        &scene.node_parents,
-                        &mut cache.computed,
-                    );
+                    mark_descendants_uncomputed(&scene.node_parents, &mut cache.computed);
                 }
                 self.world_matrices_dirty.insert(scene_id);
             }
@@ -193,13 +189,19 @@ impl SceneGraph {
 
             let frame_index = data.frame_index;
             let transform_removals = if let Some(ref transforms_update) = update.transforms_update {
-                let scene = self.scenes.get_mut(&update.id).expect("scene exists after entry");
-                let cache = self.scene_caches.entry(update.id).or_insert_with(|| SceneCache {
-                    world_matrices: Vec::new(),
-                    computed: Vec::new(),
-                    local_matrices: Vec::new(),
-                    local_dirty: Vec::new(),
-                });
+                let scene = self
+                    .scenes
+                    .get_mut(&update.id)
+                    .expect("scene exists after entry");
+                let cache = self
+                    .scene_caches
+                    .entry(update.id)
+                    .or_insert_with(|| SceneCache {
+                        world_matrices: Vec::new(),
+                        computed: Vec::new(),
+                        local_matrices: Vec::new(),
+                        local_dirty: Vec::new(),
+                    });
                 updates::apply_transforms_update(
                     scene,
                     cache,
@@ -213,7 +215,10 @@ impl SceneGraph {
                 Vec::new()
             };
 
-            let scene = self.scenes.get_mut(&update.id).expect("scene exists after entry");
+            let scene = self
+                .scenes
+                .get_mut(&update.id)
+                .expect("scene exists after entry");
             if let Some(ref layers_update) = update.layers_update {
                 updates::apply_layers_update(scene, shm, layers_update)?;
             }

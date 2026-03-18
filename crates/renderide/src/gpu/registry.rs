@@ -72,11 +72,7 @@ impl PipelineRegistry {
     }
 
     /// Registers builtin pipelines for the given device and surface configuration.
-    pub fn register_builtin(
-        &mut self,
-        device: &wgpu::Device,
-        config: &wgpu::SurfaceConfiguration,
-    ) {
+    pub fn register_builtin(&mut self, device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) {
         self.pipelines.insert(
             PipelineKey(None, PipelineVariant::NormalDebug),
             Arc::new(NormalDebugPipeline::new(device, config, false)),

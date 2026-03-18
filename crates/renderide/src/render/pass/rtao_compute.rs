@@ -178,14 +178,16 @@ impl RtaoComputePass {
                 bind_group_layouts: &[&bgl],
                 immediate_size: 0,
             });
-            self.clear_pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("RTAO AO clear pipeline"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: None,
-                compilation_options: Default::default(),
-                cache: None,
-            }));
+            self.clear_pipeline = Some(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("RTAO AO clear pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
             self.clear_bind_group_layout = Some(bgl);
         }
         self.clear_pipeline
@@ -260,19 +262,19 @@ impl RtaoComputePass {
                 bind_group_layouts: &[&bgl],
                 immediate_size: 0,
             });
-            self.pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("RTAO compute pipeline"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: None,
-                compilation_options: Default::default(),
-                cache: None,
-            }));
+            self.pipeline = Some(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("RTAO compute pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
             self.bind_group_layout = Some(bgl);
         }
-        self.pipeline
-            .as_ref()
-            .zip(self.bind_group_layout.as_ref())
+        self.pipeline.as_ref().zip(self.bind_group_layout.as_ref())
     }
 }
 
@@ -325,12 +327,7 @@ impl RenderPass for RtaoComputePass {
             },
             None => {
                 logger::warn!("RTAO compute skipped: ray_tracing_state is None");
-                self.clear_ao_to_visibility(
-                    &ctx.gpu.device,
-                    ctx.encoder,
-                    ao_view,
-                    ctx.viewport,
-                );
+                self.clear_ao_to_visibility(&ctx.gpu.device, ctx.encoder, ao_view, ctx.viewport);
                 return Ok(());
             }
         };
@@ -339,12 +336,7 @@ impl RenderPass for RtaoComputePass {
             Some((p, b)) => (p, b),
             None => {
                 logger::warn!("RTAO compute skipped: pipeline creation failed (shader compile?)");
-                self.clear_ao_to_visibility(
-                    &ctx.gpu.device,
-                    ctx.encoder,
-                    ao_view,
-                    ctx.viewport,
-                );
+                self.clear_ao_to_visibility(&ctx.gpu.device, ctx.encoder, ao_view, ctx.viewport);
                 return Ok(());
             }
         };
@@ -363,38 +355,43 @@ impl RenderPass for RtaoComputePass {
             .queue
             .write_buffer(uniform_buffer, 0, bytemuck::bytes_of(&uniform_data));
 
-        let bind_group = ctx.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RTAO compute bind group"),
-            layout: bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(pos_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(norm_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(ao_raw_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::AccelerationStructure(tlas),
-                },
-            ],
-        });
+        let bind_group = ctx
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("RTAO compute bind group"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(pos_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(norm_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(ao_raw_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: wgpu::BindingResource::AccelerationStructure(tlas),
+                    },
+                ],
+            });
 
         let (width, height) = ctx.viewport;
-        let mut pass = ctx.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("RTAO compute pass"),
-            timestamp_writes: None,
-        });
+        let mut pass = ctx
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("RTAO compute pass"),
+                timestamp_writes: None,
+            });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(

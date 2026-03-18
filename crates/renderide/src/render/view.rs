@@ -47,11 +47,7 @@ impl ViewParams {
     ///
     /// Used when overlay batches exist but the primary camera has perspective projection.
     /// half_size = 1.0 yields NDC from -1..1 in both axes; aspect matches viewport.
-    pub fn orthographic_viewport_fallback(
-        aspect: f32,
-        near_clip: f32,
-        far_clip: f32,
-    ) -> Self {
+    pub fn orthographic_viewport_fallback(aspect: f32, near_clip: f32, far_clip: f32) -> Self {
         Self {
             projection: ViewProjection::Orthographic {
                 half_size: 1.0,

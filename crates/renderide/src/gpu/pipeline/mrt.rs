@@ -2,13 +2,13 @@
 
 use nalgebra::Matrix4;
 
-use super::core::{RenderPipeline, UniformData, UNIFORM_ALIGNMENT, MAX_INSTANCE_RUN};
+use super::super::mesh::{GpuMeshBuffers, VertexPosNormal, VertexSkinned, VertexWithUv};
+use super::core::{MAX_INSTANCE_RUN, RenderPipeline, UNIFORM_ALIGNMENT, UniformData};
 use super::ring_buffer::{SkinnedUniformRingBuffer, UniformRingBuffer};
 use super::shaders::{
     NORMAL_DEBUG_MRT_SHADER_SRC, SKINNED_MRT_SHADER_SRC, UV_DEBUG_MRT_SHADER_SRC,
 };
 use super::uniforms::SkinnedUniforms;
-use super::super::mesh::{GpuMeshBuffers, VertexPosNormal, VertexSkinned, VertexWithUv};
 
 /// MRT position/normal target format for RTAO (vec3 packed in vec4).
 /// Uses Rgba16Float (8 bytes) to stay under the 32-byte color attachment limit.
@@ -119,8 +119,7 @@ impl NormalDebugMRTPipeline {
             multiview_mask: None,
             cache: None,
         });
-        let uniform_ring =
-            UniformRingBuffer::new(device, "normal debug MRT uniform ring buffer");
+        let uniform_ring = UniformRingBuffer::new(device, "normal debug MRT uniform ring buffer");
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("normal debug MRT bind group"),
             layout: &bind_group_layout,
@@ -422,9 +421,10 @@ impl SkinnedMRTPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: std::num::NonZeroU64::new(
-                            std::mem::size_of::<SkinnedUniforms>() as u64,
-                        ),
+                        min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                            SkinnedUniforms,
+                        >()
+                            as u64),
                     },
                     count: None,
                 },
@@ -432,9 +432,7 @@ impl SkinnedMRTPipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage {
-                            read_only: true,
-                        },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },
@@ -447,8 +445,7 @@ impl SkinnedMRTPipeline {
             bind_group_layouts: &[&bind_group_layout],
             immediate_size: 0,
         });
-        let uniform_ring =
-            SkinnedUniformRingBuffer::new(device, "skinned MRT uniform ring buffer");
+        let uniform_ring = SkinnedUniformRingBuffer::new(device, "skinned MRT uniform ring buffer");
         let dummy_blendshape_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("skinned MRT dummy blendshape buffer"),
             size: 1,

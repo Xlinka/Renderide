@@ -4,7 +4,7 @@
 
 use glam::Mat4;
 
-use crate::scene::{math::render_transform_to_matrix, Scene};
+use crate::scene::{Scene, math::render_transform_to_matrix};
 
 use super::error::SceneError;
 

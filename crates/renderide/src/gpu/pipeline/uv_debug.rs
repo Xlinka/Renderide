@@ -2,10 +2,10 @@
 
 use nalgebra::Matrix4;
 
-use super::core::{RenderPipeline, UniformData, UNIFORM_ALIGNMENT, MAX_INSTANCE_RUN};
+use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
+use super::core::{MAX_INSTANCE_RUN, RenderPipeline, UNIFORM_ALIGNMENT, UniformData};
 use super::ring_buffer::UniformRingBuffer;
 use super::shaders::UV_DEBUG_SHADER_SRC;
-use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
 
 /// UV debug pipeline: colors surfaces by UV coordinates.
 pub struct UvDebugPipeline {

@@ -34,8 +34,7 @@ pub(crate) fn apply_mesh_renderables_update(
         let additions = shm
             .access_copy_diagnostic::<i32>(&update.additions)
             .map_err(SceneError::SharedMemoryAccess)?;
-        let added_node_ids: Vec<i32> =
-            additions.iter().take_while(|&&i| i >= 0).copied().collect();
+        let added_node_ids: Vec<i32> = additions.iter().take_while(|&&i| i >= 0).copied().collect();
         for &node_id in &added_node_ids {
             let layer = scene
                 .layer_assignments

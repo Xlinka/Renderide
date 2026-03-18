@@ -21,7 +21,9 @@ impl CommandHandler for ConfigCommandHandler {
                     desktop_fov: ctx.view_state.desktop_fov,
                     vsync: x.v_sync,
                     use_debug_uv: ctx.render_config.use_debug_uv,
-                    skinned_apply_mesh_root_transform: ctx.render_config.skinned_apply_mesh_root_transform,
+                    skinned_apply_mesh_root_transform: ctx
+                        .render_config
+                        .skinned_apply_mesh_root_transform,
                     skinned_use_root_bone: ctx.render_config.skinned_use_root_bone,
                     debug_skinned: ctx.render_config.debug_skinned,
                     debug_blendshapes: ctx.render_config.debug_blendshapes,

@@ -68,7 +68,9 @@ pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<C
     if config.is_wine {
         logger::info!("Detected Wine; altering startup sequence accordingly.");
         strip_windows_desktop_from_runtime_config(&config.runtime_config);
-        logger::info!("Starting LinuxBootstrap.sh to check for dotnet and execute the main program.");
+        logger::info!(
+            "Starting LinuxBootstrap.sh to check for dotnet and execute the main program."
+        );
         Command::new("start")
             .args(["/b", "/unix", "./LinuxBootstrap.sh"])
             .args(args)

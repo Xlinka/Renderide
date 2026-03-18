@@ -226,7 +226,9 @@ mod tests {
             let offset = c * 16;
             for r in 0..4 {
                 let val = f32::from_le_bytes(
-                    bytes[offset + r * 4..offset + r * 4 + 4].try_into().unwrap(),
+                    bytes[offset + r * 4..offset + r * 4 + 4]
+                        .try_into()
+                        .unwrap(),
                 );
                 assert_eq!(val, (r * 4 + c) as f32, "col {} row {}", c, r);
             }
@@ -240,12 +242,9 @@ mod tests {
         let arr = matrix4_to_wgsl_column_major(&mat);
         let bytes: &[u8] = bytemuck::bytes_of(&arr);
         let col3_offset = 48;
-        let tx =
-            f32::from_le_bytes(bytes[col3_offset..col3_offset + 4].try_into().unwrap());
-        let ty =
-            f32::from_le_bytes(bytes[col3_offset + 4..col3_offset + 8].try_into().unwrap());
-        let tz =
-            f32::from_le_bytes(bytes[col3_offset + 8..col3_offset + 12].try_into().unwrap());
+        let tx = f32::from_le_bytes(bytes[col3_offset..col3_offset + 4].try_into().unwrap());
+        let ty = f32::from_le_bytes(bytes[col3_offset + 4..col3_offset + 8].try_into().unwrap());
+        let tz = f32::from_le_bytes(bytes[col3_offset + 8..col3_offset + 12].try_into().unwrap());
         assert!((tx - 1.0).abs() < 1e-6);
         assert!((ty - 2.0).abs() < 1e-6);
         assert!((tz - 3.0).abs() < 1e-6);

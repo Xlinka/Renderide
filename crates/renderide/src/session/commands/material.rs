@@ -8,8 +8,7 @@ use std::mem::size_of;
 
 use crate::assets::MaterialPropertyValue;
 use crate::shared::{
-    MaterialPropertyUpdate, MaterialPropertyUpdateType, MaterialsUpdateBatchResult,
-    RendererCommand,
+    MaterialPropertyUpdate, MaterialPropertyUpdateType, MaterialsUpdateBatchResult, RendererCommand,
 };
 
 use super::{CommandContext, CommandHandler, CommandResult};
@@ -25,12 +24,17 @@ impl CommandHandler for MaterialCommandHandler {
         match cmd {
             RendererCommand::materials_update_batch(batch) => {
                 if let Some(shm) = ctx.shared_memory.as_mut() {
-                    parse_and_store_materials_batch(shm, &batch, &mut ctx.asset_registry.material_property_store);
-                    ctx.receiver.send_background(RendererCommand::materials_update_batch_result(
-                        MaterialsUpdateBatchResult {
-                            update_batch_id: batch.update_batch_id,
-                        },
-                    ));
+                    parse_and_store_materials_batch(
+                        shm,
+                        &batch,
+                        &mut ctx.asset_registry.material_property_store,
+                    );
+                    ctx.receiver
+                        .send_background(RendererCommand::materials_update_batch_result(
+                            MaterialsUpdateBatchResult {
+                                update_batch_id: batch.update_batch_id,
+                            },
+                        ));
                 }
                 CommandResult::Handled
             }
@@ -71,8 +75,9 @@ fn parse_and_store_materials_batch(
         let mut current_block_id = block_index as i32;
 
         while offset + MATERIAL_PROPERTY_UPDATE_SIZE <= bytes.len() {
-            let update: MaterialPropertyUpdate =
-                bytemuck::pod_read_unaligned(&bytes[offset..offset + MATERIAL_PROPERTY_UPDATE_SIZE]);
+            let update: MaterialPropertyUpdate = bytemuck::pod_read_unaligned(
+                &bytes[offset..offset + MATERIAL_PROPERTY_UPDATE_SIZE],
+            );
             offset += MATERIAL_PROPERTY_UPDATE_SIZE;
 
             let value_size = match update.update_type {
@@ -94,18 +99,14 @@ fn parse_and_store_materials_batch(
                 MaterialPropertyUpdateType::select_target => {
                     if value_size == 4 {
                         current_block_id = i32::from_le_bytes(
-                            bytes[offset..offset + 4]
-                                .try_into()
-                                .unwrap_or([0; 4]),
+                            bytes[offset..offset + 4].try_into().unwrap_or([0; 4]),
                         );
                     }
                 }
                 MaterialPropertyUpdateType::set_float => {
                     if value_size == 4 {
                         let val = f32::from_le_bytes(
-                            bytes[offset..offset + 4]
-                                .try_into()
-                                .unwrap_or([0; 4]),
+                            bytes[offset..offset + 4].try_into().unwrap_or([0; 4]),
                         );
                         store.set(
                             current_block_id,
@@ -129,7 +130,8 @@ fn parse_and_store_materials_batch(
                         );
                     }
                 }
-                MaterialPropertyUpdateType::set_float4x4 | MaterialPropertyUpdateType::update_batch_end => {}
+                MaterialPropertyUpdateType::set_float4x4
+                | MaterialPropertyUpdateType::update_batch_end => {}
                 _ => {}
             }
 

@@ -4,10 +4,10 @@
 
 use nalgebra::Vector3;
 
-use super::pass::projection_for_params;
-use super::r#loop::RenderLoop;
-use super::target::RenderTarget;
 use super::SpaceDrawBatch;
+use super::r#loop::RenderLoop;
+use super::pass::projection_for_params;
+use super::target::RenderTarget;
 use crate::gpu::GpuState;
 use crate::session::Session;
 use crate::shared::{CameraRenderTask, RenderTransform, TextureFormat};
@@ -79,13 +79,9 @@ impl RenderTaskExecutor {
             // Task proj is passed as ctx.proj; overlay batches use it when overlay_projection_override
             // is None. For orthographic tasks, overlay batches correctly use the task's orthographic proj.
 
-            if let Err(e) = render_loop.render_to_target(
-                gpu,
-                session,
-                &batches_with_view,
-                &target,
-                proj,
-            ) {
+            if let Err(e) =
+                render_loop.render_to_target(gpu, session, &batches_with_view, &target, proj)
+            {
                 logger::error!("Render task render_to_target failed: {:?}", e);
                 continue;
             }
@@ -133,7 +129,11 @@ impl RenderTaskExecutor {
             slice.map_async(wgpu::MapMode::Read, move |r| {
                 let _ = tx.send(r);
             });
-            if gpu.device.poll(wgpu::PollType::wait_indefinitely()).is_err() {
+            if gpu
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .is_err()
+            {
                 continue;
             }
             if rx.recv().ok().and_then(|r| r.ok()).is_none() {

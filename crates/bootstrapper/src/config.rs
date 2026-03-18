@@ -5,8 +5,8 @@
 use std::env;
 use std::path::PathBuf;
 
-use logger::LogLevel;
 use crate::wine_helpers;
+use logger::LogLevel;
 
 fn generate_random_string(len: usize) -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";

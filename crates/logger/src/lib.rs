@@ -108,8 +108,7 @@ pub fn init(path: impl AsRef<Path>, max_level: LogLevel, append: bool) {
     } else {
         opts.truncate(true);
     }
-    let file = match opts.open(path)
-    {
+    let file = match opts.open(path) {
         Ok(f) => f,
         Err(_) => return,
     };
@@ -138,11 +137,7 @@ pub fn flush() {
 /// is visible on disk. Does not acquire the logger mutex (safe from panic handler).
 pub fn log_panic(path: impl AsRef<Path>, info: &dyn std::fmt::Display) {
     let path = path.as_ref();
-    if let Ok(mut f) = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
-    {
+    if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "PANIC: {}", info);
         let _ = writeln!(f, "Backtrace:\n{:?}", std::backtrace::Backtrace::capture());
         let _ = f.flush();
@@ -153,7 +148,9 @@ pub fn log_panic(path: impl AsRef<Path>, info: &dyn std::fmt::Display) {
 /// Internal log writer. Called by the log macros.
 #[doc(hidden)]
 pub fn log(level: LogLevel, args: std::fmt::Arguments<'_>) {
-    if let Some(logger) = LOGGER.get() && level <= logger.max_level {
+    if let Some(logger) = LOGGER.get()
+        && level <= logger.max_level
+    {
         let msg = args.to_string();
         let timestamp = format_timestamp();
         let line = format!("[{}] {:?} {}\n", timestamp, level, msg);

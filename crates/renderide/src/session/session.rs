@@ -7,19 +7,19 @@ use std::collections::HashSet;
 use glam::Mat4;
 
 use crate::assets::{self, AssetRegistry};
-use crate::stencil::{StencilOperation, StencilState};
 use crate::config::RenderConfig;
 use crate::gpu::{GpuState, PipelineVariant};
 use crate::ipc::receiver::CommandReceiver;
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::render::batch::{DrawEntry, SpaceDrawBatch};
 use crate::render::{RenderLoop, RenderTaskExecutor};
-use crate::scene::{render_transform_to_matrix, Drawable, Scene, SceneGraph};
-use crate::shared::VertexAttributeType;
+use crate::scene::{Drawable, Scene, SceneGraph, render_transform_to_matrix};
 use crate::session::commands::{CommandContext, CommandDispatcher, CommandResult};
-use crate::session::init::{get_connection_parameters, InitError, take_singleton_init};
+use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
 use crate::session::state::ViewState;
+use crate::shared::VertexAttributeType;
 use crate::shared::{FrameStartData, FrameSubmitData, InputState, LayerType, RendererCommand};
+use crate::stencil::{StencilOperation, StencilState};
 
 /// Main session: coordinates command ingest, scene, and assets.
 pub struct Session {
@@ -207,9 +207,10 @@ impl Session {
         }
 
         if let Some(ref mut shm) = self.shared_memory
-            && let Err(e) = self.scene_graph.apply_frame_update(shm, &data) {
-                logger::error!("Scene apply_frame_update: {}", e);
-            }
+            && let Err(e) = self.scene_graph.apply_frame_update(shm, &data)
+        {
+            logger::error!("Scene apply_frame_update: {}", e);
+        }
 
         let active_non_overlay: Vec<_> = data
             .render_spaces
@@ -235,13 +236,14 @@ impl Session {
             });
         }
         if self.primary_view_transform.is_none()
-            && let Some(first) = data.render_spaces.first() {
-                self.primary_view_space_id = Some(first.id);
-                self.primary_view_override = Some(first.override_view_position);
-                self.primary_view_position_is_external = Some(first.view_position_is_external);
-                self.primary_root_transform = Some(first.root_transform);
-                self.primary_view_transform = Some(first.root_transform);
-            }
+            && let Some(first) = data.render_spaces.first()
+        {
+            self.primary_view_space_id = Some(first.id);
+            self.primary_view_override = Some(first.override_view_position);
+            self.primary_view_position_is_external = Some(first.view_position_is_external);
+            self.primary_root_transform = Some(first.root_transform);
+            self.primary_view_transform = Some(first.root_transform);
+        }
 
         self.pending_render_tasks = data.render_tasks;
         self.primary_camera_task = self.pending_render_tasks.first().cloned();
@@ -514,7 +516,11 @@ fn filter_and_collect_drawables(
             continue;
         }
         if is_skinned {
-            if entry.bone_transform_ids.as_ref().map_or(true, |b| b.is_empty()) {
+            if entry
+                .bone_transform_ids
+                .as_ref()
+                .map_or(true, |b| b.is_empty())
+            {
                 logger::trace!(
                     "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
                     entry.node_id
@@ -559,27 +565,26 @@ fn filter_and_collect_drawables(
 
         let pipeline_variant = if scene.is_overlay {
             if let Some(ref stencil) = drawable.stencil_state {
-                let stencil_variant = if stencil.pass_op == StencilOperation::Replace
-                    && stencil.write_mask != 0
-                {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilMaskWriteSkinned
+                let stencil_variant =
+                    if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
+                        if is_skinned {
+                            PipelineVariant::OverlayStencilMaskWriteSkinned
+                        } else {
+                            PipelineVariant::OverlayStencilMaskWrite
+                        }
+                    } else if stencil.pass_op == StencilOperation::Zero {
+                        if is_skinned {
+                            PipelineVariant::OverlayStencilMaskClearSkinned
+                        } else {
+                            PipelineVariant::OverlayStencilMaskClear
+                        }
                     } else {
-                        PipelineVariant::OverlayStencilMaskWrite
-                    }
-                } else if stencil.pass_op == StencilOperation::Zero {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilMaskClearSkinned
-                    } else {
-                        PipelineVariant::OverlayStencilMaskClear
-                    }
-                } else {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilSkinned
-                    } else {
-                        PipelineVariant::OverlayStencilContent
-                    }
-                };
+                        if is_skinned {
+                            PipelineVariant::OverlayStencilSkinned
+                        } else {
+                            PipelineVariant::OverlayStencilContent
+                        }
+                    };
                 stencil_variant
             } else if is_skinned {
                 PipelineVariant::Skinned

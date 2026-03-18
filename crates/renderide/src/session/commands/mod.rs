@@ -17,8 +17,8 @@ mod init;
 mod material;
 mod mesh;
 mod noop;
-mod shared_memory;
 mod shader;
+mod shared_memory;
 mod shutdown;
 mod stub;
 mod texture;
@@ -112,7 +112,11 @@ impl CommandDispatcher {
     }
 
     /// Dispatches a command to handlers. Returns when a handler returns Handled or FatalError.
-    pub fn dispatch(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    pub fn dispatch(
+        &mut self,
+        cmd: RendererCommand,
+        ctx: &mut CommandContext<'_>,
+    ) -> CommandResult {
         for handler in &mut self.handlers {
             let result = handler.handle(cmd.clone(), ctx);
             match result {

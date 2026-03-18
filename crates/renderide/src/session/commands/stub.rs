@@ -35,7 +35,9 @@ impl CommandHandler for StubCommandHandler {
 
             // --- Window ---
             RendererCommand::renderer_parent_window(_) => {
-                logger::trace!("Unhandled: renderer_parent_window (TODO: implement parent window embedding)");
+                logger::trace!(
+                    "Unhandled: renderer_parent_window (TODO: implement parent window embedding)"
+                );
                 CommandResult::Handled
             }
             RendererCommand::set_window_icon(_) => {
@@ -44,7 +46,9 @@ impl CommandHandler for StubCommandHandler {
             }
             RendererCommand::set_window_icon_result(_) => CommandResult::Handled,
             RendererCommand::set_taskbar_progress(_) => {
-                logger::trace!("Unhandled: set_taskbar_progress (TODO: implement taskbar progress)");
+                logger::trace!(
+                    "Unhandled: set_taskbar_progress (TODO: implement taskbar progress)"
+                );
                 CommandResult::Handled
             }
 

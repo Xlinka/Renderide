@@ -2,12 +2,12 @@
 
 use nalgebra::Matrix4;
 
+use super::super::mesh::{GpuMeshBuffers, VertexSkinned};
 use super::core::{RenderPipeline, UniformData};
 use super::overlay_stencil::OverlayStencilPhase;
 use super::ring_buffer::SkinnedUniformRingBuffer;
 use super::shaders::SKINNED_SHADER_SRC;
 use super::uniforms::SkinnedUniforms;
-use super::super::mesh::{GpuMeshBuffers, VertexSkinned};
 
 /// Skinned mesh pipeline: transforms vertices by weighted bone matrices.
 pub struct SkinnedPipeline {
@@ -40,9 +40,10 @@ impl SkinnedPipeline {
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: true,
-                        min_binding_size: std::num::NonZeroU64::new(
-                            std::mem::size_of::<SkinnedUniforms>() as u64,
-                        ),
+                        min_binding_size: std::num::NonZeroU64::new(std::mem::size_of::<
+                            SkinnedUniforms,
+                        >()
+                            as u64),
                     },
                     count: None,
                 },
@@ -50,9 +51,7 @@ impl SkinnedPipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::VERTEX,
                     ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage {
-                            read_only: true,
-                        },
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
                         has_dynamic_offset: false,
                         min_binding_size: None,
                     },

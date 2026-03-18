@@ -14,7 +14,7 @@ use winit::window::{CursorGrabMode, Window, WindowAttributes};
 
 use crate::gpu::GpuState;
 use crate::input::{WindowInputState, winit_key_to_renderite_key};
-use crate::render::{set_context, RenderLoop, RenderingContext};
+use crate::render::{RenderLoop, RenderingContext, set_context};
 use crate::session::Session;
 
 /// Target frame interval when focused (240 Hz). Used with WaitUntil if not using Poll.
@@ -269,8 +269,7 @@ impl ApplicationHandler for RenderideApp {
                                 "GPU initialized: ray_tracing_available={}",
                                 g.ray_tracing_available
                             );
-                            self.render_loop =
-                                Some(RenderLoop::new(&g.device, &g.config));
+                            self.render_loop = Some(RenderLoop::new(&g.device, &g.config));
                             self.gpu = Some(g);
                         }
                         Err(_e) => {}
@@ -319,13 +318,8 @@ impl ApplicationHandler for RenderideApp {
                     let present_us = t3.elapsed().as_micros() as u64;
 
                     let total_us = frame_start.elapsed().as_micros() as u64;
-                    self.frame_diagnostic.add_frame(
-                        session_us,
-                        collect_us,
-                        render_us,
-                        present_us,
-                        total_us,
-                    );
+                    self.frame_diagnostic
+                        .add_frame(session_us, collect_us, render_us, present_us, total_us);
                     if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
                         let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
                         self.frame_diagnostic.log_and_reset(gpu_ms);
@@ -334,10 +328,8 @@ impl ApplicationHandler for RenderideApp {
 
                 // Phase 3: RenderToAsset — offscreen camera tasks.
                 set_context(RenderingContext::render_to_asset);
-                self.session.process_render_tasks(
-                    self.gpu.as_mut(),
-                    self.render_loop.as_mut(),
-                );
+                self.session
+                    .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
 
                 self.maybe_flush_logs();
             }
@@ -483,13 +475,8 @@ impl ApplicationHandler for RenderideApp {
                         let present_us = t3.elapsed().as_micros() as u64;
                         let total_us = frame_start.elapsed().as_micros() as u64;
 
-                        self.frame_diagnostic.add_frame(
-                            session_us,
-                            collect_us,
-                            render_us,
-                            present_us,
-                            total_us,
-                        );
+                        self.frame_diagnostic
+                            .add_frame(session_us, collect_us, render_us, present_us, total_us);
                         if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
                             let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
                             self.frame_diagnostic.log_and_reset(gpu_ms);
@@ -498,10 +485,8 @@ impl ApplicationHandler for RenderideApp {
 
                     // Phase 3: RenderToAsset — offscreen camera tasks.
                     set_context(RenderingContext::render_to_asset);
-                    self.session.process_render_tasks(
-                        self.gpu.as_mut(),
-                        self.render_loop.as_mut(),
-                    );
+                    self.session
+                        .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
 
                     self.maybe_flush_logs();
                 }

@@ -10,13 +10,13 @@ mod rtao_compute;
 
 use nalgebra::Matrix4;
 
+use super::SpaceDrawBatch;
 use super::target::RenderTarget;
 use super::view::ViewParams;
-use super::SpaceDrawBatch;
 use crate::session::Session;
 use mesh_draw::{
-    collect_mesh_draws, record_non_skinned_draws, record_skinned_draws, CollectMeshDrawsContext,
-    MeshDrawParams,
+    CollectMeshDrawsContext, MeshDrawParams, collect_mesh_draws, record_non_skinned_draws,
+    record_skinned_draws,
 };
 
 pub use composite::CompositePass;
@@ -213,9 +213,7 @@ pub struct RenderGraph {
 impl RenderGraph {
     /// Creates an empty render graph.
     pub fn new() -> Self {
-        Self {
-            passes: Vec::new(),
-        }
+        Self { passes: Vec::new() }
     }
 
     /// Adds a pass to the graph. Passes execute in insertion order.
@@ -230,18 +228,24 @@ impl RenderGraph {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-        let (color_view, mrt_position_view, mrt_normal_view, mrt_ao_raw_view, mrt_ao_view, mrt_color_input_view) =
-            match &ctx.mrt_views {
-                Some(mrt) => (
-                    mrt.color_view,
-                    Some(mrt.position_view),
-                    Some(mrt.normal_view),
-                    Some(mrt.ao_raw_view),
-                    Some(mrt.ao_view),
-                    Some(mrt.color_view),
-                ),
-                None => (ctx.target.color_view(), None, None, None, None, None),
-            };
+        let (
+            color_view,
+            mrt_position_view,
+            mrt_normal_view,
+            mrt_ao_raw_view,
+            mrt_ao_view,
+            mrt_color_input_view,
+        ) = match &ctx.mrt_views {
+            Some(mrt) => (
+                mrt.color_view,
+                Some(mrt.position_view),
+                Some(mrt.normal_view),
+                Some(mrt.ao_raw_view),
+                Some(mrt.ao_view),
+                Some(mrt.color_view),
+            ),
+            None => (ctx.target.color_view(), None, None, None, None, None),
+        };
         let depth_view = ctx.target.depth_view().or(ctx.depth_view_override);
         let render_target = RenderTargetViews {
             color_view,
@@ -327,15 +331,18 @@ impl RenderGraph {
             ctx.timestamp_staging_buffer,
         ) {
             encoder.resolve_query_set(query_set, 0..2, resolve_buffer, 0);
-            encoder.copy_buffer_to_buffer(resolve_buffer, 0, staging_buffer, 0, resolve_buffer.size());
+            encoder.copy_buffer_to_buffer(
+                resolve_buffer,
+                0,
+                staging_buffer,
+                0,
+                resolve_buffer.size(),
+            );
         }
 
         if let Some(mrt) = &ctx.mrt_views {
             let (width, height) = ctx.viewport;
-            let has_composite = self
-                .passes
-                .iter()
-                .any(|p| p.name() == "composite");
+            let has_composite = self.passes.iter().any(|p| p.name() == "composite");
             if !has_composite {
                 encoder.copy_texture_to_texture(
                     wgpu::TexelCopyTextureInfo {
@@ -389,8 +396,7 @@ fn ensure_mesh_buffers(
                 continue;
             }
             if !gpu.mesh_buffer_cache.contains_key(&d.mesh_asset_id) {
-                let stride =
-                    crate::assets::compute_vertex_stride(&mesh.vertex_attributes) as usize;
+                let stride = crate::assets::compute_vertex_stride(&mesh.vertex_attributes) as usize;
                 let stride = if stride > 0 {
                     stride
                 } else {
@@ -402,12 +408,9 @@ fn ensure_mesh_buffers(
                 {
                     gpu.mesh_buffer_cache.insert(d.mesh_asset_id, b.clone());
                     if let Some(ref mut accel) = gpu.accel_cache {
-                        if let Some(blas) = crate::gpu::build_blas_for_mesh(
-                            &gpu.device,
-                            &gpu.queue,
-                            mesh,
-                            &b,
-                        ) {
+                        if let Some(blas) =
+                            crate::gpu::build_blas_for_mesh(&gpu.device, &gpu.queue, mesh, &b)
+                        {
                             accel.insert(d.mesh_asset_id, blas);
                         }
                     }
@@ -461,13 +464,13 @@ impl RenderPass for MeshRenderPass {
             use_mrt,
         };
 
-        let timestamp_writes = ctx.timestamp_query_set.map(|query_set| {
-            wgpu::RenderPassTimestampWrites {
-                query_set,
-                beginning_of_pass_write_index: Some(0),
-                end_of_pass_write_index: Some(1),
-            }
-        });
+        let timestamp_writes =
+            ctx.timestamp_query_set
+                .map(|query_set| wgpu::RenderPassTimestampWrites {
+                    query_set,
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                });
 
         let color_attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = if use_mrt {
             let pos_view = ctx.render_target.mrt_position_view.unwrap();
@@ -665,7 +668,12 @@ impl RenderPass for OverlayRenderPass {
         // MaskWrite → Content → MaskClear flow.
 
         let debug_blendshapes = ctx.session.render_config().debug_blendshapes;
-        record_skinned_draws(&mut pass, &mut draw_params, &overlay_skinned, debug_blendshapes);
+        record_skinned_draws(
+            &mut pass,
+            &mut draw_params,
+            &overlay_skinned,
+            debug_blendshapes,
+        );
         record_non_skinned_draws(&mut pass, &mut draw_params, &overlay_non_skinned);
 
         Ok(())

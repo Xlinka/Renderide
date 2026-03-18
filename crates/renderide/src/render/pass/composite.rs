@@ -121,39 +121,41 @@ impl CompositePass {
                 bind_group_layouts: &[&bgl],
                 immediate_size: 0,
             });
-            self.pipeline = Some(device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("composite pipeline"),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    buffers: &[],
-                    compilation_options: Default::default(),
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                    compilation_options: Default::default(),
+            self.pipeline = Some(
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("composite pipeline"),
+                    layout: Some(&layout),
+                    vertex: wgpu::VertexState {
+                        module: &shader,
+                        entry_point: Some("vs_main"),
+                        buffers: &[],
+                        compilation_options: Default::default(),
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &shader,
+                        entry_point: Some("fs_main"),
+                        targets: &[Some(wgpu::ColorTargetState {
+                            format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        })],
+                        compilation_options: Default::default(),
+                    }),
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleList,
+                        strip_index_format: None,
+                        front_face: wgpu::FrontFace::Cw,
+                        cull_mode: None,
+                        unclipped_depth: false,
+                        polygon_mode: wgpu::PolygonMode::Fill,
+                        conservative: false,
+                    },
+                    depth_stencil: None,
+                    multisample: wgpu::MultisampleState::default(),
+                    multiview_mask: None,
+                    cache: None,
                 }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    strip_index_format: None,
-                    front_face: wgpu::FrontFace::Cw,
-                    cull_mode: None,
-                    unclipped_depth: false,
-                    polygon_mode: wgpu::PolygonMode::Fill,
-                    conservative: false,
-                },
-                depth_stencil: None,
-                multisample: wgpu::MultisampleState::default(),
-                multiview_mask: None,
-                cache: None,
-            }));
+            );
             self.bind_group_layout = Some(bgl);
             let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("composite sampler"),
@@ -210,7 +212,9 @@ impl RenderPass for CompositePass {
             .queue
             .write_buffer(uniform_buffer, 0, bytemuck::bytes_of(&uniform_data));
 
-        let (pipeline, bgl, sampler) = match self.ensure_pipeline(&ctx.gpu.device, ctx.gpu.config.format) {
+        let (pipeline, bgl, sampler) = match self
+            .ensure_pipeline(&ctx.gpu.device, ctx.gpu.config.format)
+        {
             Some(x) => x,
             None => {
                 logger::warn!("Composite pass skipped: pipeline creation failed (shader compile?)");
@@ -218,28 +222,31 @@ impl RenderPass for CompositePass {
             }
         };
 
-        let bind_group = ctx.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("composite bind group"),
-            layout: bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(color_input),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(ao_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Sampler(sampler),
-                },
-            ],
-        });
+        let bind_group = ctx
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("composite bind group"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(color_input),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(ao_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            });
 
         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("composite pass"),

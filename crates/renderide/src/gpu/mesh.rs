@@ -484,8 +484,7 @@ pub fn create_mesh_buffers(
         );
 
         let mut normal = if normal_size > 0 {
-            read_vec3(&mesh.vertex_data, base, normal_off, normal_format)
-                .unwrap_or(default_normal)
+            read_vec3(&mesh.vertex_data, base, normal_off, normal_format).unwrap_or(default_normal)
         } else {
             default_normal
         };
@@ -591,12 +590,9 @@ pub fn create_mesh_buffers(
     };
 
     let vertex_buffer_skinned = {
-        let has_bind_poses =
-            mesh.bind_poses.as_ref().is_some_and(|v| !v.is_empty());
-        let has_bone_counts =
-            mesh.bone_counts.as_ref().is_some_and(|v| !v.is_empty());
-        let has_bone_weights =
-            mesh.bone_weights.as_ref().is_some_and(|v| !v.is_empty());
+        let has_bind_poses = mesh.bind_poses.as_ref().is_some_and(|v| !v.is_empty());
+        let has_bone_counts = mesh.bone_counts.as_ref().is_some_and(|v| !v.is_empty());
+        let has_bone_weights = mesh.bone_weights.as_ref().is_some_and(|v| !v.is_empty());
         let bone_counts_match = mesh
             .bone_counts
             .as_ref()

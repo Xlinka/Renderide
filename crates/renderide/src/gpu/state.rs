@@ -23,7 +23,8 @@ pub struct GpuState {
     pub mesh_buffer_cache: std::collections::HashMap<i32, GpuMeshBuffers>,
     /// Cached bind groups for skinned pipelines, keyed by (pipeline variant, mesh asset id).
     /// Invalidated when meshes are unloaded via [`drain_pending_mesh_unloads`](crate::app).
-    pub skinned_bind_group_cache: std::collections::HashMap<SkinnedBindGroupCacheKey, wgpu::BindGroup>,
+    pub skinned_bind_group_cache:
+        std::collections::HashMap<SkinnedBindGroupCacheKey, wgpu::BindGroup>,
     pub depth_texture: Option<wgpu::Texture>,
     /// Dimensions of the current depth texture. Used to avoid recreation on resize when unchanged.
     pub depth_size: (u32, u32),
@@ -84,8 +85,9 @@ pub async fn init_gpu(
         .map_err(|e| format!("request_adapter: {:?}", e))?;
 
     let adapter_info = adapter.get_info();
-    let ray_query_supported =
-        adapter.features().contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+    let ray_query_supported = adapter
+        .features()
+        .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
 
     let required_features = if ray_query_supported {
         wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::EXPERIMENTAL_RAY_QUERY

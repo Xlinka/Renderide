@@ -2,7 +2,7 @@
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::Scene;
-use crate::shared::{RenderMaterialOverridesUpdate, RenderMaterialOverrideState};
+use crate::shared::{RenderMaterialOverrideState, RenderMaterialOverridesUpdate};
 
 use super::super::error::SceneError;
 use super::super::pods::MaterialOverrideStatePod;

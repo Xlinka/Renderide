@@ -40,22 +40,21 @@
 
 pub mod batch;
 pub mod context;
-pub mod pass;
 pub mod r#loop;
-pub mod task;
+pub mod pass;
 pub mod target;
+pub mod task;
 pub mod view;
 
-pub use batch::{DrawEntry, SpaceDrawBatch};
-pub use crate::stencil::{ClipRect, StencilComparison, StencilOperation, StencilState};
-pub use context::{current_context, set_context, with_context, FramePhase};
 pub use crate::shared::RenderingContext;
-pub use pass::{
-    prepare_mesh_draws_for_view, MeshRenderPass, OverlayRenderPass, PreCollectedFrameData,
-    RenderGraph, RenderGraphContext, RenderPass, RenderPassContext, RenderPassError,
-    RenderTargetViews,
-};
+pub use crate::stencil::{ClipRect, StencilComparison, StencilOperation, StencilState};
+pub use batch::{DrawEntry, SpaceDrawBatch};
+pub use context::{FramePhase, current_context, set_context, with_context};
 pub use r#loop::RenderLoop;
-pub use task::RenderTaskExecutor;
+pub use pass::{
+    MeshRenderPass, OverlayRenderPass, PreCollectedFrameData, RenderGraph, RenderGraphContext,
+    RenderPass, RenderPassContext, RenderPassError, RenderTargetViews, prepare_mesh_draws_for_view,
+};
 pub use target::RenderTarget;
+pub use task::RenderTaskExecutor;
 pub use view::{ViewParams, ViewProjection};

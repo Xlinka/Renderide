@@ -133,19 +133,19 @@ impl RtaoBlurPass {
                 bind_group_layouts: &[&bgl],
                 immediate_size: 0,
             });
-            self.pipeline = Some(device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("RTAO blur pipeline"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: None,
-                compilation_options: Default::default(),
-                cache: None,
-            }));
+            self.pipeline = Some(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("RTAO blur pipeline"),
+                    layout: Some(&layout),
+                    module: &shader,
+                    entry_point: None,
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
             self.bind_group_layout = Some(bgl);
         }
-        self.pipeline
-            .as_ref()
-            .zip(self.bind_group_layout.as_ref())
+        self.pipeline.as_ref().zip(self.bind_group_layout.as_ref())
     }
 }
 
@@ -189,34 +189,39 @@ impl RenderPass for RtaoBlurPass {
             None => return Ok(()),
         };
 
-        let bind_group = ctx.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("RTAO blur bind group"),
-            layout: bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(ao_raw_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&depth_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(norm_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(ao_view),
-                },
-            ],
-        });
+        let bind_group = ctx
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("RTAO blur bind group"),
+                layout: bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(ao_raw_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(norm_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(ao_view),
+                    },
+                ],
+            });
 
         let (width, height) = ctx.viewport;
-        let mut pass = ctx.encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("RTAO blur pass"),
-            timestamp_writes: None,
-        });
+        let mut pass = ctx
+            .encoder
+            .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("RTAO blur pass"),
+                timestamp_writes: None,
+            });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(

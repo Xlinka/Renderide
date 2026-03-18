@@ -102,9 +102,7 @@ pub fn take_singleton_init() -> bool {
 
 /// Sends the renderer init result to the host. Called by InitCommandHandler.
 pub fn send_renderer_init_result(receiver: &mut crate::ipc::receiver::CommandReceiver) {
-    use crate::shared::{
-        HeadOutputDevice, RendererCommand, RendererInitResult, TextureFormat,
-    };
+    use crate::shared::{HeadOutputDevice, RendererCommand, RendererInitResult, TextureFormat};
 
     let result = RendererInitResult {
         actual_output_device: HeadOutputDevice::screen,

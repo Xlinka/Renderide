@@ -5,8 +5,8 @@ use std::cell::RefCell;
 use nalgebra::Matrix4;
 
 use super::core::{
-    matrix4_to_wgsl_column_major, MAX_BLENDSHAPE_WEIGHTS, NUM_FRAMES_IN_FLIGHT,
-    SKINNED_SLOTS_PER_FRAME, SKINNED_SLOT_STRIDE, SLOTS_PER_FRAME, UNIFORM_ALIGNMENT,
+    MAX_BLENDSHAPE_WEIGHTS, NUM_FRAMES_IN_FLIGHT, SKINNED_SLOT_STRIDE, SKINNED_SLOTS_PER_FRAME,
+    SLOTS_PER_FRAME, UNIFORM_ALIGNMENT, matrix4_to_wgsl_column_major,
 };
 use super::uniforms::{OverlayStencilUniforms, SkinnedUniforms, Uniforms};
 
@@ -88,8 +88,7 @@ pub(crate) struct SkinnedUniformRingBuffer {
 impl SkinnedUniformRingBuffer {
     /// Creates a new ring buffer sized for `NUM_FRAMES_IN_FLIGHT * SKINNED_SLOTS_PER_FRAME` slots.
     pub fn new(device: &wgpu::Device, label: &str) -> Self {
-        let size =
-            (NUM_FRAMES_IN_FLIGHT * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
+        let size = (NUM_FRAMES_IN_FLIGHT * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size,
@@ -113,17 +112,16 @@ impl SkinnedUniformRingBuffer {
             return;
         }
         let uniform_size = std::mem::size_of::<SkinnedUniforms>();
-        let region_base =
-            (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
+        let region_base = (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
         let mut scratch = self.scratch.borrow_mut();
         for (chunk_idx, chunk) in items.chunks(SKINNED_SLOTS_PER_FRAME).enumerate() {
             let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
-            let buffer_offset =
-                (region * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
+            let buffer_offset = (region * SKINNED_SLOTS_PER_FRAME) as u64 * SKINNED_SLOT_STRIDE;
             let need_len = (chunk.len() as u64 * SKINNED_SLOT_STRIDE) as usize;
             scratch.resize(need_len, 0);
             let aligned = &mut scratch[..need_len];
-            for (i, (mvp, bone_matrices, blendshape_weights, num_vertices)) in chunk.iter().enumerate()
+            for (i, (mvp, bone_matrices, blendshape_weights, num_vertices)) in
+                chunk.iter().enumerate()
             {
                 let mut u = SkinnedUniforms {
                     mvp: matrix4_to_wgsl_column_major(mvp),
@@ -155,8 +153,7 @@ impl SkinnedUniformRingBuffer {
         let i = batch_index as usize;
         let chunk_idx = i / SKINNED_SLOTS_PER_FRAME;
         let slot_in_chunk = i % SKINNED_SLOTS_PER_FRAME;
-        let region_base =
-            (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
+        let region_base = (frame_index as usize % NUM_FRAMES_IN_FLIGHT) * SKINNED_SLOTS_PER_FRAME;
         let region = (region_base + chunk_idx) % NUM_FRAMES_IN_FLIGHT;
         let slot = region * SKINNED_SLOTS_PER_FRAME + slot_in_chunk;
         (slot as u64 * SKINNED_SLOT_STRIDE) as u32

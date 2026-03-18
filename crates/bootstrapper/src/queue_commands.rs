@@ -92,7 +92,8 @@ pub fn handle_command(
 
             logger::info!(
                 "Spawning renderer: {:?} with args: {:?}",
-                config.renderite_executable, args
+                config.renderite_executable,
+                args
             );
             match Command::new(&config.renderite_executable)
                 .args(&args_refs)

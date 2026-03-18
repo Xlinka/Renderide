@@ -6,13 +6,11 @@ use glam::Mat4;
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::scene::{Scene, SceneId};
-use crate::shared::{
-    TransformParentUpdate, TransformPoseUpdate, TransformsUpdate,
-};
+use crate::shared::{TransformParentUpdate, TransformPoseUpdate, TransformsUpdate};
 
 use super::super::error::SceneError;
-use super::super::pose::{render_transform_identity, PoseValidation};
-use super::super::world_matrices::{fixup_transform_id, mark_descendants_uncomputed, SceneCache};
+use super::super::pose::{PoseValidation, render_transform_identity};
+use super::super::world_matrices::{SceneCache, fixup_transform_id, mark_descendants_uncomputed};
 
 /// Applies transform updates: removals, parent changes, pose updates.
 /// Returns transform removals (removed_id, last_index) for skinned mesh fixup.
@@ -28,9 +26,13 @@ pub(crate) fn apply_transforms_update(
     let mut transform_removals = Vec::new();
 
     if cache.world_matrices.len() != scene.nodes.len() {
-        cache.world_matrices.resize(scene.nodes.len(), Mat4::IDENTITY);
+        cache
+            .world_matrices
+            .resize(scene.nodes.len(), Mat4::IDENTITY);
         cache.computed.resize(scene.nodes.len(), false);
-        cache.local_matrices.resize(scene.nodes.len(), Mat4::IDENTITY);
+        cache
+            .local_matrices
+            .resize(scene.nodes.len(), Mat4::IDENTITY);
         cache.local_dirty.resize(scene.nodes.len(), true);
     }
 
