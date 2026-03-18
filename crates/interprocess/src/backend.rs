@@ -152,7 +152,7 @@ fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHand
     use std::os::windows::ffi::OsStrExt;
 
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-    use windows_sys::Win32::System::Memory::{MapViewOfFile, FILE_MAP_ALL_ACCESS};
+    use windows_sys::Win32::System::Memory::{FILE_MAP_ALL_ACCESS, MapViewOfFile};
 
     const MAP_NAME_PREFIX: &str = "CT_IP_";
     let name = format!("{}{}", MAP_NAME_PREFIX, options.memory_view_name);
@@ -165,19 +165,14 @@ fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHand
 
     let map_handle = create_or_open_file_mapping(&name_wide, storage_size);
 
-    let view = unsafe {
-        MapViewOfFile(
-            map_handle,
-            FILE_MAP_ALL_ACCESS,
-            0,
-            0,
-            storage_size,
-        )
-    };
+    let view = unsafe { MapViewOfFile(map_handle, FILE_MAP_ALL_ACCESS, 0, 0, storage_size) };
 
     if view.Value.is_null() {
         unsafe { windows_sys::Win32::Foundation::CloseHandle(map_handle) };
-        panic!("MapViewOfFile failed for queue: {}", options.memory_view_name);
+        panic!(
+            "MapViewOfFile failed for queue: {}",
+            options.memory_view_name
+        );
     }
 
     let sem_handle = sem::open(&options.memory_view_name);
@@ -194,11 +189,14 @@ fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHand
 }
 
 #[cfg(windows)]
-fn create_or_open_file_mapping(name: &[u16], size: usize) -> windows_sys::Win32::Foundation::HANDLE {
+fn create_or_open_file_mapping(
+    name: &[u16],
+    size: usize,
+) -> windows_sys::Win32::Foundation::HANDLE {
     use std::ptr::null;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Memory::{
-        CreateFileMappingW, OpenFileMappingW, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+        CreateFileMappingW, FILE_MAP_ALL_ACCESS, OpenFileMappingW, PAGE_READWRITE,
     };
 
     let mut wait_retries: usize = 14;
@@ -220,13 +218,7 @@ fn create_or_open_file_mapping(name: &[u16], size: usize) -> windows_sys::Win32:
             return handle;
         }
 
-        let handle = unsafe {
-            OpenFileMappingW(
-                FILE_MAP_ALL_ACCESS,
-                0,
-                name.as_ptr(),
-            )
-        };
+        let handle = unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr()) };
 
         if handle != 0 && handle != -1 {
             return handle;

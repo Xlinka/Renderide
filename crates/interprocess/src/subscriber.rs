@@ -148,9 +148,8 @@ impl Subscriber {
                 let padded = padded_message_length(body_len);
 
                 // Mark as locked (state=1) - we're consuming
-                let state_ptr = unsafe {
-                    &*(&(*msg_header_ptr).state as *const i32 as *const AtomicI32)
-                };
+                let state_ptr =
+                    unsafe { &*(&(*msg_header_ptr).state as *const i32 as *const AtomicI32) };
                 state_ptr.store(1, Ordering::SeqCst);
 
                 let body_offset = read_offset + MESSAGE_BODY_OFFSET;

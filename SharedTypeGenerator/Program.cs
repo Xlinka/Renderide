@@ -15,11 +15,11 @@ GCSettings.LatencyMode = GCLatencyMode.Batch;
 using Logger logger = new(new LoggerConfiguration
 {
     Behaviour = new DirectLoggingBehaviour(),
-    #if DEBUG
+#if DEBUG
     MaxLevel = LogLevel.Trace,
-    #else
+#else
     MaxLevel = LogLevel.Info,
-    #endif
+#endif
 });
 
 Parser.Default.ParseArguments<GeneratorOptions>(args)

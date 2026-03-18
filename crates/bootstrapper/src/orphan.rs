@@ -14,8 +14,8 @@ use crate::paths;
 /// Excludes bootstrapper.exe since that would kill the current process.
 #[cfg(windows)]
 const ORPHAN_PROCESS_NAMES: &[&str] = &[
-    "renderide.exe",       // Renderide renderer
-    "Renderite.Host.exe",  // Host when run as self-contained exe
+    "renderide.exe",      // Renderide renderer
+    "Renderite.Host.exe", // Host when run as self-contained exe
 ];
 
 /// Kills orphaned Host/renderer processes from a previous crashed run.
@@ -76,7 +76,7 @@ fn process_exists(pid: u32) -> bool {
 #[cfg(windows)]
 fn kill_process(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess};
 
     let handle = unsafe { OpenProcess(PROCESS_TERMINATE, 0, pid) };
     if handle != 0 && handle != -1 {
@@ -92,10 +92,7 @@ fn kill_process(pid: u32) {
 #[cfg(windows)]
 fn kill_orphans_by_name() {
     for name in ORPHAN_PROCESS_NAMES {
-        if let Ok(output) = Command::new("taskkill")
-            .args(["/IM", name, "/F"])
-            .output()
-        {
+        if let Ok(output) = Command::new("taskkill").args(["/IM", name, "/F"]).output() {
             if output.status.success() {
                 logger::info!("Killed orphan process(es) by name: {}", name);
             }

@@ -89,7 +89,7 @@ mod imp {
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::System::Memory::{
-        MapViewOfFile, UnmapViewOfFile, FILE_MAP_ALL_ACCESS, FILE_MAP_WRITE,
+        FILE_MAP_ALL_ACCESS, FILE_MAP_WRITE, MapViewOfFile, UnmapViewOfFile,
     };
 
     use super::*;
@@ -104,7 +104,11 @@ mod imp {
 
     impl SharedMemoryView {
         pub fn new(prefix: &str, buffer_id: i32, capacity: i32) -> io::Result<Self> {
-            let name = format!("{}{}", MAP_NAME_PREFIX, compose_memory_view_name(prefix, buffer_id));
+            let name = format!(
+                "{}{}",
+                MAP_NAME_PREFIX,
+                compose_memory_view_name(prefix, buffer_id)
+            );
             let size = capacity as usize;
 
             let name_wide: Vec<u16> = OsStr::new(&name)
@@ -115,13 +119,7 @@ mod imp {
             let map_handle = create_or_open_file_mapping(&name_wide, size)?;
 
             let view = unsafe {
-                MapViewOfFile(
-                    map_handle,
-                    FILE_MAP_ALL_ACCESS | FILE_MAP_WRITE,
-                    0,
-                    0,
-                    size,
-                )
+                MapViewOfFile(map_handle, FILE_MAP_ALL_ACCESS | FILE_MAP_WRITE, 0, 0, size)
             };
 
             if view.Value.is_null() {
@@ -144,10 +142,7 @@ mod imp {
             let length = length as usize;
             if offset + length <= self.len && !self.view.Value.is_null() {
                 Some(unsafe {
-                    std::slice::from_raw_parts(
-                        self.view.Value.add(offset) as *const u8,
-                        length,
-                    )
+                    std::slice::from_raw_parts(self.view.Value.add(offset) as *const u8, length)
                 })
             } else {
                 None
@@ -159,10 +154,7 @@ mod imp {
             let length = length as usize;
             if offset + length <= self.len && !self.view.Value.is_null() {
                 Some(unsafe {
-                    std::slice::from_raw_parts_mut(
-                        self.view.Value.add(offset) as *mut u8,
-                        length,
-                    )
+                    std::slice::from_raw_parts_mut(self.view.Value.add(offset) as *mut u8, length)
                 })
             } else {
                 None
@@ -174,9 +166,8 @@ mod imp {
             let length = length as usize;
             if offset + length <= self.len && length > 0 && !self.view.Value.is_null() {
                 let base = unsafe { self.view.Value.add(offset) as *const std::ffi::c_void };
-                let _ = unsafe {
-                    windows_sys::Win32::System::Memory::FlushViewOfFile(base, length)
-                };
+                let _ =
+                    unsafe { windows_sys::Win32::System::Memory::FlushViewOfFile(base, length) };
             }
         }
 
@@ -204,7 +195,7 @@ mod imp {
         use std::ptr::null;
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Memory::{
-            CreateFileMappingW, OpenFileMappingW, FILE_MAP_ALL_ACCESS, PAGE_READWRITE,
+            CreateFileMappingW, FILE_MAP_ALL_ACCESS, OpenFileMappingW, PAGE_READWRITE,
         };
 
         let handle = unsafe {

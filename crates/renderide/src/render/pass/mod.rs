@@ -285,15 +285,16 @@ impl RenderGraph {
         };
 
         if let Some(ref mut ray_tracing) = ctx.gpu.ray_tracing_state
-            && let Some(ref accel) = ctx.gpu.accel_cache {
-                ray_tracing.tlas = crate::gpu::build_tlas(
-                    &ctx.gpu.device,
-                    &mut encoder,
-                    accel,
-                    ctx.draw_batches,
-                    &mut ray_tracing.instance_scratch,
-                );
-            }
+            && let Some(ref accel) = ctx.gpu.accel_cache
+        {
+            ray_tracing.tlas = crate::gpu::build_tlas(
+                &ctx.gpu.device,
+                &mut encoder,
+                accel,
+                ctx.draw_batches,
+                &mut ray_tracing.instance_scratch,
+            );
+        }
 
         let frame_index = ctx.pipeline_manager.advance_frame();
         let mut pass_ctx = RenderPassContext {
@@ -411,9 +412,9 @@ fn ensure_mesh_buffers(
                     if let Some(ref mut accel) = gpu.accel_cache
                         && let Some(blas) =
                             crate::gpu::build_blas_for_mesh(&gpu.device, &gpu.queue, mesh, &b)
-                        {
-                            accel.insert(d.mesh_asset_id, blas);
-                        }
+                    {
+                        accel.insert(d.mesh_asset_id, blas);
+                    }
                 }
             }
         }

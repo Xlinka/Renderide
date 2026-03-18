@@ -49,9 +49,7 @@ mod imp {
     pub fn open(name: &str) -> Handle {
         let full_name = format!("{}{}", HANDLE_NAME_PREFIX, name);
         let name_wide = to_wide(&full_name);
-        let handle = unsafe {
-            CreateSemaphoreW(null_mut(), 0, i32::MAX, name_wide.as_ptr())
-        };
+        let handle = unsafe { CreateSemaphoreW(null_mut(), 0, i32::MAX, name_wide.as_ptr()) };
         if handle == 0 || handle == -1 {
             panic!("Failed to open semaphore: {}", name);
         }

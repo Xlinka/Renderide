@@ -242,19 +242,16 @@ impl RenderideApp {
             let collect_us = t1.elapsed().as_micros() as u64;
 
             let t2 = Instant::now();
-            let render_result = render_loop.render_frame(
-                gpu,
-                &self.session,
-                &draw_batches,
-                Some(&pre_collected),
-            );
+            let render_result =
+                render_loop.render_frame(gpu, &self.session, &draw_batches, Some(&pre_collected));
             let render_us = t2.elapsed().as_micros() as u64;
 
             let t3 = Instant::now();
             if let Ok(target) = render_result
-                && let Some(surface_texture) = target.into_surface_texture() {
-                    surface_texture.present();
-                }
+                && let Some(surface_texture) = target.into_surface_texture()
+            {
+                surface_texture.present();
+            }
             let present_us = t3.elapsed().as_micros() as u64;
 
             let total_us = frame_start.elapsed().as_micros() as u64;

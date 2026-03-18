@@ -49,15 +49,15 @@ public static class PackEmitter
                 break;
 
             case PackedBools pb:
-            {
-                var args = new List<string>();
-                foreach (string name in pb.FieldNames)
-                    args.Add($"self.{name}");
-                while (args.Count < 8)
-                    args.Add("false");
-                w.Line($"packer.write_packed_bools({string.Join(", ", args)});");
-                break;
-            }
+                {
+                    var args = new List<string>();
+                    foreach (string name in pb.FieldNames)
+                        args.Add($"self.{name}");
+                    while (args.Count < 8)
+                        args.Add("false");
+                    w.Line($"packer.write_packed_bools({string.Join(", ", args)});");
+                    break;
+                }
 
             case CallBase:
                 // Base steps are inlined during analysis, so this shouldn't normally appear
@@ -70,14 +70,14 @@ public static class PackEmitter
                 break;
 
             case ConditionalBlock cb:
-            {
-                using (w.BeginIf($"self.{cb.ConditionField}"))
                 {
-                    foreach (SerializationStep inner in cb.Steps)
-                        EmitPackStep(w, inner, fields);
+                    using (w.BeginIf($"self.{cb.ConditionField}"))
+                    {
+                        foreach (SerializationStep inner in cb.Steps)
+                            EmitPackStep(w, inner, fields);
+                    }
+                    break;
                 }
-                break;
-            }
         }
     }
 
@@ -90,33 +90,33 @@ public static class PackEmitter
                 break;
 
             case PackedBools pb:
-            {
-                var fieldNames = pb.FieldNames.ToList();
-                while (fieldNames.Count < 8)
-                    fieldNames.Add("_");
-
-                w.Line("let __p = unpacker.read_packed_bools();");
-                for (int i = 0; i < 8; i++)
                 {
-                    if (fieldNames[i] != "_")
-                        w.Line($"self.{fieldNames[i]} = __p.bit{i};");
+                    var fieldNames = pb.FieldNames.ToList();
+                    while (fieldNames.Count < 8)
+                        fieldNames.Add("_");
+
+                    w.Line("let __p = unpacker.read_packed_bools();");
+                    for (int i = 0; i < 8; i++)
+                    {
+                        if (fieldNames[i] != "_")
+                            w.Line($"self.{fieldNames[i]} = __p.bit{i};");
+                    }
+                    break;
                 }
-                break;
-            }
 
             case CallBase:
                 w.Fixme("CallBase should have been inlined during analysis");
                 break;
 
             case ConditionalBlock cb:
-            {
-                using (w.BeginIf($"self.{cb.ConditionField}"))
                 {
-                    foreach (SerializationStep inner in cb.Steps)
-                        EmitUnpackStep(w, inner, fields);
+                    using (w.BeginIf($"self.{cb.ConditionField}"))
+                    {
+                        foreach (SerializationStep inner in cb.Steps)
+                            EmitUnpackStep(w, inner, fields);
+                    }
+                    break;
                 }
-                break;
-            }
 
             case TimestampNow ts:
                 w.Line($"self.{ts.FieldName} = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as i128;");

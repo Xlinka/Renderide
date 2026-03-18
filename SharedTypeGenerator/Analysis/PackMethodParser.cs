@@ -94,85 +94,85 @@ public class PackMethodParser
         switch (callRef.Name)
         {
             case "Write" when callRef.Parameters.Count == 1:
-            {
-                string name = PopLastField(fieldNameStack);
-                string rustName = name.HumanizeField();
-                FieldInfo? field = FindField(fields, rustName);
-                FieldKind kind = field != null
-                    ? _classifier.Classify(field.FieldType, "Write")
-                    : FieldKind.Pod;
-                steps.Add(new WriteField(rustName, kind));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    string rustName = name.HumanizeField();
+                    FieldInfo? field = FindField(fields, rustName);
+                    FieldKind kind = field != null
+                        ? _classifier.Classify(field.FieldType, "Write")
+                        : FieldKind.Pod;
+                    steps.Add(new WriteField(rustName, kind));
+                    break;
+                }
 
             case "Write" when callRef.Parameters.All(p => p.ParameterType.Name == "Boolean"):
-            {
-                var boolNames = fieldNameStack.Reverse().Select(n => n.HumanizeField()).ToList();
-                fieldNameStack.Clear();
-                steps.Add(new PackedBools(boolNames));
-                break;
-            }
+                {
+                    var boolNames = fieldNameStack.Reverse().Select(n => n.HumanizeField()).ToList();
+                    fieldNameStack.Clear();
+                    steps.Add(new PackedBools(boolNames));
+                    break;
+                }
 
             case "WriteObject":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.Object));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.Object));
+                    break;
+                }
 
             case "WriteObjectRequired":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectRequired));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectRequired));
+                    break;
+                }
 
             case "WriteValueList":
             case "WriteEnumValueList":
-            {
-                string name = PopLastField(fieldNameStack);
-                string rustName = name.HumanizeField();
-                FieldInfo? field = FindField(fields, rustName);
-                FieldKind kind = field != null
-                    ? _classifier.Classify(field.FieldType, "WriteValueList")
-                    : FieldKind.ValueList;
-                steps.Add(new WriteField(rustName, kind));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    string rustName = name.HumanizeField();
+                    FieldInfo? field = FindField(fields, rustName);
+                    FieldKind kind = field != null
+                        ? _classifier.Classify(field.FieldType, "WriteValueList")
+                        : FieldKind.ValueList;
+                    steps.Add(new WriteField(rustName, kind));
+                    break;
+                }
 
             case "WriteObjectList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectList));
+                    break;
+                }
 
             case "WritePolymorphicList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.PolymorphicList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.PolymorphicList));
+                    break;
+                }
 
             case "WriteStringList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.StringList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.StringList));
+                    break;
+                }
 
             case "WriteNestedValueList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.NestedValueList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.NestedValueList));
+                    break;
+                }
 
             case "Pack" or "Unpack":
-            {
-                steps.Add(new CallBase());
-                break;
-            }
+                {
+                    steps.Add(new CallBase());
+                    break;
+                }
 
             // Read-side methods -- we only parse Pack, so these shouldn't appear,
             // but handle gracefully by treating them identically to their Write counterparts.
@@ -312,85 +312,85 @@ public class PackMethodParser
         switch (callRef.Name)
         {
             case "Write" when callRef.Parameters.Count == 1:
-            {
-                string name = PopLastField(fieldNameStack);
-                string rustName = name.HumanizeField();
-                FieldInfo? field = FindField(fields, rustName);
-                FieldKind kind = field != null
-                    ? _classifier.Classify(field.FieldType, "Write")
-                    : FieldKind.Pod;
-                steps.Add(new WriteField(rustName, kind));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    string rustName = name.HumanizeField();
+                    FieldInfo? field = FindField(fields, rustName);
+                    FieldKind kind = field != null
+                        ? _classifier.Classify(field.FieldType, "Write")
+                        : FieldKind.Pod;
+                    steps.Add(new WriteField(rustName, kind));
+                    break;
+                }
 
             case "Write" when callRef.Parameters.All(p => p.ParameterType.Name == "Boolean"):
-            {
-                var boolNames = fieldNameStack.Reverse().Select(n => n.HumanizeField()).ToList();
-                fieldNameStack.Clear();
-                steps.Add(new PackedBools(boolNames));
-                break;
-            }
+                {
+                    var boolNames = fieldNameStack.Reverse().Select(n => n.HumanizeField()).ToList();
+                    fieldNameStack.Clear();
+                    steps.Add(new PackedBools(boolNames));
+                    break;
+                }
 
             case "WriteObject":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.Object));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.Object));
+                    break;
+                }
 
             case "WriteObjectRequired":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectRequired));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectRequired));
+                    break;
+                }
 
             case "WriteValueList":
             case "WriteEnumValueList":
-            {
-                string name = PopLastField(fieldNameStack);
-                string rustName = name.HumanizeField();
-                FieldInfo? field = FindField(fields, rustName);
-                FieldKind kind = field != null
-                    ? _classifier.Classify(field.FieldType, "WriteValueList")
-                    : FieldKind.ValueList;
-                steps.Add(new WriteField(rustName, kind));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    string rustName = name.HumanizeField();
+                    FieldInfo? field = FindField(fields, rustName);
+                    FieldKind kind = field != null
+                        ? _classifier.Classify(field.FieldType, "WriteValueList")
+                        : FieldKind.ValueList;
+                    steps.Add(new WriteField(rustName, kind));
+                    break;
+                }
 
             case "WriteObjectList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.ObjectList));
+                    break;
+                }
 
             case "WritePolymorphicList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.PolymorphicList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.PolymorphicList));
+                    break;
+                }
 
             case "WriteStringList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.StringList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.StringList));
+                    break;
+                }
 
             case "WriteNestedValueList":
-            {
-                string name = PopLastField(fieldNameStack);
-                steps.Add(new WriteField(name.HumanizeField(), FieldKind.NestedValueList));
-                break;
-            }
+                {
+                    string name = PopLastField(fieldNameStack);
+                    steps.Add(new WriteField(name.HumanizeField(), FieldKind.NestedValueList));
+                    break;
+                }
 
             case "Pack" or "Unpack":
-            {
-                steps.Add(new CallBase());
-                break;
-            }
+                {
+                    steps.Add(new CallBase());
+                    break;
+                }
         }
     }
 

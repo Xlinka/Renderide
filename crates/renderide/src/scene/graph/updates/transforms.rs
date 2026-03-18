@@ -67,9 +67,10 @@ pub(crate) fn apply_transforms_update(
                 entry.node_id = fixup_transform_id(entry.node_id, removed_id, last_index);
             }
             if idx != last_index
-                && let Some(layer) = scene.layer_assignments.remove(&(last_index as i32)) {
-                    scene.layer_assignments.insert(removed_id, layer);
-                }
+                && let Some(layer) = scene.layer_assignments.remove(&(last_index as i32))
+            {
+                scene.layer_assignments.insert(removed_id, layer);
+            }
             scene.layer_assignments.remove(&removed_id);
             transform_removals.push((removed_id, last_index));
 

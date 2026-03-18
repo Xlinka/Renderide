@@ -110,7 +110,10 @@ pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<C
             if !host_dll.exists() {
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::NotFound,
-                    format!("Renderite.Host.dll not found at {:?}. Ensure Resonite with Renderite mod is installed.", host_dll),
+                    format!(
+                        "Renderite.Host.dll not found at {:?}. Ensure Resonite with Renderite mod is installed.",
+                        host_dll
+                    ),
                 ));
             }
             logger::info!("Using dotnet at {:?} to run Renderite.Host.dll", dotnet);

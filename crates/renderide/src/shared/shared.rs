@@ -8,7 +8,7 @@
     clippy::unnecessary_cast,
     unused_parens,
     clippy::large_enum_variant,
-    clippy::option_as_ref_deref
+    clippy::option_as_ref_deref,
 )]
 
 use nalgebra::{Vector2, Vector3, Vector4, Quaternion, Matrix4};

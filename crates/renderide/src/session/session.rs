@@ -530,14 +530,15 @@ fn filter_and_collect_drawables(
                 continue;
             }
             if let Some(mesh) = asset_registry.get_mesh(entry.mesh_handle)
-                && mesh.bind_poses.as_ref().is_none_or(|b| b.is_empty()) {
-                    logger::trace!(
-                        "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
-                        entry.mesh_handle,
-                        entry.node_id
-                    );
-                    continue;
-                }
+                && mesh.bind_poses.as_ref().is_none_or(|b| b.is_empty())
+            {
+                logger::trace!(
+                    "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
+                    entry.mesh_handle,
+                    entry.node_id
+                );
+                continue;
+            }
         }
         let idx = entry.node_id as usize;
         let world_matrix = match scene_graph.get_world_matrix(space_id, idx) {
@@ -566,26 +567,25 @@ fn filter_and_collect_drawables(
 
         let pipeline_variant = if scene.is_overlay {
             if let Some(ref stencil) = drawable.stencil_state {
-                
                 if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
-                        if is_skinned {
-                            PipelineVariant::OverlayStencilMaskWriteSkinned
-                        } else {
-                            PipelineVariant::OverlayStencilMaskWrite
-                        }
-                    } else if stencil.pass_op == StencilOperation::Zero {
-                        if is_skinned {
-                            PipelineVariant::OverlayStencilMaskClearSkinned
-                        } else {
-                            PipelineVariant::OverlayStencilMaskClear
-                        }
+                    if is_skinned {
+                        PipelineVariant::OverlayStencilMaskWriteSkinned
                     } else {
-                        if is_skinned {
-                            PipelineVariant::OverlayStencilSkinned
-                        } else {
-                            PipelineVariant::OverlayStencilContent
-                        }
+                        PipelineVariant::OverlayStencilMaskWrite
                     }
+                } else if stencil.pass_op == StencilOperation::Zero {
+                    if is_skinned {
+                        PipelineVariant::OverlayStencilMaskClearSkinned
+                    } else {
+                        PipelineVariant::OverlayStencilMaskClear
+                    }
+                } else {
+                    if is_skinned {
+                        PipelineVariant::OverlayStencilSkinned
+                    } else {
+                        PipelineVariant::OverlayStencilContent
+                    }
+                }
             } else if is_skinned {
                 PipelineVariant::Skinned
             } else {
