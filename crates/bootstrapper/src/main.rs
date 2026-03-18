@@ -16,11 +16,14 @@ const BOOTSTRAPPER_LOG: &str = "logs/Bootstrapper.log";
 fn main() {
     let _ = std::fs::create_dir_all("logs");
     let (host_args, log_level) = config::parse_args();
-    logger::init(
+    if let Err(e) = logger::init(
         BOOTSTRAPPER_LOG,
         log_level.unwrap_or(LogLevel::Trace),
         false,
-    );
+    ) {
+        eprintln!("Failed to initialize logging to {}: {}", BOOTSTRAPPER_LOG, e);
+        std::process::exit(1);
+    }
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

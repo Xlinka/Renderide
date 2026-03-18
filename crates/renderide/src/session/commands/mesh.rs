@@ -8,12 +8,12 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct MeshCommandHandler;
 
 impl CommandHandler for MeshCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::mesh_upload_data(data) => {
                 let asset_id = data.asset_id;
-                let (success, existed_before) = match ctx.shared_memory {
-                    Some(shm) => ctx.asset_registry.handle_mesh_upload(shm, data),
+                let (success, existed_before) = match ctx.assets.shared_memory {
+                    Some(shm) => ctx.assets.asset_registry.handle_mesh_upload(shm, data.clone()),
                     None => (false, false),
                 };
                 if success {
@@ -26,8 +26,8 @@ impl CommandHandler for MeshCommandHandler {
                 CommandResult::Handled
             }
             RendererCommand::mesh_unload(x) => {
-                ctx.asset_registry.handle_mesh_unload(x.asset_id);
-                ctx.pending_mesh_unloads.push(x.asset_id);
+                ctx.assets.asset_registry.handle_mesh_unload(x.asset_id);
+                ctx.frame.pending_mesh_unloads.push(x.asset_id);
                 CommandResult::Handled
             }
             _ => CommandResult::Ignored,

@@ -287,21 +287,21 @@ impl RenderPass for RtaoComputePass {
         let norm_view = match ctx.render_target.mrt_normal_view {
             Some(v) => v,
             None => {
-                logger::warn!("RTAO compute skipped: mrt_normal_view is None");
+                logger::trace!("RTAO compute skipped: mrt_normal_view is None");
                 return Ok(());
             }
         };
         let ao_raw_view = match ctx.render_target.mrt_ao_raw_view {
             Some(v) => v,
             None => {
-                logger::warn!("RTAO compute skipped: mrt_ao_raw_view is None");
+                logger::trace!("RTAO compute skipped: mrt_ao_raw_view is None");
                 return Ok(());
             }
         };
         let ao_view = match ctx.render_target.mrt_ao_view {
             Some(v) => v,
             None => {
-                logger::warn!("RTAO compute skipped: mrt_ao_view is None");
+                logger::trace!("RTAO compute skipped: mrt_ao_view is None");
                 return Ok(());
             }
         };
@@ -309,7 +309,7 @@ impl RenderPass for RtaoComputePass {
             Some(rt) => match &rt.tlas {
                 Some(t) => t,
                 None => {
-                    logger::warn!(
+                    logger::trace!(
                         "RTAO compute skipped: TLAS is None (no non-overlay non-skinned geometry with BLAS)"
                     );
                     self.clear_ao_to_visibility(
@@ -322,7 +322,7 @@ impl RenderPass for RtaoComputePass {
                 }
             },
             None => {
-                logger::warn!("RTAO compute skipped: ray_tracing_state is None");
+                logger::trace!("RTAO compute skipped: ray_tracing_state is None");
                 self.clear_ao_to_visibility(&ctx.gpu.device, ctx.encoder, ao_view, ctx.viewport);
                 return Ok(());
             }
@@ -331,7 +331,7 @@ impl RenderPass for RtaoComputePass {
         let (pipeline, bgl) = match self.ensure_pipeline(&ctx.gpu.device) {
             Some((p, b)) => (p, b),
             None => {
-                logger::warn!("RTAO compute skipped: pipeline creation failed (shader compile?)");
+                logger::trace!("RTAO compute skipped: pipeline creation failed (shader compile?)");
                 self.clear_ao_to_visibility(&ctx.gpu.device, ctx.encoder, ao_view, ctx.viewport);
                 return Ok(());
             }

@@ -8,11 +8,11 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct ShaderCommandHandler;
 
 impl CommandHandler for ShaderCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::shader_upload(data) => {
                 let asset_id = data.asset_id;
-                let (success, existed_before) = ctx.asset_registry.handle_shader_upload(data);
+                let (success, existed_before) = ctx.assets.asset_registry.handle_shader_upload(data.clone());
                 if success {
                     ctx.receiver
                         .send_background(RendererCommand::shader_upload_result(

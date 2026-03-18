@@ -9,8 +9,8 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct ConfigCommandHandler;
 
 impl CommandHandler for ConfigCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
-        if !*ctx.init_finalized {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+        if !ctx.session_flags.init_state.is_finalized() {
             return CommandResult::Ignored;
         }
         match cmd {

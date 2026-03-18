@@ -71,7 +71,7 @@ All logs under `logs/` (relative to bootstrapper CWD or repo root). Truncated at
 **Renderide verbosity:** Pass `--log-level <level>` or `-l <level>` to the bootstrapper to control `logs/Renderide.log` verbosity. Levels: `error`, `warn`, `info`, `debug`, `trace` (default). The bootstrapper forwards this to Renderide when spawning.
 
 ```bash
-cargo run --bin bootstrapper -- --log-level info
+cargo run --bin bootstrapper -- --log-level debug
 ```
 
 | Log | Path | Created By |

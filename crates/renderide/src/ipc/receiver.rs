@@ -130,12 +130,16 @@ fn create_subscriber(params: &ConnectionParams, suffix: &str) -> Result<Subscrib
     let queue_name = format!("{}{}A", params.queue_name, suffix);
     let options = QueueOptions::new(&queue_name, params.queue_capacity);
     let factory = QueueFactory::new();
-    Ok(factory.create_subscriber(options))
+    factory
+        .create_subscriber(options)
+        .map_err(|e| InitError::IpcConnect(e.to_string()))
 }
 
 fn create_publisher(params: &ConnectionParams, suffix: &str) -> Result<Publisher, InitError> {
     let queue_name = format!("{}{}S", params.queue_name, suffix);
     let options = QueueOptions::new(&queue_name, params.queue_capacity);
     let factory = QueueFactory::new();
-    Ok(factory.create_publisher(options))
+    factory
+        .create_publisher(options)
+        .map_err(|e| InitError::IpcConnect(e.to_string()))
 }

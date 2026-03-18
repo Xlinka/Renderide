@@ -99,12 +99,12 @@ impl QueueFactory {
     }
 
     /// Creates a Subscriber that reads from the queue.
-    pub fn create_subscriber(&self, options: QueueOptions) -> super::Subscriber {
+    pub fn create_subscriber(&self, options: QueueOptions) -> Result<super::Subscriber, super::BackingError> {
         super::Subscriber::new(options)
     }
 
     /// Creates a Publisher that writes to the queue.
-    pub fn create_publisher(&self, options: QueueOptions) -> super::Publisher {
+    pub fn create_publisher(&self, options: QueueOptions) -> Result<super::Publisher, super::BackingError> {
         super::Publisher::new(options)
     }
 }

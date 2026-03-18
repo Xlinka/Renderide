@@ -17,8 +17,7 @@ use crate::input::{WindowInputState, winit_key_to_renderite_key};
 use crate::render::{RenderLoop, RenderingContext, set_context};
 use crate::session::Session;
 
-/// Target frame interval when focused (240 Hz). Used with WaitUntil if not using Poll.
-#[allow(dead_code)]
+/// Target frame interval when focused (240 Hz). Throttles redraws when using WaitUntil.
 const FOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 240);
 /// Target frame interval when unfocused (60 Hz).
 const UNFOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 60);
@@ -39,11 +38,14 @@ fn renderide_log_path() -> std::path::PathBuf {
 /// Returns the exit code if the session requested one, otherwise runs until the window is closed.
 pub fn run() -> Option<i32> {
     let path = renderide_log_path();
-    logger::init(
+    if let Err(e) = logger::init(
         &path,
         logger::parse_log_level_from_args().unwrap_or(LogLevel::Trace),
         true,
-    );
+    ) {
+        eprintln!("Failed to initialize logging to {}: {}", path.display(), e);
+        return Some(1);
+    }
     logger::info!("Logging to {}", path.display());
 
     let default_hook = std::panic::take_hook();
@@ -56,7 +58,8 @@ pub fn run() -> Option<i32> {
     let event_loop = EventLoop::new().unwrap();
     let mut app = RenderideApp::new();
 
-    if let Err(_e) = app.session.init() {
+    if let Err(e) = app.session.init() {
+        logger::error!("Session init failed: {}", e);
         return Some(1);
     }
 
@@ -412,7 +415,9 @@ impl ApplicationHandler for RenderideApp {
             if self.input.window_focused {
                 self.last_unfocused_redraw = None;
                 window.request_redraw();
-                event_loop.set_control_flow(ControlFlow::Poll);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(
+                    Instant::now() + FOCUSED_TARGET_INTERVAL,
+                ));
             } else {
                 event_loop.set_control_flow(ControlFlow::WaitUntil(
                     Instant::now() + UNFOCUSED_TARGET_INTERVAL,

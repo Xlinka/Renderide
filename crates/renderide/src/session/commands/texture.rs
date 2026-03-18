@@ -10,7 +10,7 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct TextureCommandHandler;
 
 impl CommandHandler for TextureCommandHandler {
-    fn handle(&mut self, _cmd: RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, _cmd: &RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
         CommandResult::Ignored
     }
 }

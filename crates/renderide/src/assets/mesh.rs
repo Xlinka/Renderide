@@ -55,8 +55,8 @@ pub fn attribute_offset_size_format(
     None
 }
 
-#[allow(dead_code)]
-fn compute_index_count(submeshes: &[SubmeshBufferDescriptor]) -> i32 {
+/// Computes total index count from submeshes (max of index_start + index_count across submeshes).
+pub fn compute_index_count(submeshes: &[SubmeshBufferDescriptor]) -> i32 {
     submeshes
         .iter()
         .map(|s| s.index_start + s.index_count)
@@ -64,8 +64,8 @@ fn compute_index_count(submeshes: &[SubmeshBufferDescriptor]) -> i32 {
         .unwrap_or(0)
 }
 
-#[allow(dead_code)]
-fn index_bytes_per_element(format: IndexBufferFormat) -> i32 {
+/// Returns bytes per index element for the given format.
+pub fn index_bytes_per_element(format: IndexBufferFormat) -> i32 {
     match format {
         IndexBufferFormat::u_int16 => 2,
         IndexBufferFormat::u_int32 => 4,

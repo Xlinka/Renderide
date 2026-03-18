@@ -8,14 +8,14 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct ShutdownCommandHandler;
 
 impl CommandHandler for ShutdownCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
-        if !*ctx.init_finalized {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+        if !ctx.session_flags.init_state.is_finalized() {
             return CommandResult::Ignored;
         }
         match cmd {
             RendererCommand::renderer_shutdown(_)
             | RendererCommand::renderer_shutdown_request(_) => {
-                *ctx.shutdown = true;
+                *ctx.session_flags.shutdown = true;
                 CommandResult::Handled
             }
             _ => CommandResult::Ignored,

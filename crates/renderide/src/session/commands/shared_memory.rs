@@ -8,10 +8,10 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct FreeSharedMemoryCommandHandler;
 
 impl CommandHandler for FreeSharedMemoryCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::free_shared_memory_view(x) => {
-                if let Some(shm) = ctx.shared_memory.as_mut() {
+                if let Some(shm) = ctx.assets.shared_memory.as_mut() {
                     shm.release_view(x.buffer_id);
                 }
                 CommandResult::Handled

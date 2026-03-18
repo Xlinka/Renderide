@@ -2,6 +2,8 @@
 //! Unix: file-backed mmap at /dev/shm. Windows: named CreateFileMapping (CT_IP_{name}), like zinterprocess.
 
 mod backend;
+
+pub use backend::BackingError;
 mod circular_buffer;
 mod publisher;
 mod queue;

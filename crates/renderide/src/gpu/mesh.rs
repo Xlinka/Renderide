@@ -217,6 +217,7 @@ fn half_to_f32(h: u16) -> f32 {
 }
 
 /// Fallback cube with position+normal for normal debug pipeline (8 vertices, 12 triangles, 36 indices).
+/// Reserved for fallback rendering when mesh geometry is missing.
 #[allow(dead_code)]
 fn fallback_cube_pos_normal() -> (Vec<VertexPosNormal>, Vec<u16>) {
     let s = 0.5f32;
@@ -263,6 +264,7 @@ fn fallback_cube_pos_normal() -> (Vec<VertexPosNormal>, Vec<u16>) {
 }
 
 /// Fallback cube mesh (8 vertices, 12 triangles, 36 indices).
+/// Reserved for fallback rendering when mesh geometry is missing.
 #[allow(dead_code)]
 fn fallback_cube() -> (Vec<Vertex>, Vec<u16>) {
     let s = 0.5f32;
@@ -300,6 +302,7 @@ fn fallback_cube() -> (Vec<Vertex>, Vec<u16>) {
 }
 
 /// Fallback cube with UVs for UV debug shader.
+/// Reserved for fallback rendering when mesh geometry is missing.
 #[allow(dead_code)]
 fn fallback_cube_with_uv() -> (Vec<VertexWithUv>, Vec<u16>) {
     let s = 0.5f32;

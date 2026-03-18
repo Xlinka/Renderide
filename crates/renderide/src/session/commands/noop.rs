@@ -8,7 +8,7 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct NoopCommandHandler;
 
 impl CommandHandler for NoopCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::keep_alive(_)
             | RendererCommand::renderer_init_progress_update(_)

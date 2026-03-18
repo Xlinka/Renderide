@@ -20,14 +20,14 @@ const MATERIAL_PROPERTY_UPDATE_SIZE: usize = size_of::<MaterialPropertyUpdate>()
 pub struct MaterialCommandHandler;
 
 impl CommandHandler for MaterialCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::materials_update_batch(batch) => {
-                if let Some(shm) = ctx.shared_memory.as_mut() {
+                if let Some(shm) = ctx.assets.shared_memory.as_mut() {
                     parse_and_store_materials_batch(
                         shm,
                         &batch,
-                        &mut ctx.asset_registry.material_property_store,
+                        &mut ctx.assets.asset_registry.material_property_store,
                     );
                     ctx.receiver
                         .send_background(RendererCommand::materials_update_batch_result(
@@ -39,7 +39,7 @@ impl CommandHandler for MaterialCommandHandler {
                 CommandResult::Handled
             }
             RendererCommand::unload_material_property_block(cmd) => {
-                ctx.asset_registry
+                ctx.assets.asset_registry
                     .material_property_store
                     .remove_block(cmd.asset_id);
                 CommandResult::Handled

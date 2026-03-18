@@ -5,7 +5,7 @@ use crate::shared::{MeshUploadData, ShaderUpload};
 
 use super::manager::AssetManager;
 use super::material_properties::MaterialPropertyStore;
-use super::mesh::{self, MeshAsset};
+use super::mesh::{self, index_bytes_per_element, compute_index_count, MeshAsset};
 use super::shader::ShaderAsset;
 use super::texture::TextureAsset;
 
@@ -13,7 +13,7 @@ use super::texture::TextureAsset;
 /// Extensible for textures, materials, video, etc.
 pub struct AssetRegistry {
     meshes: AssetManager<MeshAsset>,
-    #[allow(dead_code)]
+    /// Texture storage. Reserved for future texture upload support.
     textures: AssetManager<TextureAsset>,
     shaders: AssetManager<ShaderAsset>,
     /// Material property values per block (from MaterialsUpdateBatch).
@@ -45,6 +45,11 @@ impl AssetRegistry {
         self.shaders.get(handle)
     }
 
+    /// Returns a texture by handle. Reserved for future texture support.
+    pub fn get_texture(&self, handle: i32) -> Option<&TextureAsset> {
+        self.textures.get(handle)
+    }
+
     /// Number of mesh assets in the registry.
     pub fn mesh_count(&self) -> usize {
         self.meshes.len()
@@ -65,16 +70,8 @@ impl AssetRegistry {
             return (false, false);
         }
         let vertex_stride = mesh::compute_vertex_stride(&data.vertex_attributes);
-        let index_count = data
-            .submeshes
-            .iter()
-            .map(|s| s.index_start + s.index_count)
-            .max()
-            .unwrap_or(0);
-        let index_bytes = match data.index_buffer_format {
-            crate::shared::IndexBufferFormat::u_int16 => 2,
-            crate::shared::IndexBufferFormat::u_int32 => 4,
-        };
+        let index_count = compute_index_count(&data.submeshes);
+        let index_bytes = index_bytes_per_element(data.index_buffer_format);
         let use_blendshapes =
             data.upload_hint.flags.blendshapes() && !data.blendshape_buffers.is_empty();
         let layout = match mesh::compute_mesh_buffer_layout(

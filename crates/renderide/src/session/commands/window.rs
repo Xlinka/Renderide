@@ -10,7 +10,7 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct WindowCommandHandler;
 
 impl CommandHandler for WindowCommandHandler {
-    fn handle(&mut self, _cmd: RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, _cmd: &RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
         CommandResult::Ignored
     }
 }

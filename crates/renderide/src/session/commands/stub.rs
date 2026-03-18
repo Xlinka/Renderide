@@ -12,7 +12,7 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct StubCommandHandler;
 
 impl CommandHandler for StubCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, _ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             // --- Handled by earlier handlers; should not reach here ---
             RendererCommand::renderer_init_data(_)

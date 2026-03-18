@@ -24,15 +24,15 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    /// Creates a new Publisher. Panics if the queue file or semaphore cannot be opened.
-    pub fn new(options: QueueOptions) -> Self {
-        let (backing, sem_handle) = backend::open_queue_backing(&options);
-        Self {
+    /// Creates a new Publisher. Returns error if the queue file or mmap cannot be opened.
+    pub fn new(options: QueueOptions) -> Result<Self, crate::BackingError> {
+        let (backing, sem_handle) = backend::open_queue_backing(&options)?;
+        Ok(Self {
             backing,
             capacity: options.capacity,
             sem_handle,
             destroy_on_dispose: options.destroy_on_dispose,
-        }
+        })
     }
 
     fn header_mut(&mut self) -> *mut crate::queue::QueueHeader {

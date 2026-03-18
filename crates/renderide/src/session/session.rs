@@ -14,9 +14,10 @@ use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::render::batch::{DrawEntry, SpaceDrawBatch};
 use crate::render::{RenderLoop, RenderTaskExecutor};
 use crate::scene::{Drawable, Scene, SceneGraph, render_transform_to_matrix};
-use crate::session::commands::{CommandContext, CommandDispatcher, CommandResult};
+use crate::session::commands::{AssetContext, CommandContext, CommandDispatcher, CommandResult, FrameContext, SessionFlags};
+use crate::session::frame_data::{apply_clip_and_output_state, select_primary_view, validate_active_non_overlay};
 use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
-use crate::session::state::ViewState;
+use crate::session::state::{InitState, ViewState};
 use crate::shared::VertexAttributeType;
 use crate::shared::{FrameStartData, FrameSubmitData, InputState, LayerType, RendererCommand};
 use crate::stencil::{StencilOperation, StencilState};
@@ -29,8 +30,7 @@ pub struct Session {
     view_state: ViewState,
     shared_memory: Option<SharedMemoryAccessor>,
     dispatcher: CommandDispatcher,
-    init_received: bool,
-    init_finalized: bool,
+    init_state: InitState,
     is_standalone: bool,
     shutdown: bool,
     fatal_error: bool,
@@ -63,8 +63,7 @@ impl Session {
             view_state: ViewState::default(),
             shared_memory: None,
             dispatcher: CommandDispatcher::new(),
-            init_received: false,
-            init_finalized: false,
+            init_state: InitState::Uninitialized,
             is_standalone: false,
             shutdown: false,
             fatal_error: false,
@@ -93,14 +92,14 @@ impl Session {
 
         if get_connection_parameters().is_none() {
             self.is_standalone = true;
-            self.init_finalized = true;
+            self.init_state = InitState::Finalized;
             return Ok(());
         }
 
         self.receiver.connect()?;
         if !self.receiver.is_connected() {
             self.is_standalone = true;
-            self.init_finalized = true;
+            self.init_state = InitState::Finalized;
         }
         Ok(())
     }
@@ -123,7 +122,7 @@ impl Session {
     fn handle_update(&mut self) {
         self.process_commands();
 
-        if self.init_finalized && !self.fatal_error {
+        if self.init_state.is_finalized() && !self.fatal_error {
             let bootstrap = self.last_frame_index < 0 && !self.sent_bootstrap_frame_start;
             let should_send = self.last_frame_data_processed || bootstrap;
             if should_send && self.receiver.is_connected() {
@@ -155,36 +154,41 @@ impl Session {
 
     fn apply_command(&mut self, cmd: RendererCommand) {
         let mut ctx = CommandContext {
-            shared_memory: &mut self.shared_memory,
-            asset_registry: &mut self.asset_registry,
+            assets: AssetContext {
+                shared_memory: &mut self.shared_memory,
+                asset_registry: &mut self.asset_registry,
+            },
+            session_flags: SessionFlags {
+                init_state: &mut self.init_state,
+                shutdown: &mut self.shutdown,
+                fatal_error: &mut self.fatal_error,
+                last_frame_data_processed: &mut self.last_frame_data_processed,
+            },
+            frame: FrameContext {
+                pending_mesh_unloads: &mut self.pending_mesh_unloads,
+                pending_frame_data: None,
+            },
             scene_graph: &mut self.scene_graph,
             view_state: &mut self.view_state,
             receiver: &mut self.receiver,
-            init_received: &mut self.init_received,
-            init_finalized: &mut self.init_finalized,
-            shutdown: &mut self.shutdown,
-            fatal_error: &mut self.fatal_error,
-            last_frame_data_processed: &mut self.last_frame_data_processed,
-            pending_mesh_unloads: &mut self.pending_mesh_unloads,
             render_config: &mut self.render_config,
             lock_cursor: &mut self.lock_cursor,
-            pending_frame_data: None,
         };
 
-        let result = self.dispatcher.dispatch(cmd, &mut ctx);
+        let result = self.dispatcher.dispatch(&cmd, &mut ctx);
 
         if result == CommandResult::FatalError {
             self.fatal_error = true;
             return;
         }
 
-        if let Some(data) = ctx.pending_frame_data {
+        if let Some(data) = ctx.frame.pending_frame_data {
             if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.process_frame_data(data);
             })) {
                 logger::log_panic_payload(e, "process_frame_data panic");
                 self.fatal_error = true;
-            } else if self.init_finalized {
+            } else if self.init_state.is_finalized() {
                 self.last_frame_data_processed = true;
             }
         }
@@ -192,21 +196,23 @@ impl Session {
 
     fn process_frame_data(&mut self, data: FrameSubmitData) {
         self.last_frame_index = data.frame_index;
-        self.view_state.near_clip = data.near_clip;
-        self.view_state.far_clip = data.far_clip;
-        self.view_state.desktop_fov = data.desktop_fov;
+
+        apply_clip_and_output_state(
+            &data,
+            &mut self.view_state.near_clip,
+            &mut self.view_state.far_clip,
+            &mut self.view_state.desktop_fov,
+            &mut self.lock_cursor,
+        );
         self.render_config.near_clip = data.near_clip;
         self.render_config.far_clip = data.far_clip;
         self.render_config.desktop_fov = data.desktop_fov;
+
         self.primary_view_transform = None;
         self.primary_view_space_id = None;
         self.primary_view_override = None;
         self.primary_view_position_is_external = None;
         self.primary_root_transform = None;
-
-        if let Some(ref output) = data.output_state {
-            self.lock_cursor = output.lock_cursor;
-        }
 
         if let Some(ref mut shm) = self.shared_memory
             && let Err(e) = self.scene_graph.apply_frame_update(shm, &data)
@@ -214,37 +220,17 @@ impl Session {
             logger::error!("Scene apply_frame_update: {}", e);
         }
 
-        let active_non_overlay: Vec<_> = data
-            .render_spaces
-            .iter()
-            .filter(|u| u.is_active && !u.is_overlay)
-            .collect();
-        if active_non_overlay.len() > 1 {
+        if validate_active_non_overlay(&data).is_err() {
             self.fatal_error = true;
             return;
         }
-        if let Some(update) = active_non_overlay.first() {
-            self.primary_view_space_id = Some(update.id);
-            self.primary_view_override = Some(update.override_view_position);
-            self.primary_view_position_is_external = Some(update.view_position_is_external);
-            self.primary_root_transform = Some(update.root_transform);
-            // View selection: override (freecam) → overriden_view_transform; else → root_transform.
-            // When view_position_is_external is true (e.g. VR/third-person), view may need to come
-            // from input/head state; we use root for now since the host does not send a separate head pose.
-            self.primary_view_transform = Some(if update.override_view_position {
-                update.overriden_view_transform
-            } else {
-                update.root_transform
-            });
-        }
-        if self.primary_view_transform.is_none()
-            && let Some(first) = data.render_spaces.first()
-        {
-            self.primary_view_space_id = Some(first.id);
-            self.primary_view_override = Some(first.override_view_position);
-            self.primary_view_position_is_external = Some(first.view_position_is_external);
-            self.primary_root_transform = Some(first.root_transform);
-            self.primary_view_transform = Some(first.root_transform);
+
+        if let Some(selection) = select_primary_view(&data) {
+            self.primary_view_space_id = Some(selection.space_id);
+            self.primary_view_override = Some(selection.override_view_position);
+            self.primary_view_position_is_external = Some(selection.view_position_is_external);
+            self.primary_root_transform = Some(selection.root_transform);
+            self.primary_view_transform = Some(selection.view_transform);
         }
 
         self.pending_render_tasks = data.render_tasks;
@@ -551,51 +537,19 @@ fn filter_and_collect_drawables(
             }
         };
 
-        let stencil_state = if scene.is_overlay {
-            if let Some(block_id) = entry.material_override_block_id {
-                StencilState::from_property_store(&asset_registry.material_property_store, block_id)
-                    .or(entry.stencil_state)
-            } else {
-                entry.stencil_state
-            }
-        } else {
-            None
-        };
-
+        let stencil_state =
+            resolve_overlay_stencil_state(scene.is_overlay, entry, asset_registry);
         let mut drawable = entry.clone();
         drawable.stencil_state = stencil_state;
 
-        let pipeline_variant = if scene.is_overlay {
-            if let Some(ref stencil) = drawable.stencil_state {
-                if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilMaskWriteSkinned
-                    } else {
-                        PipelineVariant::OverlayStencilMaskWrite
-                    }
-                } else if stencil.pass_op == StencilOperation::Zero {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilMaskClearSkinned
-                    } else {
-                        PipelineVariant::OverlayStencilMaskClear
-                    }
-                } else {
-                    if is_skinned {
-                        PipelineVariant::OverlayStencilSkinned
-                    } else {
-                        PipelineVariant::OverlayStencilContent
-                    }
-                }
-            } else if is_skinned {
-                PipelineVariant::Skinned
-            } else {
-                compute_pipeline_variant(false, entry.mesh_handle, use_debug_uv, asset_registry)
-            }
-        } else if is_skinned {
-            PipelineVariant::Skinned
-        } else {
-            compute_pipeline_variant(false, entry.mesh_handle, use_debug_uv, asset_registry)
-        };
+        let pipeline_variant = compute_pipeline_variant_for_drawable(
+            scene.is_overlay,
+            is_skinned,
+            &drawable,
+            entry.mesh_handle,
+            use_debug_uv,
+            asset_registry,
+        );
         out.push(FilteredDrawable {
             drawable,
             world_matrix,
@@ -668,6 +622,63 @@ fn create_space_batch(
         view_transform,
         draws,
     })
+}
+
+/// Resolves overlay stencil state from material property store when scene is overlay.
+fn resolve_overlay_stencil_state(
+    is_overlay: bool,
+    entry: &Drawable,
+    asset_registry: &AssetRegistry,
+) -> Option<StencilState> {
+    if !is_overlay {
+        return None;
+    }
+    if let Some(block_id) = entry.material_override_block_id {
+        StencilState::from_property_store(&asset_registry.material_property_store, block_id)
+            .or(entry.stencil_state)
+    } else {
+        entry.stencil_state
+    }
+}
+
+/// Computes pipeline variant for a drawable based on overlay, skinned, stencil, and mesh.
+fn compute_pipeline_variant_for_drawable(
+    is_overlay: bool,
+    is_skinned: bool,
+    drawable: &Drawable,
+    mesh_asset_id: i32,
+    use_debug_uv: bool,
+    asset_registry: &AssetRegistry,
+) -> PipelineVariant {
+    if is_overlay {
+        if let Some(ref stencil) = drawable.stencil_state {
+            if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
+                if is_skinned {
+                    PipelineVariant::OverlayStencilMaskWriteSkinned
+                } else {
+                    PipelineVariant::OverlayStencilMaskWrite
+                }
+            } else if stencil.pass_op == StencilOperation::Zero {
+                if is_skinned {
+                    PipelineVariant::OverlayStencilMaskClearSkinned
+                } else {
+                    PipelineVariant::OverlayStencilMaskClear
+                }
+            } else if is_skinned {
+                PipelineVariant::OverlayStencilSkinned
+            } else {
+                PipelineVariant::OverlayStencilContent
+            }
+        } else if is_skinned {
+            PipelineVariant::Skinned
+        } else {
+            compute_pipeline_variant(false, mesh_asset_id, use_debug_uv, asset_registry)
+        }
+    } else if is_skinned {
+        PipelineVariant::Skinned
+    } else {
+        compute_pipeline_variant(false, mesh_asset_id, use_debug_uv, asset_registry)
+    }
 }
 
 /// Computes pipeline variant from is_skinned, mesh UVs, and use_debug_uv.

@@ -96,10 +96,18 @@ pub fn parse_log_level_from_args() -> Option<LogLevel> {
 /// * `path` - Path to the log file.
 /// * `max_level` - Maximum level to log (messages at or below this level are written).
 /// * `append` - If true, append to file; if false, truncate.
-pub fn init(path: impl AsRef<Path>, max_level: LogLevel, append: bool) {
+///
+/// # Errors
+/// Returns `Err` if the log file cannot be opened (e.g. permission denied, path invalid).
+/// Callers should fail fast on error rather than continuing without logging.
+pub fn init(
+    path: impl AsRef<Path>,
+    max_level: LogLevel,
+    append: bool,
+) -> Result<(), std::io::Error> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+        std::fs::create_dir_all(parent)?;
     }
     let mut opts = OpenOptions::new();
     opts.create(true).write(true);
@@ -108,16 +116,14 @@ pub fn init(path: impl AsRef<Path>, max_level: LogLevel, append: bool) {
     } else {
         opts.truncate(true);
     }
-    let file = match opts.open(path) {
-        Ok(f) => f,
-        Err(_) => return,
-    };
+    let file = opts.open(path)?;
     let logger = Logger {
         file: Mutex::new(file),
         console: false,
         max_level,
     };
     let _ = LOGGER.set(logger);
+    Ok(())
 }
 
 /// Flushes any buffered log output. For `std::fs::File`, `flush()` is a no-op (data goes

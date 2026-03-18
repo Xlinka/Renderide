@@ -56,16 +56,28 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     );
 
     let queue_factory = QueueFactory::new();
-    let mut incoming = queue_factory.create_subscriber(QueueOptions::with_destroy(
+    let mut incoming = match queue_factory.create_subscriber(QueueOptions::with_destroy(
         &incoming_name,
         QUEUE_CAPACITY,
         true,
-    ));
-    let mut outgoing = queue_factory.create_publisher(QueueOptions::with_destroy(
+    )) {
+        Ok(s) => s,
+        Err(e) => {
+            logger::error!("Failed to create subscriber queue: {}", e);
+            return;
+        }
+    };
+    let mut outgoing = match queue_factory.create_publisher(QueueOptions::with_destroy(
         &outgoing_name,
         QUEUE_CAPACITY,
         true,
-    ));
+    )) {
+        Ok(p) => p,
+        Err(e) => {
+            logger::error!("Failed to create publisher queue: {}", e);
+            return;
+        }
+    };
     logger::info!("Queues created (Subscriber bootstrapper_in, Publisher bootstrapper_out)");
 
     let mut args: Vec<String> = host_args_from_cli.to_vec();

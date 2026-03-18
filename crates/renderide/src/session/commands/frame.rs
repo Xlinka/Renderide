@@ -8,10 +8,10 @@ use super::{CommandContext, CommandHandler, CommandResult};
 pub struct FrameSubmitCommandHandler;
 
 impl CommandHandler for FrameSubmitCommandHandler {
-    fn handle(&mut self, cmd: RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
+    fn handle(&mut self, cmd: &RendererCommand, ctx: &mut CommandContext<'_>) -> CommandResult {
         match cmd {
             RendererCommand::frame_submit_data(data) => {
-                ctx.pending_frame_data = Some(data);
+                ctx.frame.pending_frame_data = Some(data.clone());
                 CommandResult::Handled
             }
             _ => CommandResult::Ignored,

@@ -1,10 +1,27 @@
 //! Shared memory backing: file-backed mmap on Unix, named CreateFileMapping on Windows.
 //! Windows naming matches Cloudtoid/zinterprocess: CT_IP_{name}.
 
+use std::io;
 use std::path::PathBuf;
 
 use crate::queue::QueueOptions;
 use crate::sem::{self, SemHandle};
+
+/// Error when opening queue backing (file, mmap, or named mapping).
+#[derive(Debug)]
+pub struct BackingError(pub io::Error);
+
+impl std::fmt::Display for BackingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+impl std::error::Error for BackingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.0.source()
+    }
+}
 
 /// Platform-agnostic backing for the queue. Provides raw pointer access to the mapped region.
 pub(super) struct MemoryBacking {
@@ -100,8 +117,10 @@ impl Drop for WindowsBacking {
     }
 }
 
-/// Opens the queue backing. Returns (MemoryBacking, SemHandle).
-pub(super) fn open_queue_backing(options: &QueueOptions) -> (MemoryBacking, SemHandle) {
+/// Opens the queue backing. Returns (MemoryBacking, SemHandle) or error if file/mmap fails.
+pub(super) fn open_queue_backing(
+    options: &QueueOptions,
+) -> Result<(MemoryBacking, SemHandle), BackingError> {
     #[cfg(unix)]
     {
         open_queue_backing_unix(options)
@@ -113,11 +132,13 @@ pub(super) fn open_queue_backing(options: &QueueOptions) -> (MemoryBacking, SemH
 }
 
 #[cfg(unix)]
-fn open_queue_backing_unix(options: &QueueOptions) -> (MemoryBacking, SemHandle) {
+fn open_queue_backing_unix(options: &QueueOptions) -> Result<(MemoryBacking, SemHandle), BackingError> {
     use std::fs::{self, OpenOptions};
 
     let path = options.file_path();
-    fs::create_dir_all(path.parent().unwrap()).ok();
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(BackingError)?;
+    }
 
     let storage_size = options.actual_storage_size() as u64;
     let file = OpenOptions::new()
@@ -126,12 +147,16 @@ fn open_queue_backing_unix(options: &QueueOptions) -> (MemoryBacking, SemHandle)
         .create(true)
         .truncate(true)
         .open(&path)
-        .expect("Failed to open queue file");
+        .map_err(BackingError)?;
 
-    file.set_len(storage_size)
-        .expect("Failed to set file length");
+    file.set_len(storage_size).map_err(BackingError)?;
 
-    let mmap = unsafe { memmap2::MmapMut::map_mut(&file).expect("Failed to mmap queue file") };
+    let mmap = unsafe {
+        memmap2::MmapMut::map_mut(&file).map_err(|e| BackingError(io::Error::new(
+            io::ErrorKind::Other,
+            format!("mmap failed: {}", e),
+        )))?
+    };
 
     let sem_handle = sem::open(&options.memory_view_name);
 
@@ -143,15 +168,16 @@ fn open_queue_backing_unix(options: &QueueOptions) -> (MemoryBacking, SemHandle)
         },
     };
 
-    (backing, sem_handle)
+    Ok((backing, sem_handle))
 }
 
 #[cfg(windows)]
-fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHandle) {
+fn open_queue_backing_windows(
+    options: &QueueOptions,
+) -> Result<(MemoryBacking, SemHandle), BackingError> {
     use std::ffi::OsStr;
     use std::os::windows::ffi::OsStrExt;
 
-    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Memory::{FILE_MAP_ALL_ACCESS, MapViewOfFile};
 
     const MAP_NAME_PREFIX: &str = "CT_IP_";
@@ -163,16 +189,16 @@ fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHand
         .chain(std::iter::once(0))
         .collect();
 
-    let map_handle = create_or_open_file_mapping(&name_wide, storage_size);
+    let map_handle = create_or_open_file_mapping(&name_wide, storage_size)?;
 
     let view = unsafe { MapViewOfFile(map_handle, FILE_MAP_ALL_ACCESS, 0, 0, storage_size) };
 
     if view.Value.is_null() {
         unsafe { windows_sys::Win32::Foundation::CloseHandle(map_handle) };
-        panic!(
-            "MapViewOfFile failed for queue: {}",
-            options.memory_view_name
-        );
+        return Err(BackingError(io::Error::new(
+            io::ErrorKind::Other,
+            format!("MapViewOfFile failed for queue: {}", options.memory_view_name),
+        )));
     }
 
     let sem_handle = sem::open(&options.memory_view_name);
@@ -185,14 +211,14 @@ fn open_queue_backing_windows(options: &QueueOptions) -> (MemoryBacking, SemHand
         },
     };
 
-    (backing, sem_handle)
+    Ok((backing, sem_handle))
 }
 
 #[cfg(windows)]
 fn create_or_open_file_mapping(
     name: &[u16],
     size: usize,
-) -> windows_sys::Win32::Foundation::HANDLE {
+) -> Result<windows_sys::Win32::Foundation::HANDLE, BackingError> {
     use std::ptr::null;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
     use windows_sys::Win32::System::Memory::{
@@ -215,18 +241,23 @@ fn create_or_open_file_mapping(
         };
 
         if handle != 0 && handle != -1 {
-            return handle;
+            return Ok(handle);
         }
 
         let handle = unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr()) };
 
         if handle != 0 && handle != -1 {
-            return handle;
+            return Ok(handle);
         }
 
         wait_retries = match wait_retries.checked_sub(1) {
             Some(n) => n,
-            None => panic!("Failed to create or open file mapping after retries"),
+            None => {
+                return Err(BackingError(io::Error::new(
+                    io::ErrorKind::Other,
+                    "Failed to create or open file mapping after retries",
+                )))
+            }
         };
 
         if wait_sleep_ms == 0 {

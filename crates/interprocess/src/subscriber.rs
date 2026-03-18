@@ -37,15 +37,15 @@ pub struct Subscriber {
 }
 
 impl Subscriber {
-    /// Creates a new Subscriber. Panics if the queue file or semaphore cannot be opened.
-    pub fn new(options: QueueOptions) -> Self {
-        let (backing, sem_handle) = backend::open_queue_backing(&options);
-        Self {
+    /// Creates a new Subscriber. Returns error if the queue file or mmap cannot be opened.
+    pub fn new(options: QueueOptions) -> Result<Self, crate::BackingError> {
+        let (backing, sem_handle) = backend::open_queue_backing(&options)?;
+        Ok(Self {
             backing,
             capacity: options.capacity,
             sem_handle,
             destroy_on_dispose: options.destroy_on_dispose,
-        }
+        })
     }
 
     fn header_mut(&mut self) -> *mut QueueHeader {

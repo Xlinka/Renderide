@@ -1,6 +1,37 @@
-//! View state: primary view, clip planes, FOV.
+//! Session state: init lifecycle, view configuration.
 
 use crate::scene::View;
+
+/// Init lifecycle state. Replaces `init_received`/`init_finalized` booleans to prevent invalid combinations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InitState {
+    /// No renderer_init_data received; only InitCommandHandler accepts commands.
+    Uninitialized,
+    /// renderer_init_data received; waiting for renderer_init_finalize_data.
+    InitReceived,
+    /// Init complete (finalize received or standalone mode). Normal operation.
+    Finalized,
+}
+
+impl InitState {
+    /// Whether only init commands are accepted.
+    pub fn is_uninitialized(self) -> bool {
+        matches!(self, InitState::Uninitialized)
+    }
+
+    /// Whether init is complete and normal operation can proceed.
+    pub fn is_finalized(self) -> bool {
+        matches!(self, InitState::Finalized)
+    }
+}
+
+impl Default for InitState {
+    fn default() -> Self {
+        Self::Uninitialized
+    }
+}
+
+/// Holds current view configuration from the host.
 
 /// Holds current view configuration from the host.
 pub struct ViewState {
