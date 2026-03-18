@@ -89,7 +89,7 @@ impl RenderTaskExecutor {
             };
             let bytes_per_pixel = 4u32;
             let row_bytes = w * bytes_per_pixel;
-            let bytes_per_row = ((row_bytes + 255) / 256) * 256;
+            let bytes_per_row = row_bytes.div_ceil(256) * 256;
             let buffer_size = bytes_per_row * h;
 
             let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {

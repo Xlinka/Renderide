@@ -16,6 +16,7 @@ name = "roundtrip"
 path = "src/shared/bin/roundtrip.rs"
 
 [dependencies]
+thiserror = "2"
 interprocess = { path = "../interprocess" }
 logger = { path = "../logger" }
 bytemuck = { version = "1.14", features = ["derive"] }

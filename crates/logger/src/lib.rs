@@ -126,11 +126,24 @@ pub fn init(path: impl AsRef<Path>, max_level: LogLevel, append: bool) {
 /// Do not call from a panic hook: if the panic occurred while holding the logger mutex
 /// (e.g. inside a log macro), this would deadlock.
 pub fn flush() {
-    if let Some(logger) = LOGGER.get() {
-        if let Ok(mut file) = logger.file.lock() {
-            let _ = file.flush();
-        }
+    if let Some(logger) = LOGGER.get()
+        && let Ok(mut file) = logger.file.lock()
+    {
+        let _ = file.flush();
     }
+}
+
+/// Logs a panic payload from `catch_unwind`. Extracts `String` or `&'static str` if possible.
+/// Use when handling `Err(e)` from `std::panic::catch_unwind` to surface the panic message.
+pub fn log_panic_payload(payload: Box<dyn std::any::Any + Send>, context: &str) {
+    let msg = match payload.downcast::<String>() {
+        Ok(s) => format!("{}: {}", context, *s),
+        Err(p) => match p.downcast::<&'static str>() {
+            Ok(s) => format!("{}: {}", context, *s),
+            Err(_) => format!("{}: panic (payload type not string)", context),
+        },
+    };
+    log(LogLevel::Error, format_args!("{}", msg));
 }
 
 /// Writes panic info and backtrace to the log file. Flushes immediately so the panic

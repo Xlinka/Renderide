@@ -139,7 +139,7 @@ pub(super) fn compute_world_matrices_incremental(
 
         while let Some(child_id) = stack.pop() {
             let local = get_local_matrix(nodes, local_matrices, local_dirty, child_id);
-            parent_matrix = parent_matrix * local;
+            parent_matrix *= local;
             world_matrices[child_id] = parent_matrix;
             computed[child_id] = true;
         }

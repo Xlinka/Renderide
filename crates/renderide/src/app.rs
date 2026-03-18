@@ -186,6 +186,94 @@ impl RenderideApp {
             self.last_log_flush = Some(now);
         }
     }
+
+    /// Runs one frame: session update, GPU init (if needed), render, and render tasks.
+    /// Returns `Some(exit_code)` if the session requested exit, otherwise `None`.
+    fn run_frame(&mut self) -> Option<i32> {
+        let frame_start = Instant::now();
+
+        // Phase 1: Update — session update and command processing.
+        if let Some(code) = self.session.update() {
+            self.exit_code = Some(code);
+            return Some(code);
+        }
+        let session_us = frame_start.elapsed().as_micros() as u64;
+
+        if let (Some(window), None) = (&self.window, &self.gpu) {
+            match pollster::block_on(crate::gpu::init_gpu(window)) {
+                Ok(g) => {
+                    logger::info!(
+                        "GPU initialized: ray_tracing_available={}",
+                        g.ray_tracing_available
+                    );
+                    self.render_loop = Some(RenderLoop::new(&g.device, &g.config));
+                    self.gpu = Some(g);
+                }
+                Err(e) => {
+                    logger::error!("GPU initialization failed: {}", e);
+                    self.exit_code = Some(1);
+                    return Some(1);
+                }
+            }
+        }
+        if let (Some(ref mut gpu), Some(ref mut render_loop)) =
+            (self.gpu.as_mut(), self.render_loop.as_mut())
+        {
+            // Phase 2: RenderToScreen — user view (main window).
+            set_context(RenderingContext::user_view);
+            for asset_id in self.session.drain_pending_mesh_unloads() {
+                gpu.mesh_buffer_cache.remove(&asset_id);
+                gpu.skinned_bind_group_cache
+                    .retain(|(_, mid), _| *mid != asset_id);
+                if let Some(ref mut accel) = gpu.accel_cache {
+                    crate::gpu::remove_blas(accel, asset_id);
+                }
+            }
+            let t1 = Instant::now();
+            let draw_batches = self.session.collect_draw_batches();
+            let (width, height) = self.input.window_resolution;
+            let viewport = (width, height);
+            let pre_collected = crate::render::prepare_mesh_draws_for_view(
+                gpu,
+                &self.session,
+                &draw_batches,
+                viewport,
+            );
+            let collect_us = t1.elapsed().as_micros() as u64;
+
+            let t2 = Instant::now();
+            let render_result = render_loop.render_frame(
+                gpu,
+                &self.session,
+                &draw_batches,
+                Some(&pre_collected),
+            );
+            let render_us = t2.elapsed().as_micros() as u64;
+
+            let t3 = Instant::now();
+            if let Ok(target) = render_result
+                && let Some(surface_texture) = target.into_surface_texture() {
+                    surface_texture.present();
+                }
+            let present_us = t3.elapsed().as_micros() as u64;
+
+            let total_us = frame_start.elapsed().as_micros() as u64;
+            self.frame_diagnostic
+                .add_frame(session_us, collect_us, render_us, present_us, total_us);
+            if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
+                let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
+                self.frame_diagnostic.log_and_reset(gpu_ms);
+            }
+        }
+
+        // Phase 3: RenderToAsset — offscreen camera tasks.
+        set_context(RenderingContext::render_to_asset);
+        self.session
+            .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
+
+        self.maybe_flush_logs();
+        None
+    }
 }
 
 impl ApplicationHandler for RenderideApp {
@@ -252,86 +340,9 @@ impl ApplicationHandler for RenderideApp {
                     m.is_active = m.is_active || self.session.cursor_lock_requested();
                 }
                 self.session.set_pending_input(input);
-                let frame_start = Instant::now();
-
-                // Phase 1: Update — session update and command processing.
-                if let Some(code) = self.session.update() {
-                    self.exit_code = Some(code);
+                if self.run_frame().is_some() {
                     event_loop.exit();
-                    return;
                 }
-                let session_us = frame_start.elapsed().as_micros() as u64;
-
-                if let (Some(window), None) = (&self.window, &self.gpu) {
-                    match pollster::block_on(crate::gpu::init_gpu(window)) {
-                        Ok(g) => {
-                            logger::info!(
-                                "GPU initialized: ray_tracing_available={}",
-                                g.ray_tracing_available
-                            );
-                            self.render_loop = Some(RenderLoop::new(&g.device, &g.config));
-                            self.gpu = Some(g);
-                        }
-                        Err(_e) => {}
-                    }
-                }
-                if let (Some(ref mut gpu), Some(ref mut render_loop)) =
-                    (self.gpu.as_mut(), self.render_loop.as_mut())
-                {
-                    // Phase 2: RenderToScreen — user view (main window).
-                    set_context(RenderingContext::user_view);
-                    for asset_id in self.session.drain_pending_mesh_unloads() {
-                        gpu.mesh_buffer_cache.remove(&asset_id);
-                        gpu.skinned_bind_group_cache
-                            .retain(|(_, mid), _| *mid != asset_id);
-                        if let Some(ref mut accel) = gpu.accel_cache {
-                            crate::gpu::remove_blas(accel, asset_id);
-                        }
-                    }
-                    let t1 = Instant::now();
-                    let draw_batches = self.session.collect_draw_batches();
-                    let (width, height) = self.input.window_resolution;
-                    let viewport = (width, height);
-                    let pre_collected = crate::render::prepare_mesh_draws_for_view(
-                        gpu,
-                        &self.session,
-                        &draw_batches,
-                        viewport,
-                    );
-                    let collect_us = t1.elapsed().as_micros() as u64;
-
-                    let t2 = Instant::now();
-                    let render_result = render_loop.render_frame(
-                        gpu,
-                        &self.session,
-                        &draw_batches,
-                        Some(&pre_collected),
-                    );
-                    let render_us = t2.elapsed().as_micros() as u64;
-
-                    let t3 = Instant::now();
-                    if let Ok(target) = render_result {
-                        if let Some(surface_texture) = target.into_surface_texture() {
-                            surface_texture.present();
-                        }
-                    }
-                    let present_us = t3.elapsed().as_micros() as u64;
-
-                    let total_us = frame_start.elapsed().as_micros() as u64;
-                    self.frame_diagnostic
-                        .add_frame(session_us, collect_us, render_us, present_us, total_us);
-                    if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
-                        let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
-                        self.frame_diagnostic.log_and_reset(gpu_ms);
-                    }
-                }
-
-                // Phase 3: RenderToAsset — offscreen camera tasks.
-                set_context(RenderingContext::render_to_asset);
-                self.session
-                    .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
-
-                self.maybe_flush_logs();
             }
             WindowEvent::Resized(size) => {
                 self.input.window_resolution = (size.width, size.height);
@@ -422,73 +433,9 @@ impl ApplicationHandler for RenderideApp {
                         m.is_active = m.is_active || self.session.cursor_lock_requested();
                     }
                     self.session.set_pending_input(input);
-                    let frame_start = Instant::now();
-
-                    // Phase 1: Update — session update and command processing.
-                    if let Some(code) = self.session.update() {
-                        self.exit_code = Some(code);
+                    if self.run_frame().is_some() {
                         event_loop.exit();
-                        return;
                     }
-                    let session_us = frame_start.elapsed().as_micros() as u64;
-
-                    if let (Some(ref mut gpu), Some(ref mut render_loop)) =
-                        (self.gpu.as_mut(), self.render_loop.as_mut())
-                    {
-                        // Phase 2: RenderToScreen — user view (main window).
-                        set_context(RenderingContext::user_view);
-                        for asset_id in self.session.drain_pending_mesh_unloads() {
-                            gpu.mesh_buffer_cache.remove(&asset_id);
-                            gpu.skinned_bind_group_cache
-                                .retain(|(_, mid), _| *mid != asset_id);
-                            if let Some(ref mut accel) = gpu.accel_cache {
-                                crate::gpu::remove_blas(accel, asset_id);
-                            }
-                        }
-                        let t1 = Instant::now();
-                        let draw_batches = self.session.collect_draw_batches();
-                        let (width, height) = self.input.window_resolution;
-                        let viewport = (width, height);
-                        let pre_collected = crate::render::prepare_mesh_draws_for_view(
-                            gpu,
-                            &self.session,
-                            &draw_batches,
-                            viewport,
-                        );
-                        let collect_us = t1.elapsed().as_micros() as u64;
-
-                        let t2 = Instant::now();
-                        let render_result = render_loop.render_frame(
-                            gpu,
-                            &self.session,
-                            &draw_batches,
-                            Some(&pre_collected),
-                        );
-                        let render_us = t2.elapsed().as_micros() as u64;
-
-                        let t3 = Instant::now();
-                        if let Ok(target) = render_result {
-                            if let Some(surface_texture) = target.into_surface_texture() {
-                                surface_texture.present();
-                            }
-                        }
-                        let present_us = t3.elapsed().as_micros() as u64;
-                        let total_us = frame_start.elapsed().as_micros() as u64;
-
-                        self.frame_diagnostic
-                            .add_frame(session_us, collect_us, render_us, present_us, total_us);
-                        if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
-                            let gpu_ms = render_loop.last_gpu_mesh_pass_ms();
-                            self.frame_diagnostic.log_and_reset(gpu_ms);
-                        }
-                    }
-
-                    // Phase 3: RenderToAsset — offscreen camera tasks.
-                    set_context(RenderingContext::render_to_asset);
-                    self.session
-                        .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
-
-                    self.maybe_flush_logs();
                 }
             }
         }

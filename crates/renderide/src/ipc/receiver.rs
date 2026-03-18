@@ -66,20 +66,22 @@ impl CommandReceiver {
         if let Some(ref mut s) = self.primary_subscriber {
             while let Some(msg) = s.try_dequeue() {
                 let mut unpacker = MemoryUnpacker::new(&msg, &mut pool);
-                if let Ok(cmd) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     decode_renderer_command(&mut unpacker)
                 })) {
-                    commands.push(cmd);
+                    Ok(cmd) => commands.push(cmd),
+                    Err(e) => logger::log_panic_payload(e, "IPC decode panic (primary)"),
                 }
             }
         }
         if let Some(ref mut s) = self.background_subscriber {
             while let Some(msg) = s.try_dequeue() {
                 let mut unpacker = MemoryUnpacker::new(&msg, &mut pool);
-                if let Ok(cmd) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     decode_renderer_command(&mut unpacker)
                 })) {
-                    commands.push(cmd);
+                    Ok(cmd) => commands.push(cmd),
+                    Err(e) => logger::log_panic_payload(e, "IPC decode panic (background)"),
                 }
             }
         }

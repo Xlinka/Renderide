@@ -51,17 +51,6 @@ impl MemoryBacking {
         }
     }
 
-    pub fn len(&self) -> usize {
-        #[cfg(unix)]
-        {
-            self.inner.mmap.len()
-        }
-        #[cfg(windows)]
-        {
-            self.inner.len
-        }
-    }
-
     /// Path for destroy_on_dispose (Unix only). None on Windows (named mapping cleans up on CloseHandle).
     pub fn file_path(&self) -> Option<PathBuf> {
         #[cfg(unix)]
@@ -125,7 +114,7 @@ pub(super) fn open_queue_backing(options: &QueueOptions) -> (MemoryBacking, SemH
 
 #[cfg(unix)]
 fn open_queue_backing_unix(options: &QueueOptions) -> (MemoryBacking, SemHandle) {
-    use std::fs::{self, File, OpenOptions};
+    use std::fs::{self, OpenOptions};
 
     let path = options.file_path();
     fs::create_dir_all(path.parent().unwrap()).ok();

@@ -74,7 +74,7 @@ impl Session {
             pending_input: None,
             pending_mesh_unloads: Vec::new(),
             lock_cursor: false,
-            render_config: RenderConfig::default(),
+            render_config: RenderConfig::load(),
             pending_render_tasks: Vec::new(),
             primary_camera_task: None,
             primary_view_transform: None,
@@ -112,7 +112,8 @@ impl Session {
         }
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle_update())) {
             Ok(()) => None,
-            Err(_e) => {
+            Err(e) => {
+                logger::log_panic_payload(e, "Session update panic");
                 self.fatal_error = true;
                 Some(4)
             }
@@ -178,9 +179,10 @@ impl Session {
         }
 
         if let Some(data) = ctx.pending_frame_data {
-            if let Err(_e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 self.process_frame_data(data);
             })) {
+                logger::log_panic_payload(e, "process_frame_data panic");
                 self.fatal_error = true;
             } else if self.init_finalized {
                 self.last_frame_data_processed = true;
@@ -389,7 +391,7 @@ impl Session {
                 &[],
                 &[],
                 true,
-                overlay_view_override.clone(),
+                overlay_view_override,
             ));
         }
         batches.sort_by_key(|b| b.is_overlay);
@@ -519,7 +521,7 @@ fn filter_and_collect_drawables(
             if entry
                 .bone_transform_ids
                 .as_ref()
-                .map_or(true, |b| b.is_empty())
+                .is_none_or(|b| b.is_empty())
             {
                 logger::trace!(
                     "Skinned draw skipped: bone_transform_ids missing or empty (node_id={})",
@@ -527,8 +529,8 @@ fn filter_and_collect_drawables(
                 );
                 continue;
             }
-            if let Some(mesh) = asset_registry.get_mesh(entry.mesh_handle) {
-                if mesh.bind_poses.as_ref().map_or(true, |b| b.is_empty()) {
+            if let Some(mesh) = asset_registry.get_mesh(entry.mesh_handle)
+                && mesh.bind_poses.as_ref().is_none_or(|b| b.is_empty()) {
                     logger::trace!(
                         "Skinned draw skipped: mesh missing bind_poses (mesh={}, node_id={})",
                         entry.mesh_handle,
@@ -536,7 +538,6 @@ fn filter_and_collect_drawables(
                     );
                     continue;
                 }
-            }
         }
         let idx = entry.node_id as usize;
         let world_matrix = match scene_graph.get_world_matrix(space_id, idx) {
@@ -565,8 +566,8 @@ fn filter_and_collect_drawables(
 
         let pipeline_variant = if scene.is_overlay {
             if let Some(ref stencil) = drawable.stencil_state {
-                let stencil_variant =
-                    if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
+                
+                if stencil.pass_op == StencilOperation::Replace && stencil.write_mask != 0 {
                         if is_skinned {
                             PipelineVariant::OverlayStencilMaskWriteSkinned
                         } else {
@@ -584,8 +585,7 @@ fn filter_and_collect_drawables(
                         } else {
                             PipelineVariant::OverlayStencilContent
                         }
-                    };
-                stencil_variant
+                    }
             } else if is_skinned {
                 PipelineVariant::Skinned
             } else {

@@ -123,7 +123,7 @@ pub(super) fn collect_mesh_draws(
         let view_mat = apply_view_handedness_fix(render_transform_to_matrix(&batch_vt).inverse());
         let proj = batch
             .is_overlay
-            .then(|| ctx.overlay_projection_override.as_ref())
+            .then_some(ctx.overlay_projection_override.as_ref())
             .flatten()
             .map(|v| v.to_projection_matrix())
             .unwrap_or(ctx.proj);

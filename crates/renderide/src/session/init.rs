@@ -7,25 +7,18 @@
 use std::env;
 use std::sync::atomic::Ordering;
 
+use thiserror::Error;
+
 /// Error returned when init fails.
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum InitError {
+    #[error("Only one RenderingManager can exist")]
     SingletonAlreadyExists,
+    #[error("Could not get queue parameters")]
     NoConnectionParams,
+    #[error("IPC connect: {0}")]
     IpcConnect(String),
 }
-
-impl std::fmt::Display for InitError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            InitError::SingletonAlreadyExists => write!(f, "Only one RenderingManager can exist"),
-            InitError::NoConnectionParams => write!(f, "Could not get queue parameters"),
-            InitError::IpcConnect(s) => write!(f, "IPC connect: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for InitError {}
 
 /// Default queue capacity (8 MiB), matching MessagingManager.DEFAULT_CAPACITY.
 pub const DEFAULT_QUEUE_CAPACITY: i64 = 8_388_608;

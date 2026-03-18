@@ -61,7 +61,7 @@ impl UniformRingBuffer {
                 let bytes: &[u8] = bytemuck::bytes_of(&u);
                 aligned[offset..offset + uniform_size].copy_from_slice(bytes);
             }
-            queue.write_buffer(&self.buffer, buffer_offset, &aligned);
+            queue.write_buffer(&self.buffer, buffer_offset, aligned);
         }
     }
 
@@ -144,7 +144,7 @@ impl SkinnedUniformRingBuffer {
                 let bytes: &[u8] = bytemuck::bytes_of(&u);
                 aligned[offset..offset + uniform_size].copy_from_slice(bytes);
             }
-            queue.write_buffer(&self.buffer, buffer_offset, &aligned);
+            queue.write_buffer(&self.buffer, buffer_offset, aligned);
         }
     }
 
@@ -212,7 +212,7 @@ impl OverlayStencilUniformRingBuffer {
                 let bytes: &[u8] = bytemuck::bytes_of(&u);
                 aligned[offset..offset + uniform_size].copy_from_slice(bytes);
             }
-            queue.write_buffer(&self.buffer, buffer_offset, &aligned);
+            queue.write_buffer(&self.buffer, buffer_offset, aligned);
         }
     }
 

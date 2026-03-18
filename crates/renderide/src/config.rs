@@ -2,6 +2,12 @@
 //!
 //! Engine-agnostic configuration structures used by the renderer framework.
 //!
+//! ## Config loading precedence
+//!
+//! Use [`RenderConfig::load()`] as the single source of truth. Precedence:
+//! 1. **Defaults** — hardcoded values below
+//! 2. **Env vars** — override defaults (e.g. `RENDERIDE_DEBUG_BLENDSHAPES=1`)
+//!
 //! Extension point for config, feature flags.
 
 /// Render configuration (clip planes, FOV, display settings).
@@ -42,6 +48,19 @@ pub struct RenderConfig {
     pub ao_radius: f32,
 }
 
+impl RenderConfig {
+    /// Loads config from defaults, then env vars. Single source of truth for render config.
+    ///
+    /// Env vars: `RENDERIDE_DEBUG_BLENDSHAPES=1` enables blendshape debug logging.
+    pub fn load() -> Self {
+        let mut config = Self::default();
+        if std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1") {
+            config.debug_blendshapes = true;
+        }
+        config
+    }
+}
+
 impl Default for RenderConfig {
     fn default() -> Self {
         Self {
@@ -53,7 +72,7 @@ impl Default for RenderConfig {
             skinned_apply_mesh_root_transform: true,
             skinned_use_root_bone: false,
             debug_skinned: false,
-            debug_blendshapes: std::env::var("RENDERIDE_DEBUG_BLENDSHAPES").as_deref() == Ok("1"),
+            debug_blendshapes: false,
             skinned_flip_handedness: false,
             rtao_enabled: true,
             rtao_strength: 1.0,

@@ -225,8 +225,8 @@ impl RenderPass for RtaoBlurPass {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
         pass.dispatch_workgroups(
-            (width + TILE_SIZE - 1) / TILE_SIZE,
-            (height + TILE_SIZE - 1) / TILE_SIZE,
+            width.div_ceil(TILE_SIZE),
+            height.div_ceil(TILE_SIZE),
             1,
         );
 

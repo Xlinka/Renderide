@@ -145,7 +145,7 @@ impl RenderLoop {
             let needs_create = self
                 .rtao_textures
                 .as_ref()
-                .map_or(true, |c| !c.matches_viewport(width, height));
+                .is_none_or(|c| !c.matches_viewport(width, height));
             if needs_create {
                 self.rtao_textures = Some(crate::gpu::rtao_textures::RtaoTextureCache::create(
                     &gpu.device,

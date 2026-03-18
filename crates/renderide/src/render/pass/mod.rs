@@ -282,8 +282,8 @@ impl RenderGraph {
             }
         };
 
-        if let Some(ref mut ray_tracing) = ctx.gpu.ray_tracing_state {
-            if let Some(ref accel) = ctx.gpu.accel_cache {
+        if let Some(ref mut ray_tracing) = ctx.gpu.ray_tracing_state
+            && let Some(ref accel) = ctx.gpu.accel_cache {
                 ray_tracing.tlas = crate::gpu::build_tlas(
                     &ctx.gpu.device,
                     &mut encoder,
@@ -292,7 +292,6 @@ impl RenderGraph {
                     &mut ray_tracing.instance_scratch,
                 );
             }
-        }
 
         let frame_index = ctx.pipeline_manager.advance_frame();
         let mut pass_ctx = RenderPassContext {
@@ -407,13 +406,12 @@ fn ensure_mesh_buffers(
                     crate::gpu::create_mesh_buffers(&gpu.device, mesh, stride, ray_tracing)
                 {
                     gpu.mesh_buffer_cache.insert(d.mesh_asset_id, b.clone());
-                    if let Some(ref mut accel) = gpu.accel_cache {
-                        if let Some(blas) =
+                    if let Some(ref mut accel) = gpu.accel_cache
+                        && let Some(blas) =
                             crate::gpu::build_blas_for_mesh(&gpu.device, &gpu.queue, mesh, &b)
                         {
                             accel.insert(d.mesh_asset_id, blas);
                         }
-                    }
                 }
             }
         }
@@ -453,7 +451,7 @@ impl RenderPass for MeshRenderPass {
         let use_mrt = ctx.render_target.mrt_position_view.is_some()
             && ctx.render_target.mrt_normal_view.is_some();
         let mut draw_params = MeshDrawParams {
-            pipeline_manager: &mut ctx.pipeline_manager,
+            pipeline_manager: ctx.pipeline_manager,
             device: &ctx.gpu.device,
             queue: &ctx.gpu.queue,
             config: &ctx.gpu.config,
@@ -563,10 +561,10 @@ impl RenderPass for MeshRenderPass {
             record_skinned_draws(
                 &mut pass,
                 &mut draw_params,
-                &non_overlay_skinned,
+                non_overlay_skinned,
                 debug_blendshapes,
             );
-            record_non_skinned_draws(&mut pass, &mut draw_params, &non_overlay_non_skinned);
+            record_non_skinned_draws(&mut pass, &mut draw_params, non_overlay_non_skinned);
         }
 
         Ok(())
@@ -625,7 +623,7 @@ impl RenderPass for OverlayRenderPass {
 
         let overlay_orthographic = ctx.overlay_projection_override.is_some();
         let mut draw_params = MeshDrawParams {
-            pipeline_manager: &mut ctx.pipeline_manager,
+            pipeline_manager: ctx.pipeline_manager,
             device: &ctx.gpu.device,
             queue: &ctx.gpu.queue,
             config: &ctx.gpu.config,
@@ -671,10 +669,10 @@ impl RenderPass for OverlayRenderPass {
         record_skinned_draws(
             &mut pass,
             &mut draw_params,
-            &overlay_skinned,
+            overlay_skinned,
             debug_blendshapes,
         );
-        record_non_skinned_draws(&mut pass, &mut draw_params, &overlay_non_skinned);
+        record_non_skinned_draws(&mut pass, &mut draw_params, overlay_non_skinned);
 
         Ok(())
     }

@@ -112,7 +112,7 @@ mod imp {
                 .chain(std::iter::once(0))
                 .collect();
 
-            let map_handle = create_or_open_file_mapping(&name_wide, size);
+            let map_handle = create_or_open_file_mapping(&name_wide, size)?;
 
             let view = unsafe {
                 MapViewOfFile(
@@ -200,7 +200,7 @@ mod imp {
         }
     }
 
-    fn create_or_open_file_mapping(name: &[u16], size: usize) -> HANDLE {
+    fn create_or_open_file_mapping(name: &[u16], size: usize) -> io::Result<HANDLE> {
         use std::ptr::null;
         use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
         use windows_sys::Win32::System::Memory::{
@@ -219,20 +219,19 @@ mod imp {
         };
 
         if handle != 0 && handle != -1 {
-            return handle;
+            return Ok(handle);
         }
 
-        let handle = unsafe {
-            OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr())
-        };
+        let handle = unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr()) };
 
         if handle != 0 && handle != -1 {
-            return handle;
+            return Ok(handle);
         }
 
-        panic!(
-            "Failed to create or open file mapping for shared memory buffer"
-        );
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "Failed to create or open file mapping for shared memory buffer",
+        ))
     }
 }
 
