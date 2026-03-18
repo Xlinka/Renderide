@@ -317,7 +317,10 @@ pub fn build_tlas(
     let mut tlas = device.create_tlas(&tlas_desc);
 
     for (i, (mesh_asset_id, transform)) in instance_scratch.iter().enumerate() {
-        let blas = accel_cache.get(*mesh_asset_id).expect("BLAS present");
+        let Some(blas) = accel_cache.get(*mesh_asset_id) else {
+            logger::warn!("BLAS missing for mesh_asset_id={}, skipping TLAS instance", mesh_asset_id);
+            continue;
+        };
         let instance = wgpu::TlasInstance::new(blas, *transform, 0, 0xFF);
         tlas[i] = Some(instance);
     }

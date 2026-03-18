@@ -55,7 +55,13 @@ pub fn run() -> Option<i32> {
         default_hook(info);
     }));
 
-    let event_loop = EventLoop::new().unwrap();
+    let event_loop = match EventLoop::new() {
+        Ok(el) => el,
+        Err(e) => {
+            logger::error!("EventLoop::new failed: {}", e);
+            return Some(1);
+        }
+    };
     let mut app = RenderideApp::new();
 
     if let Err(e) = app.session.init() {
@@ -231,6 +237,9 @@ impl RenderideApp {
                 if let Some(ref mut accel) = gpu.accel_cache {
                     crate::gpu::remove_blas(accel, asset_id);
                 }
+            }
+            for material_id in self.session.drain_pending_material_unloads() {
+                render_loop.evict_material(material_id);
             }
             let t1 = Instant::now();
             let draw_batches = self.session.collect_draw_batches();

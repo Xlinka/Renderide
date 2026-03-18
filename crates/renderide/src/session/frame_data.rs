@@ -28,15 +28,36 @@ pub fn apply_clip_and_output_state(
     }
 }
 
-/// Validates that at most one active non-overlay space exists. Returns Err(()) if invalid.
-pub fn validate_active_non_overlay(data: &FrameSubmitData) -> Result<(), ()> {
+/// Error when frame data has multiple active non-overlay spaces.
+#[derive(Debug)]
+pub struct MultipleActiveNonOverlaySpaces {
+    /// Number of active non-overlay spaces (must be > 1 for this error).
+    pub count: usize,
+}
+
+impl std::fmt::Display for MultipleActiveNonOverlaySpaces {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "multiple active non-overlay spaces (count={}), expected at most one",
+            self.count
+        )
+    }
+}
+
+impl std::error::Error for MultipleActiveNonOverlaySpaces {}
+
+/// Validates that at most one active non-overlay space exists.
+pub fn validate_active_non_overlay(data: &FrameSubmitData) -> Result<(), MultipleActiveNonOverlaySpaces> {
     let active_non_overlay: Vec<_> = data
         .render_spaces
         .iter()
         .filter(|u| u.is_active && !u.is_overlay)
         .collect();
     if active_non_overlay.len() > 1 {
-        return Err(());
+        return Err(MultipleActiveNonOverlaySpaces {
+            count: active_non_overlay.len(),
+        });
     }
     Ok(())
 }

@@ -44,6 +44,10 @@ impl CommandHandler for MaterialCommandHandler {
                     .remove_block(cmd.asset_id);
                 CommandResult::Handled
             }
+            RendererCommand::unload_material(cmd) => {
+                ctx.frame.pending_material_unloads.push(cmd.asset_id);
+                CommandResult::Handled
+            }
             _ => CommandResult::Ignored,
         }
     }

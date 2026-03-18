@@ -67,6 +67,8 @@ pub struct SessionFlags<'a> {
 pub struct FrameContext<'a> {
     /// Asset IDs unloaded this frame (drained by Session).
     pub pending_mesh_unloads: &'a mut Vec<i32>,
+    /// Material IDs unloaded this frame (drained by Session for pipeline eviction).
+    pub pending_material_unloads: &'a mut Vec<i32>,
     /// Frame data to process; set by FrameSubmitCommandHandler, drained by Session.
     pub pending_frame_data: Option<FrameSubmitData>,
 }
@@ -123,7 +125,7 @@ impl CommandDispatcher {
                 Box::new(window::WindowCommandHandler),
                 Box::new(shared_memory::FreeSharedMemoryCommandHandler),
                 Box::new(noop::NoopCommandHandler),
-                Box::new(stub::StubCommandHandler),
+                Box::new(stub::StubCommandHandler::new()),
             ],
         }
     }

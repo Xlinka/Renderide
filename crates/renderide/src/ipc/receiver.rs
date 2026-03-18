@@ -98,8 +98,9 @@ impl CommandReceiver {
         };
         if written > 0
             && let Some(ref mut pub_) = self.primary_publisher
+            && !pub_.try_enqueue(&self.send_buffer[..written])
         {
-            let _ = pub_.try_enqueue(&self.send_buffer[..written]);
+            logger::warn!("IPC primary queue full, dropped outgoing command ({} bytes)", written);
         }
     }
 
@@ -114,8 +115,9 @@ impl CommandReceiver {
         };
         if written > 0
             && let Some(ref mut pub_) = self.background_publisher
+            && !pub_.try_enqueue(&self.send_buffer[..written])
         {
-            let _ = pub_.try_enqueue(&self.send_buffer[..written]);
+            logger::warn!("IPC background queue full, dropped outgoing command ({} bytes)", written);
         }
     }
 }

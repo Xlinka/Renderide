@@ -158,7 +158,7 @@ fn open_queue_backing_unix(options: &QueueOptions) -> Result<(MemoryBacking, Sem
         )))?
     };
 
-    let sem_handle = sem::open(&options.memory_view_name);
+    let sem_handle = sem::open(&options.memory_view_name).map_err(BackingError)?;
 
     let backing = MemoryBacking {
         inner: UnixBacking {
@@ -201,7 +201,7 @@ fn open_queue_backing_windows(
         )));
     }
 
-    let sem_handle = sem::open(&options.memory_view_name);
+    let sem_handle = sem::open(&options.memory_view_name).map_err(BackingError)?;
 
     let backing = MemoryBacking {
         inner: WindowsBacking {

@@ -39,6 +39,7 @@ pub struct Session {
     sent_bootstrap_frame_start: bool,
     pending_input: Option<InputState>,
     pending_mesh_unloads: Vec<i32>,
+    pending_material_unloads: Vec<i32>,
     lock_cursor: bool,
     render_config: RenderConfig,
     pending_render_tasks: Vec<crate::shared::CameraRenderTask>,
@@ -72,6 +73,7 @@ impl Session {
             sent_bootstrap_frame_start: false,
             pending_input: None,
             pending_mesh_unloads: Vec::new(),
+            pending_material_unloads: Vec::new(),
             lock_cursor: false,
             render_config: RenderConfig::load(),
             pending_render_tasks: Vec::new(),
@@ -166,6 +168,7 @@ impl Session {
             },
             frame: FrameContext {
                 pending_mesh_unloads: &mut self.pending_mesh_unloads,
+                pending_material_unloads: &mut self.pending_material_unloads,
                 pending_frame_data: None,
             },
             scene_graph: &mut self.scene_graph,
@@ -220,7 +223,8 @@ impl Session {
             logger::error!("Scene apply_frame_update: {}", e);
         }
 
-        if validate_active_non_overlay(&data).is_err() {
+        if let Err(e) = validate_active_non_overlay(&data) {
+            logger::error!("Frame validation failed: {}", e);
             self.fatal_error = true;
             return;
         }
@@ -268,6 +272,11 @@ impl Session {
     /// Drains mesh asset IDs unloaded this frame.
     pub fn drain_pending_mesh_unloads(&mut self) -> Vec<i32> {
         std::mem::take(&mut self.pending_mesh_unloads)
+    }
+
+    /// Drains material IDs to unload. Caller should evict pipelines for these IDs.
+    pub fn drain_pending_material_unloads(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.pending_material_unloads)
     }
 
     /// Sets input for next FrameStartData.

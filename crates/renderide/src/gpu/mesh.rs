@@ -611,20 +611,29 @@ pub fn create_mesh_buffers(
     let (blendshape_buffer, num_blendshapes) = {
         let num = mesh.num_blendshapes.max(0) as u32;
         let expected_len = num as usize * vc * std::mem::size_of::<BlendshapeOffset>();
-        let has_valid_blendshapes = mesh
-            .blendshape_offsets
-            .as_ref()
-            .is_some_and(|d| num > 0 && d.len() >= expected_len);
-        if has_valid_blendshapes {
-            let data = mesh.blendshape_offsets.as_ref().unwrap();
-            let buffer = Arc::new(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mesh blendshape buffer"),
-                    contents: &data[..expected_len],
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                }),
-            );
-            (Some(buffer), num)
+        if let Some(ref data) = mesh.blendshape_offsets {
+            if num > 0 && data.len() >= expected_len {
+                let buffer = Arc::new(
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh blendshape buffer"),
+                        contents: &data[..expected_len],
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    }),
+                );
+                (Some(buffer), num)
+            } else if vertex_buffer_skinned.is_some() {
+                let dummy = [0u8; std::mem::size_of::<BlendshapeOffset>()];
+                let buffer = Arc::new(
+                    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("mesh blendshape buffer (dummy)"),
+                        contents: &dummy,
+                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    }),
+                );
+                (Some(buffer), 0)
+            } else {
+                (None, 0)
+            }
         } else if vertex_buffer_skinned.is_some() {
             let dummy = [0u8; std::mem::size_of::<BlendshapeOffset>()];
             let buffer = Arc::new(

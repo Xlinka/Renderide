@@ -155,6 +155,12 @@ impl PipelineRegistry {
         self.pipelines.insert(key.clone(), Arc::clone(&pipeline));
         Some(pipeline)
     }
+
+    /// Removes pipelines for the given material ID. Call when a material is unloaded to avoid unbounded growth.
+    pub fn evict_material(&mut self, material_id: i32) {
+        self.pipelines
+            .retain(|k, _| !matches!(&k.1, PipelineVariant::Material { material_id: mid } if *mid == material_id));
+    }
 }
 
 impl Default for PipelineRegistry {
@@ -195,5 +201,10 @@ impl PipelineManager {
         config: &wgpu::SurfaceConfiguration,
     ) -> Option<Arc<dyn RenderPipeline>> {
         self.registry.get_or_create(key, device, config)
+    }
+
+    /// Evicts pipelines for the given material. Call when a material is unloaded.
+    pub fn evict_material(&mut self, material_id: i32) {
+        self.registry.evict_material(material_id);
     }
 }

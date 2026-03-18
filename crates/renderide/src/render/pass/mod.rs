@@ -474,8 +474,14 @@ impl RenderPass for MeshRenderPass {
                 });
 
         let color_attachments: Vec<Option<wgpu::RenderPassColorAttachment>> = if use_mrt {
-            let pos_view = ctx.render_target.mrt_position_view.unwrap();
-            let norm_view = ctx.render_target.mrt_normal_view.unwrap();
+            let pos_view = ctx
+                .render_target
+                .mrt_position_view
+                .expect("use_mrt is true only when both MRT views are Some");
+            let norm_view = ctx
+                .render_target
+                .mrt_normal_view
+                .expect("use_mrt is true only when both MRT views are Some");
             vec![
                 Some(wgpu::RenderPassColorAttachment {
                     view: ctx.render_target.color_view,

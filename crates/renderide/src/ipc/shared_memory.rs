@@ -290,47 +290,66 @@ impl SharedMemoryAccessor {
         &mut self,
         descriptor: &SharedMemoryBufferDescriptor,
     ) -> Result<Vec<T>, String> {
+        self.access_copy_diagnostic_with_context(descriptor, None)
+    }
+
+    /// Like access_copy_diagnostic but accepts an optional context string for caller identification in errors.
+    pub fn access_copy_diagnostic_with_context<T: Pod + Zeroable>(
+        &mut self,
+        descriptor: &SharedMemoryBufferDescriptor,
+        context: Option<&str>,
+    ) -> Result<Vec<T>, String> {
+        let prefix_err = |msg: &str| {
+            if let Some(ctx) = context {
+                format!("{}: {}", ctx, msg)
+            } else {
+                msg.to_string()
+            }
+        };
         if descriptor.length <= 0 {
-            return Err("length<=0".into());
+            return Err(prefix_err(&format!(
+                "length<=0 (buffer_id={} offset={} length={})",
+                descriptor.buffer_id, descriptor.offset, descriptor.length
+            )));
         }
         if descriptor.length > Self::MAX_ACCESS_COPY_BYTES {
-            return Err(format!(
+            return Err(prefix_err(&format!(
                 "length {} exceeds max {} (buffer_id={})",
                 descriptor.length,
                 Self::MAX_ACCESS_COPY_BYTES,
                 descriptor.buffer_id
-            ));
+            )));
         }
         let buffer_id = descriptor.buffer_id;
         let capacity = descriptor
             .buffer_capacity
             .max(descriptor.offset + descriptor.length);
         if capacity <= 0 {
-            return Err(format!(
+            return Err(prefix_err(&format!(
                 "capacity<=0 (buffer_id={} offset={} length={})",
                 buffer_id, descriptor.offset, descriptor.length
-            ));
+            )));
         }
         let view = match self.get_view(descriptor) {
             Some(v) => v,
             None => {
-                return Err(format!(
+                return Err(prefix_err(&format!(
                     "get_view failed buffer_id={} name={}",
                     buffer_id,
                     self.compose_memory_view_name(buffer_id)
-                ));
+                )));
             }
         };
         let bytes = view
             .slice(descriptor.offset, descriptor.length)
             .ok_or_else(|| {
-                format!(
+                prefix_err(&format!(
                     "slice failed buffer_id={} offset={} length={} view_len={}",
                     buffer_id,
                     descriptor.offset,
                     descriptor.length,
                     view.len()
-                )
+                ))
             })?;
         let count = descriptor.length as usize / std::mem::size_of::<T>();
         if count == 0 {
@@ -341,9 +360,9 @@ impl SharedMemoryAccessor {
         let mut aligned = vec![0u8; bytes.len()];
         aligned.copy_from_slice(bytes);
         let slice =
-            bytemuck::try_cast_slice::<u8, T>(&aligned).map_err(|_| "try_cast_slice failed")?;
+            bytemuck::try_cast_slice::<u8, T>(&aligned).map_err(|_| prefix_err("try_cast_slice failed"))?;
         if slice.len() < count {
-            return Err(format!("slice.len()<count {}<{}", slice.len(), count));
+            return Err(prefix_err(&format!("slice.len()<count {}<{}", slice.len(), count)));
         }
         Ok(slice[..count].to_vec())
     }

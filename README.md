@@ -4,7 +4,7 @@ A Rust renderer for Resonite, replacing the Unity-based default with wgpu/winit.
 
 ## Warning
 
-There are a lot of performance, support, and stability issues with the renderer currently. It is not intended for consumer use at the moment and comes with many rendering features enabled for testing purposes.
+There are a lot of performance, support, and stability issues with the renderer currently. It is not intended for consumer use at the moment and comes with many rendering features enabled for testing purposes. There may be other visual bugs or unexpected behavior.
 
 ## Overview
 

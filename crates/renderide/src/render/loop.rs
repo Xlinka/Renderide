@@ -87,6 +87,11 @@ impl RenderLoop {
         self.last_gpu_mesh_pass_ms
     }
 
+    /// Evicts pipelines for the given material. Call when a material is unloaded to avoid unbounded registry growth.
+    pub fn evict_material(&mut self, material_id: i32) {
+        self.pipeline_manager.evict_material(material_id);
+    }
+
     /// Renders one frame: clear, draw batches. Caller must present the returned texture.
     ///
     /// Uses [`RenderTarget::Surface`] for the main window. Depth texture dimensions
