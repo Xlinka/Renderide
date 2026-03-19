@@ -22,7 +22,7 @@
 //! [`ResourceSlot`] describes abstract inputs and outputs (G-buffer color, depth, surface, AO
 //! textures, clustered buffers, light buffer). Passes implement [`RenderPass::resources`] with
 //! [`PassResources`] (reads / writes). Texture-backed slots drive attachment and sampling wiring
-//! and GPU barriers (see [Resource barriers](#resource-barriers-between-passes) below).
+//! (see [Resource barriers](#resource-barriers-between-passes) below).
 //! [`ResourceSlot::ClusterBuffers`]
 //! and [`ResourceSlot::LightBuffer`] are logical slots; GPU handles live in caches and are not
 //! passed through [`wgpu::CommandEncoder::transition_resources`].
@@ -39,9 +39,9 @@
 //!
 //! [`RenderGraph::execute`] creates one [`wgpu::CommandEncoder`] per frame, prepares mesh draws and
 //! TLAS as needed, advances the pipeline frame index, then runs the internal schedule walker, which
-//! walks [`ExecutionUnit`] in order: each [`ExecutionUnit::Pass`] records barriers (from cumulative
-//! `written_slots`) and runs [`RenderPass::execute`]; each [`ExecutionUnit::Subgraph`] recurses
-//! into the nested [`LabeledSubgraph::graph`] on the **same** encoder and shares `written_slots`.
+//! walks [`ExecutionUnit`] in order: each [`ExecutionUnit::Pass`] runs [`RenderPass::execute`]; each
+//! [`ExecutionUnit::Subgraph`] recurses into the nested [`LabeledSubgraph::graph`] on the **same**
+//! encoder.
 //! Each [`RenderGraph`] instance may own an RTAO MRT cache when [`RenderGraphContext::enable_rtao_mrt`]
 //! is true; after its units run, if MRT color exists and no pass in that graph writes
 //! [`ResourceSlot::Surface`], an MRT→target copy is recorded (RTAO path, not a graph bypass).
@@ -55,22 +55,18 @@
 //!
 //! # Resource barriers between passes
 //!
-//! At execution, the graph executor uses [`PassResources`] to:
+//! All passes for a frame record into **one** [`wgpu::CommandEncoder`]. Wgpu infers texture layouts
+//! from render pass and compute pass descriptors within that encoder (same as the pre–render-graph
+//! loop). [`PassResources`] are used for build-time dependency checks and for wiring
+//! [`RenderTargetViews`], not for inserting [`wgpu::CommandEncoder::transition_resources`] between
+//! passes—manual transitions here previously forced depth into states incompatible with the overlay
+//! pass (depth as a load/store attachment after compute had sampled the same texture).
 //!
-//! - **Explicit texture transitions (native backends):** For every texture-backed slot in both the
-//!   cumulative “already written this frame” set and the current pass’s **reads**, call
-//!   [`wgpu::CommandEncoder::transition_resources`] with [`wgpu::TextureTransition`] entries.
-//!   Target states follow consumption (e.g. [`wgpu::TextureUses::RESOURCE`] for sampled inputs,
-//!   [`wgpu::TextureUses::DEPTH_STENCIL_READ`] when depth is only sampled, [`wgpu::TextureUses::DEPTH_STENCIL_WRITE`]
-//!   when depth is a load/store attachment). On WebGPU this API is a documented no-op.
+//! The MRT→surface [`wgpu::CommandEncoder::copy_texture_to_texture`] runs when RTAO MRT color exists
+//! and no pass in that graph wrote [`ResourceSlot::Surface`], as described under
+//! [Execution order](#execution-order).
 //!
-//! - **Implicit barriers:** Wgpu infers layout from render/compute pass descriptors. The
-//!   MRT→surface [`wgpu::CommandEncoder::copy_texture_to_texture`] is only used when RTAO MRT color
-//!   must be copied because nothing in that graph wrote [`ResourceSlot::Surface`], as described
-//!   under [Execution order](#execution-order).
-//!
-//! - **Buffers:** Cluster and light buffers are ordered by pass sequence and wgpu’s buffer tracking,
-//!   not by `transition_resources` here.
+//! Cluster and light buffers are ordered by pass sequence and wgpu’s buffer tracking.
 
 mod clustered_light;
 mod composite;
@@ -380,73 +376,11 @@ fn render_target_views_for_pass<'a>(
     }
 }
 
-/// Maps texture-backed [`ResourceSlot`]s to [`wgpu::Texture`] for barrier insertion.
-struct TextureSlotMap<'a> {
-    color: Option<&'a wgpu::Texture>,
-    position: Option<&'a wgpu::Texture>,
-    normal: Option<&'a wgpu::Texture>,
-    ao_raw: Option<&'a wgpu::Texture>,
-    ao: Option<&'a wgpu::Texture>,
-    surface: &'a wgpu::Texture,
-    depth: Option<&'a wgpu::Texture>,
-}
-
-fn build_texture_slot_map<'a>(
-    target: &'a RenderTarget,
-    mrt_views: Option<&'a MrtViews<'a>>,
-    depth_texture: Option<&'a wgpu::Texture>,
-) -> TextureSlotMap<'a> {
-    let surface = target.texture();
-    let depth = target.depth_texture().or(depth_texture);
-    match mrt_views {
-        Some(mrt) => TextureSlotMap {
-            color: Some(mrt.color_texture),
-            position: Some(mrt.position_texture),
-            normal: Some(mrt.normal_texture),
-            ao_raw: Some(mrt.ao_raw_texture),
-            ao: Some(mrt.ao_texture),
-            surface,
-            depth,
-        },
-        None => TextureSlotMap {
-            color: None,
-            position: None,
-            normal: None,
-            ao_raw: None,
-            ao: None,
-            surface,
-            depth,
-        },
-    }
-}
-
-fn texture_barrier_slot(slot: ResourceSlot) -> bool {
-    matches!(
-        slot,
-        ResourceSlot::Color
-            | ResourceSlot::Position
-            | ResourceSlot::Normal
-            | ResourceSlot::AoRaw
-            | ResourceSlot::Ao
-            | ResourceSlot::Surface
-            | ResourceSlot::Depth
-    )
-}
-
-fn texture_for_slot<'a>(map: &TextureSlotMap<'a>, slot: ResourceSlot) -> Option<&'a wgpu::Texture> {
-    match slot {
-        ResourceSlot::Color => map.color,
-        ResourceSlot::Position => map.position,
-        ResourceSlot::Normal => map.normal,
-        ResourceSlot::AoRaw => map.ao_raw,
-        ResourceSlot::Ao => map.ao,
-        ResourceSlot::Surface => Some(map.surface),
-        ResourceSlot::Depth => map.depth,
-        ResourceSlot::ClusterBuffers | ResourceSlot::LightBuffer => None,
-    }
-}
-
 /// Target [`wgpu::TextureUses`] when the current pass reads `slot` as input (after a prior write).
+///
+/// Used by unit tests documenting intended transition semantics if explicit barriers are reintroduced
+/// (e.g. for multi-submit batching).
+#[cfg(test)]
 fn texture_read_target_uses(slot: ResourceSlot, curr: &PassResources) -> Option<wgpu::TextureUses> {
     match slot {
         ResourceSlot::Color
@@ -466,31 +400,6 @@ fn texture_read_target_uses(slot: ResourceSlot, curr: &PassResources) -> Option<
         ResourceSlot::Surface => Some(wgpu::TextureUses::RESOURCE),
         ResourceSlot::ClusterBuffers | ResourceSlot::LightBuffer => None,
     }
-}
-
-fn collect_texture_barrier_transitions<'a>(
-    curr: &PassResources,
-    written: &HashSet<ResourceSlot>,
-    map: &TextureSlotMap<'a>,
-) -> Vec<wgpu::TextureTransition<&'a wgpu::Texture>> {
-    let mut out = Vec::new();
-    for &slot in &curr.reads {
-        if !texture_barrier_slot(slot) || !written.contains(&slot) {
-            continue;
-        }
-        let Some(tex) = texture_for_slot(map, slot) else {
-            continue;
-        };
-        let Some(state) = texture_read_target_uses(slot, curr) else {
-            continue;
-        };
-        out.push(wgpu::TextureTransition {
-            texture: tex,
-            selector: None,
-            state,
-        });
-    }
-    out
 }
 
 /// Color and optional depth texture views for the current render pass.
@@ -956,14 +865,12 @@ impl RenderGraph {
         })
     }
 
-    /// Runs this graph’s [`ExecutionUnit`] sequence on `encoder`, updating `written_slots` for
-    /// cross-unit barriers. Used by [`execute`](Self::execute) and recursively for subgraphs.
+    /// Runs this graph’s [`ExecutionUnit`] sequence on `encoder`. Used by [`execute`](Self::execute)
+    /// and recursively for subgraphs.
     fn execute_scheduled_units(
         &mut self,
         ctx: &mut RenderGraphContext<'_>,
         encoder: &mut wgpu::CommandEncoder,
-        written_slots: &mut HashSet<ResourceSlot>,
-        global_pass_index: &mut usize,
         frame_index: u64,
         cached_mesh_draws: Option<CachedMeshDrawsRef<'_>>,
     ) -> Result<(), RenderPassError> {
@@ -1002,20 +909,6 @@ impl RenderGraph {
         for unit in &mut self.execution {
             match unit {
                 ExecutionUnit::Pass { pass, resources } => {
-                    let depth_tex = ctx.gpu.depth_texture.as_ref();
-                    let texture_map =
-                        build_texture_slot_map(ctx.target, mrt_views.as_ref(), depth_tex);
-                    let transitions =
-                        collect_texture_barrier_transitions(resources, written_slots, &texture_map);
-                    if !transitions.is_empty() {
-                        logger::trace!(
-                            "render graph pass {}: {} explicit texture barrier transition(s)",
-                            global_pass_index,
-                            transitions.len()
-                        );
-                        encoder.transition_resources(std::iter::empty(), transitions.into_iter());
-                    }
-
                     let slot_map =
                         build_slot_map(ctx.target, mrt_views.as_ref(), ctx.depth_view_override);
                     let render_target = render_target_views_for_pass(&slot_map, Some(resources));
@@ -1035,15 +928,11 @@ impl RenderGraph {
                         cached_mesh_draws,
                     };
                     pass.execute(&mut pass_ctx)?;
-                    written_slots.extend(resources.writes.iter().copied());
-                    *global_pass_index += 1;
                 }
                 ExecutionUnit::Subgraph(labeled) => {
                     labeled.graph.execute_scheduled_units(
                         ctx,
                         encoder,
-                        written_slots,
-                        global_pass_index,
                         frame_index,
                         cached_mesh_draws,
                     )?;
@@ -1137,16 +1026,7 @@ impl RenderGraph {
 
         let frame_index = ctx.pipeline_manager.advance_frame();
 
-        let mut written_slots: HashSet<ResourceSlot> = HashSet::new();
-        let mut global_pass_index = 0usize;
-        self.execute_scheduled_units(
-            ctx,
-            &mut encoder,
-            &mut written_slots,
-            &mut global_pass_index,
-            frame_index,
-            cached_mesh_draws,
-        )?;
+        self.execute_scheduled_units(ctx, &mut encoder, frame_index, cached_mesh_draws)?;
 
         if let (Some(query_set), Some(resolve_buffer), Some(staging_buffer)) = (
             ctx.timestamp_query_set,
@@ -1327,6 +1207,19 @@ mod tests {
         assert!(overlay.is_some());
         let res = graph.pass_resources();
         assert!(res[1].writes.contains(&ResourceSlot::Position));
+    }
+
+    /// [`RtaoBlurPass`] samples the normal G-buffer; its [`RenderPass::resources`] must declare
+    /// [`ResourceSlot::Normal`] or per-pass [`RenderTargetViews`] omit `mrt_normal_view` and blur
+    /// never runs (breaking composite AO).
+    #[test]
+    fn rtao_blur_pass_declares_normal_read_for_slot_map() {
+        let pass = RtaoBlurPass::new();
+        let r = pass.resources();
+        assert!(
+            r.reads.contains(&ResourceSlot::Normal),
+            "blur execute() needs mrt_normal_view from slot map"
+        );
     }
 
     #[test]

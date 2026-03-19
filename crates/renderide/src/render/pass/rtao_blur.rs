@@ -154,9 +154,15 @@ impl RenderPass for RtaoBlurPass {
         "rtao_blur"
     }
 
+    /// Declares G-buffer inputs used by the blur shader. [`ResourceSlot::Normal`] must be listed so
+    /// per-pass [`super::RenderTargetViews`] wiring fills [`super::RenderTargetViews::mrt_normal_view`].
     fn resources(&self) -> PassResources {
         PassResources {
-            reads: vec![ResourceSlot::AoRaw, ResourceSlot::Depth],
+            reads: vec![
+                ResourceSlot::AoRaw,
+                ResourceSlot::Depth,
+                ResourceSlot::Normal,
+            ],
             writes: vec![ResourceSlot::Ao],
         }
     }
