@@ -11,7 +11,7 @@ use interprocess::{QueueFactory, QueueOptions};
 
 use crate::config::ResoBootConfig;
 use crate::host_spawner;
-use crate::orphan;
+use crate::process_lifetime::ChildLifetimeGroup;
 use crate::queue_commands;
 
 const QUEUE_CAPACITY: i64 = 8192;
@@ -42,7 +42,13 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
         logger::warn!("Failed to reset Renderide.log: {}", e);
     }
 
-    orphan::kill_orphans();
+    let lifetime = match ChildLifetimeGroup::new() {
+        Ok(g) => g,
+        Err(e) => {
+            logger::error!("Failed to create child lifetime group: {}", e);
+            return;
+        }
+    };
 
     logger::info!("Bootstrapper start");
     logger::info!("Shared memory prefix: {}", config.shared_memory_prefix);
@@ -86,7 +92,7 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     args.push(config.shared_memory_prefix.clone());
     logger::info!("Host args: {:?}", args);
 
-    let mut p = match host_spawner::spawn_host(&config, &args) {
+    let mut p = match host_spawner::spawn_host(&config, &args, &lifetime) {
         Ok(c) => c,
         Err(e) => {
             logger::error!("Failed to start process: {}", e);
@@ -106,8 +112,6 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
     logger::info!(
         "Host sends first message to bootstrapper_in: renderer start args (-QueueName X -QueueCapacity Y)"
     );
-
-    orphan::write_pid_file(p.id(), "host");
 
     let log_path = logs_dir.join("HostOutput.log");
     if let Some(stdout) = p.stdout.take() {
@@ -157,7 +161,7 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
         logger::info!("Wine mode: process watcher disabled (child is shell, not Host)");
     }
 
-    queue_commands::queue_loop(&mut incoming, &mut outgoing, &config, &cancel);
+    queue_commands::queue_loop(&mut incoming, &mut outgoing, &config, &cancel, &lifetime);
 
     if config.is_wine {
         let shm_dir = PathBuf::from("/dev/shm");
@@ -177,6 +181,5 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
         }
     }
 
-    orphan::remove_pid_file();
     logger::info!("Bootstrapper end");
 }

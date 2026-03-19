@@ -8,7 +8,7 @@ use std::time::Duration;
 use interprocess::{Publisher, Subscriber};
 
 use crate::config::ResoBootConfig;
-use crate::orphan;
+use crate::process_lifetime::ChildLifetimeGroup;
 
 /// Parsed host command from the IPC queue.
 #[derive(Debug)]
@@ -41,10 +41,13 @@ pub fn parse_host_command(s: &str) -> HostCommand {
 }
 
 /// Handles a host command and returns whether to continue or break the loop.
+///
+/// `lifetime` is applied when starting the renderer so it exits with the bootstrapper.
 pub fn handle_command(
     cmd: HostCommand,
     outgoing: &mut Publisher,
     config: &ResoBootConfig,
+    lifetime: &ChildLifetimeGroup,
 ) -> LoopAction {
     match cmd {
         HostCommand::Heartbeat => {
@@ -96,20 +99,26 @@ pub fn handle_command(
                 config.renderite_executable,
                 args
             );
-            match Command::new(&config.renderite_executable)
+            let mut renderer_cmd = Command::new(&config.renderite_executable);
+            renderer_cmd
                 .args(&args_refs)
-                .current_dir(&config.renderite_directory)
-                .spawn()
-            {
-                Ok(process) => {
-                    logger::info!(
-                        "Renderer started PID {} with args: {}",
-                        process.id(),
-                        args.join(" ")
-                    );
-                    orphan::write_pid_file(process.id(), "renderer");
-                    let response = format!("RENDERITE_STARTED:{}", process.id());
-                    let _ = outgoing.try_enqueue(response.as_bytes());
+                .current_dir(&config.renderite_directory);
+            lifetime.prepare_command(&mut renderer_cmd);
+            match renderer_cmd.spawn() {
+                Ok(mut process) => {
+                    if let Err(e) = lifetime.register_spawned(&process) {
+                        logger::error!("Renderer started but could not join lifetime group: {}", e);
+                        let _ = process.kill();
+                        let _ = process.wait();
+                    } else {
+                        logger::info!(
+                            "Renderer started PID {} with args: {}",
+                            process.id(),
+                            args.join(" ")
+                        );
+                        let response = format!("RENDERITE_STARTED:{}", process.id());
+                        let _ = outgoing.try_enqueue(response.as_bytes());
+                    }
                 }
                 Err(e) => {
                     logger::error!("Failed to start renderer: {}", e);
@@ -121,11 +130,14 @@ pub fn handle_command(
 }
 
 /// Main queue loop: dequeue messages, parse, handle, and break on shutdown or cancel.
+///
+/// `lifetime` is forwarded when spawning the renderer from [`HostCommand::StartRenderer`].
 pub fn queue_loop(
     incoming: &mut Subscriber,
     outgoing: &mut Publisher,
     config: &ResoBootConfig,
     cancel: &AtomicBool,
+    lifetime: &ChildLifetimeGroup,
 ) {
     let start = std::time::Instant::now();
     let mut last_wait_log = std::time::Instant::now();
@@ -177,7 +189,10 @@ pub fn queue_loop(
         logger::info!("Received message: {}", arguments);
 
         let cmd = parse_host_command(&arguments);
-        if matches!(handle_command(cmd, outgoing, config), LoopAction::Break) {
+        if matches!(
+            handle_command(cmd, outgoing, config, lifetime),
+            LoopAction::Break
+        ) {
             break;
         }
     }

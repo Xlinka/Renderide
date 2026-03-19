@@ -3,8 +3,8 @@
 
 mod config;
 mod host_spawner;
-mod orphan;
 mod paths;
+mod process_lifetime;
 mod queue_commands;
 mod resoboot;
 mod wine_helpers;

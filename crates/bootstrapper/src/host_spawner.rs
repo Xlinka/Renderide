@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::config::ResoBootConfig;
 use crate::paths;
+use crate::process_lifetime::ChildLifetimeGroup;
 
 /// Removes Microsoft.WindowsDesktop.App from runtime config for Wine compatibility.
 pub fn strip_windows_desktop_from_runtime_config(path: &Path) {
@@ -64,20 +65,29 @@ pub fn spawn_output_drainer(
 }
 
 /// Spawns the Renderite Host process. Returns the child process or an error.
-pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<Child> {
+///
+/// `lifetime` ties the child to bootstrapper exit (job object on Windows, parent death signal on Linux).
+pub fn spawn_host(
+    config: &ResoBootConfig,
+    args: &[String],
+    lifetime: &ChildLifetimeGroup,
+) -> std::io::Result<Child> {
     if config.is_wine {
         logger::info!("Detected Wine; altering startup sequence accordingly.");
         strip_windows_desktop_from_runtime_config(&config.runtime_config);
         logger::info!(
             "Starting LinuxBootstrap.sh to check for dotnet and execute the main program."
         );
-        Command::new("start")
-            .args(["/b", "/unix", "./LinuxBootstrap.sh"])
+        let mut cmd = Command::new("start");
+        cmd.args(["/b", "/unix", "./LinuxBootstrap.sh"])
             .args(args)
             .current_dir(&config.current_directory)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        lifetime.prepare_command(&mut cmd);
+        let child = cmd.spawn()?;
+        lifetime.register_spawned(&child)?;
+        Ok(child)
     } else {
         let resonite_dir = paths::find_resonite_dir().ok_or_else(|| {
             std::io::Error::new(
@@ -93,13 +103,16 @@ pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<C
             let dotnet = paths::find_dotnet_for_host(&resonite_dir);
             let host_dll = resonite_dir.join(paths::RENDERITE_HOST_DLL);
             logger::info!("Using dotnet at {:?} to run Renderite.Host.dll", dotnet);
-            Command::new(&dotnet)
-                .arg(&host_dll)
+            let mut cmd = Command::new(&dotnet);
+            cmd.arg(&host_dll)
                 .args(args)
                 .current_dir(&resonite_dir)
                 .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
+                .stderr(Stdio::piped());
+            lifetime.prepare_command(&mut cmd);
+            let child = cmd.spawn()?;
+            lifetime.register_spawned(&child)?;
+            Ok(child)
         }
 
         #[cfg(not(target_os = "linux"))]
@@ -123,7 +136,10 @@ pub fn spawn_host(config: &ResoBootConfig, args: &[String]) -> std::io::Result<C
                 .current_dir(&resonite_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            cmd.spawn()
+            lifetime.prepare_command(&mut cmd);
+            let child = cmd.spawn()?;
+            lifetime.register_spawned(&child)?;
+            Ok(child)
         }
     }
 }

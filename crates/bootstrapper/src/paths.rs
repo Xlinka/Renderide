@@ -1,4 +1,4 @@
-//! Path discovery for Resonite installation, dotnet, and PID file.
+//! Path discovery for Resonite installation and dotnet.
 //! Searches RESONITE_DIR, STEAM_PATH, Steam registry (Windows), and libraryfolders.vdf.
 
 use std::env;
@@ -12,8 +12,6 @@ pub const RESONITE_APP_NAME: &str = "Resonite";
 pub const RENDERITE_HOST_EXE: &str = "Renderite.Host.exe";
 /// Host DLL for dotnet on Linux.
 pub const RENDERITE_HOST_DLL: &str = "Renderite.Host.dll";
-
-const PID_FILE_NAME: &str = "renderide_bootstrap.pid";
 
 /// Finds the dotnet executable to run Renderite.Host.dll.
 /// Prefers bundled dotnet-runtime in the Resonite folder (matches Linux behavior).
@@ -170,9 +168,4 @@ fn steam_path_from_registry() -> Result<PathBuf, std::io::Error> {
         std::io::ErrorKind::NotFound,
         "Steam path not found in registry",
     ))
-}
-
-/// PID file path for orphan cleanup. Stored in temp dir so it persists across runs.
-pub fn pid_file_path() -> PathBuf {
-    env::temp_dir().join(PID_FILE_NAME)
 }
