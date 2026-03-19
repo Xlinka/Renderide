@@ -431,7 +431,13 @@ impl Session {
         }
         batches.sort_by_key(|b| b.is_overlay);
         let overlay_count = batches.iter().filter(|b| b.is_overlay).count();
-        logger::trace!("collected {} overlay batches", overlay_count);
+        let non_overlay_count = batches.len() - overlay_count;
+        logger::trace!(
+            "collected {} overlay batches, {} non-overlay batches (total={})",
+            overlay_count,
+            non_overlay_count,
+            batches.len()
+        );
         batches
     }
 

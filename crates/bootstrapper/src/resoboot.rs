@@ -145,10 +145,12 @@ pub fn run(host_args_from_cli: &[String], log_level: Option<logger::LogLevel>) {
                 .as_ref()
                 .map(|s| format!(" (exit code: {:?})", s))
                 .unwrap_or_default();
-            logger::info!(
+            let msg = format!(
                 "Host process exited{}, triggering cancellation. Check HostOutput.log for host stdout/stderr.",
                 exit_info
             );
+            eprintln!("{}", msg);
+            logger::info!("{}", msg);
             cancel_clone.store(true, Ordering::SeqCst);
         });
     } else {

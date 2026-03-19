@@ -473,6 +473,9 @@ struct SceneUniforms {
     _pad0: f32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
+    near_clip: f32,
+    far_clip: f32,
     light_count: u32,
     _pad1: u32,
 }
@@ -541,9 +544,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
     let ndc_x = in.clip_position.x / in.clip_position.w * 0.5 + 0.5;
     let ndc_y = in.clip_position.y / in.clip_position.w * 0.5 + 0.5;
+    let ndc_z = in.clip_position.z / in.clip_position.w;
+    let denominator = ndc_z * (scene.far_clip - scene.near_clip) + scene.near_clip;
+    let cluster_z_val = log(scene.far_clip / max(denominator, 0.0001)) / log(scene.far_clip / scene.near_clip) * f32(scene.cluster_count_z);
+    let cluster_z = min(u32(max(cluster_z_val, 0.0)), scene.cluster_count_z - 1u);
     let cluster_x = min(u32(ndc_x * f32(scene.cluster_count_x)), scene.cluster_count_x - 1u);
-    let cluster_y = min(u32(ndc_y * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
-    let cluster_id = cluster_x + cluster_y * scene.cluster_count_x;
+    let cluster_y = min(u32((1.0 - ndc_y) * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
+    let cluster_id = cluster_x + scene.cluster_count_x * (cluster_y + scene.cluster_count_y * cluster_z);
     let count = cluster_light_counts[cluster_id];
     let base_idx = cluster_id * MAX_LIGHTS_PER_TILE;
 
@@ -645,6 +652,9 @@ struct SceneUniforms {
     _pad0: f32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
+    near_clip: f32,
+    far_clip: f32,
     light_count: u32,
     _pad1: u32,
 }
@@ -718,9 +728,13 @@ fn fs_main(in: VertexOutput) -> PbrFragmentOutput {
 
     let ndc_x = in.clip_position.x / in.clip_position.w * 0.5 + 0.5;
     let ndc_y = in.clip_position.y / in.clip_position.w * 0.5 + 0.5;
+    let ndc_z = in.clip_position.z / in.clip_position.w;
+    let denominator = ndc_z * (scene.far_clip - scene.near_clip) + scene.near_clip;
+    let cluster_z_val = log(scene.far_clip / max(denominator, 0.0001)) / log(scene.far_clip / scene.near_clip) * f32(scene.cluster_count_z);
+    let cluster_z = min(u32(max(cluster_z_val, 0.0)), scene.cluster_count_z - 1u);
     let cluster_x = min(u32(ndc_x * f32(scene.cluster_count_x)), scene.cluster_count_x - 1u);
-    let cluster_y = min(u32(ndc_y * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
-    let cluster_id = cluster_x + cluster_y * scene.cluster_count_x;
+    let cluster_y = min(u32((1.0 - ndc_y) * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
+    let cluster_id = cluster_x + scene.cluster_count_x * (cluster_y + scene.cluster_count_y * cluster_z);
     let count = cluster_light_counts[cluster_id];
     let base_idx = cluster_id * MAX_LIGHTS_PER_TILE;
 
@@ -835,6 +849,9 @@ struct SceneUniforms {
     _pad0: f32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
+    near_clip: f32,
+    far_clip: f32,
     light_count: u32,
     _pad1: u32,
 }
@@ -939,9 +956,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4f {
 
     let ndc_x = in.clip_position.x / in.clip_position.w * 0.5 + 0.5;
     let ndc_y = in.clip_position.y / in.clip_position.w * 0.5 + 0.5;
+    let ndc_z = in.clip_position.z / in.clip_position.w;
+    let denominator = ndc_z * (scene.far_clip - scene.near_clip) + scene.near_clip;
+    let cluster_z_val = log(scene.far_clip / max(denominator, 0.0001)) / log(scene.far_clip / scene.near_clip) * f32(scene.cluster_count_z);
+    let cluster_z = min(u32(max(cluster_z_val, 0.0)), scene.cluster_count_z - 1u);
     let cluster_x = min(u32(ndc_x * f32(scene.cluster_count_x)), scene.cluster_count_x - 1u);
-    let cluster_y = min(u32(ndc_y * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
-    let cluster_id = cluster_x + cluster_y * scene.cluster_count_x;
+    let cluster_y = min(u32((1.0 - ndc_y) * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
+    let cluster_id = cluster_x + scene.cluster_count_x * (cluster_y + scene.cluster_count_y * cluster_z);
     let count = cluster_light_counts[cluster_id];
     let base_idx = cluster_id * MAX_LIGHTS_PER_TILE;
 
@@ -1052,6 +1073,9 @@ struct SceneUniforms {
     _pad0: f32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
+    near_clip: f32,
+    far_clip: f32,
     light_count: u32,
     _pad1: u32,
 }
@@ -1161,9 +1185,13 @@ fn fs_main(in: VertexOutput) -> SkinnedPbrFragmentOutput {
 
     let ndc_x = in.clip_position.x / in.clip_position.w * 0.5 + 0.5;
     let ndc_y = in.clip_position.y / in.clip_position.w * 0.5 + 0.5;
+    let ndc_z = in.clip_position.z / in.clip_position.w;
+    let denominator = ndc_z * (scene.far_clip - scene.near_clip) + scene.near_clip;
+    let cluster_z_val = log(scene.far_clip / max(denominator, 0.0001)) / log(scene.far_clip / scene.near_clip) * f32(scene.cluster_count_z);
+    let cluster_z = min(u32(max(cluster_z_val, 0.0)), scene.cluster_count_z - 1u);
     let cluster_x = min(u32(ndc_x * f32(scene.cluster_count_x)), scene.cluster_count_x - 1u);
-    let cluster_y = min(u32(ndc_y * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
-    let cluster_id = cluster_x + cluster_y * scene.cluster_count_x;
+    let cluster_y = min(u32((1.0 - ndc_y) * f32(scene.cluster_count_y)), scene.cluster_count_y - 1u);
+    let cluster_id = cluster_x + scene.cluster_count_x * (cluster_y + scene.cluster_count_y * cluster_z);
     let count = cluster_light_counts[cluster_id];
     let base_idx = cluster_id * MAX_LIGHTS_PER_TILE;
 

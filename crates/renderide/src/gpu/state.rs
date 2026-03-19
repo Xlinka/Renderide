@@ -48,6 +48,7 @@ pub struct GpuState {
     /// Cluster grid dimensions. Zero when cluster buffers are not available.
     pub cluster_count_x: u32,
     pub cluster_count_y: u32,
+    pub cluster_count_z: u32,
     /// Light count from ClusteredLightPass.
     pub light_count: u32,
     /// Cached PBR scene bind groups. Invalidated when light or cluster buffers change.
@@ -220,6 +221,7 @@ pub async fn init_gpu(
         cluster_buffer_cache: ClusterBufferCache::new(),
         cluster_count_x: 0,
         cluster_count_y: 0,
+        cluster_count_z: 0,
         light_count: 0,
         pbr_scene_bind_group_cache: std::collections::HashMap::new(),
         last_pbr_scene_cache_light_version: 0,

@@ -7,7 +7,7 @@
 use std::mem::size_of;
 
 use bytemuck::{Pod, Zeroable};
-use glam::Mat4;
+use glam::{Mat4, Vec4};
 
 use super::mesh_draw::apply_view_handedness_fix;
 use super::{RenderPass, RenderPassError};
@@ -18,22 +18,29 @@ use crate::scene::render_transform_to_matrix;
 use crate::session::Session;
 
 const TILE_SIZE: u32 = 16;
+/// Depth slice count for clustered shading (DOOM 2016 style exponential subdivision).
+const CLUSTER_COUNT_Z: u32 = 24;
 
 /// Cluster parameters uniform for the compute shader.
+///
+/// Padded to 240 bytes to match WGSL uniform buffer alignment (16-byte boundary).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct ClusterParams {
     view: [[f32; 4]; 4],
     proj: [[f32; 4]; 4],
-    inv_view_proj: [[f32; 4]; 4],
+    inv_proj: [[f32; 4]; 4],
     viewport_width: f32,
     viewport_height: f32,
     tile_size: u32,
     light_count: u32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
     near_clip: f32,
     far_clip: f32,
+    /// Padding to 240 bytes for WGSL uniform buffer alignment.
+    _pad: [u8; 16],
 }
 
 const CLUSTER_PARAMS_SIZE: u64 = size_of::<ClusterParams>() as u64;
@@ -55,13 +62,14 @@ struct GpuLight {
 struct ClusterParams {
     view: mat4x4f,
     proj: mat4x4f,
-    inv_view_proj: mat4x4f,
+    inv_proj: mat4x4f,
     viewport_width: f32,
     viewport_height: f32,
     tile_size: u32,
     light_count: u32,
     cluster_count_x: u32,
     cluster_count_y: u32,
+    cluster_count_z: u32,
     near_clip: f32,
     far_clip: f32,
 }
@@ -79,13 +87,28 @@ struct TileAabb {
 }
 
 fn ndc_to_view(ndc: vec3f) -> vec3f {
-    let clip = params.inv_view_proj * vec4f(ndc.x, ndc.y, ndc.z, 1.0);
+    let clip = params.inv_proj * vec4f(ndc.x, ndc.y, ndc.z, 1.0);
     return clip.xyz / clip.w;
 }
 
-fn get_tile_aabb(cluster_x: u32, cluster_y: u32) -> TileAabb {
+/// Intersects the ray from origin through `ray_point` with the view-space z-plane at `z_dist`.
+fn line_intersect_z_plane(ray_point: vec3f, z_dist: f32) -> vec3f {
+    let t = z_dist / ray_point.z;
+    return ray_point * t;
+}
+
+/// Returns the AABB of a 3D cluster in view space (DOOM 2016 exponential depth subdivision).
+fn get_cluster_aabb(cluster_x: u32, cluster_y: u32, cluster_z: u32) -> TileAabb {
     let w = params.viewport_width;
     let h = params.viewport_height;
+    let near = params.near_clip;
+    let far = params.far_clip;
+    let num_z = f32(params.cluster_count_z);
+    let z = f32(cluster_z);
+
+    let tile_near = -near * pow(far / near, z / num_z);
+    let tile_far = -near * pow(far / near, (z + 1.0) / num_z);
+
     let px_min = f32(cluster_x * params.tile_size) + 0.5;
     let px_max = f32((cluster_x + 1u) * params.tile_size) - 0.5;
     let py_min = f32(cluster_y * params.tile_size) + 0.5;
@@ -94,16 +117,23 @@ fn get_tile_aabb(cluster_x: u32, cluster_y: u32) -> TileAabb {
     let ndc_right = 2.0 * px_max / w - 1.0;
     let ndc_top = 1.0 - 2.0 * py_min / h;
     let ndc_bottom = 1.0 - 2.0 * py_max / h;
-    let v_near_bl = ndc_to_view(vec3f(ndc_left, ndc_bottom, 1.0));
-    let v_near_br = ndc_to_view(vec3f(ndc_right, ndc_bottom, 1.0));
-    let v_near_tl = ndc_to_view(vec3f(ndc_left, ndc_top, 1.0));
-    let v_near_tr = ndc_to_view(vec3f(ndc_right, ndc_top, 1.0));
-    let v_far_bl = ndc_to_view(vec3f(ndc_left, ndc_bottom, -1.0));
-    let v_far_br = ndc_to_view(vec3f(ndc_right, ndc_bottom, -1.0));
-    let v_far_tl = ndc_to_view(vec3f(ndc_left, ndc_top, -1.0));
-    let v_far_tr = ndc_to_view(vec3f(ndc_right, ndc_top, -1.0));
-    var min_v = min(min(min(v_near_bl, v_near_br), min(v_near_tl, v_near_tr)), min(min(v_far_bl, v_far_br), min(v_far_tl, v_far_tr)));
-    var max_v = max(max(max(v_near_bl, v_near_br), max(v_near_tl, v_near_tr)), max(max(v_far_bl, v_far_br), max(v_far_tl, v_far_tr)));
+
+    let v_bl = ndc_to_view(vec3f(ndc_left, ndc_bottom, 1.0));
+    let v_br = ndc_to_view(vec3f(ndc_right, ndc_bottom, 1.0));
+    let v_tl = ndc_to_view(vec3f(ndc_left, ndc_top, 1.0));
+    let v_tr = ndc_to_view(vec3f(ndc_right, ndc_top, 1.0));
+
+    let p_near_bl = line_intersect_z_plane(v_bl, tile_near);
+    let p_near_br = line_intersect_z_plane(v_br, tile_near);
+    let p_near_tl = line_intersect_z_plane(v_tl, tile_near);
+    let p_near_tr = line_intersect_z_plane(v_tr, tile_near);
+    let p_far_bl = line_intersect_z_plane(v_bl, tile_far);
+    let p_far_br = line_intersect_z_plane(v_br, tile_far);
+    let p_far_tl = line_intersect_z_plane(v_tl, tile_far);
+    let p_far_tr = line_intersect_z_plane(v_tr, tile_far);
+
+    var min_v = min(min(min(p_near_bl, p_near_br), min(p_near_tl, p_near_tr)), min(min(p_far_bl, p_far_br), min(p_far_tl, p_far_tr)));
+    var max_v = max(max(max(p_near_bl, p_near_br), max(p_near_tl, p_near_tr)), max(max(p_far_bl, p_far_br), max(p_far_tl, p_far_tr)));
     return TileAabb(min_v, max_v);
 }
 
@@ -113,22 +143,55 @@ fn sphere_aabb_intersect(center: vec3f, radius: f32, aabb_min: vec3f, aabb_max: 
     return dot(d, d) <= radius * radius;
 }
 
-fn cone_aabb_intersect(apex: vec3f, _axis: vec3f, _cos_half: f32, range: f32, aabb_min: vec3f, aabb_max: vec3f) -> bool {
-    return sphere_aabb_intersect(apex, range, aabb_min, aabb_max);
+/// Ray-AABB intersection. Returns true if ray origin + t*dir for t in [0, range] hits the AABB.
+fn ray_aabb_intersect(origin: vec3f, dir: vec3f, range: f32, aabb_min: vec3f, aabb_max: vec3f) -> bool {
+    let eps = 1e-8;
+    let inv_dir = vec3f(1.0 / select(dir.x, eps, dir.x == 0.0),
+                         1.0 / select(dir.y, eps, dir.y == 0.0),
+                         1.0 / select(dir.z, eps, dir.z == 0.0));
+    let t0 = (aabb_min - origin) * inv_dir;
+    let t1 = (aabb_max - origin) * inv_dir;
+    let t_min = vec3f(min(t0.x, t1.x), min(t0.y, t1.y), min(t0.z, t1.z));
+    let t_max = vec3f(max(t0.x, t1.x), max(t0.y, t1.y), max(t0.z, t1.z));
+    let t_entry = max(max(t_min.x, t_min.y), t_min.z);
+    let t_exit = min(min(t_max.x, t_max.y), t_max.z);
+    return t_entry <= t_exit && t_exit >= 0.0 && t_entry <= range;
 }
 
-@compute @workgroup_size(8, 8)
+/// Cone-AABB intersection for spot lights. Axis points from apex into the cone.
+fn cone_aabb_intersect(apex: vec3f, axis: vec3f, cos_half: f32, range: f32, aabb_min: vec3f, aabb_max: vec3f) -> bool {
+    if cos_half >= 0.9999 {
+        return sphere_aabb_intersect(apex, range, aabb_min, aabb_max);
+    }
+    let tan_angle_sq_plus_one = 1.0 / (cos_half * cos_half);
+    let axis_n = normalize(axis);
+    for (var i = 0u; i < 8u; i++) {
+        let px = select(aabb_min.x, aabb_max.x, (i & 1u) != 0u);
+        let py = select(aabb_min.y, aabb_max.y, (i & 2u) != 0u);
+        let pz = select(aabb_min.z, aabb_max.z, (i & 4u) != 0u);
+        let p = vec3f(px, py, pz) - apex;
+        let len_a = dot(p, axis_n);
+        if len_a >= 0.0 && len_a <= range && dot(p, p) <= len_a * len_a * tan_angle_sq_plus_one {
+            return true;
+        }
+    }
+    return ray_aabb_intersect(apex, axis_n, range, aabb_min, aabb_max);
+}
+
+@compute @workgroup_size(8, 8, 1)
 fn main(@builtin(global_invocation_id) global_id: vec3u) {
     let cluster_count_x = params.cluster_count_x;
     let cluster_count_y = params.cluster_count_y;
-    if global_id.x >= cluster_count_x || global_id.y >= cluster_count_y {
+    let cluster_count_z = params.cluster_count_z;
+    if global_id.x >= cluster_count_x || global_id.y >= cluster_count_y || global_id.z >= cluster_count_z {
         return;
     }
-    let cluster_id = global_id.x + global_id.y * cluster_count_x;
+    let cluster_id = global_id.x + cluster_count_x * (global_id.y + cluster_count_y * global_id.z);
     let cluster_x = global_id.x;
     let cluster_y = global_id.y;
+    let cluster_z = global_id.z;
 
-    let aabb = get_tile_aabb(cluster_x, cluster_y);
+    let aabb = get_cluster_aabb(cluster_x, cluster_y, cluster_z);
     let aabb_min = aabb.min_v;
     let aabb_max = aabb.max_v;
 
@@ -250,10 +313,20 @@ impl ClusteredLightPass {
         true
     }
 
-    fn view_matrix_from_batches(draw_batches: &[SpaceDrawBatch]) -> Option<Mat4> {
-        draw_batches.iter().find(|b| !b.is_overlay).map(|b| {
-            apply_view_handedness_fix(render_transform_to_matrix(&b.view_transform).inverse())
-        })
+    /// Returns the view matrix for the batch whose `space_id` matches, or the first non-overlay
+    /// batch if no match exists. Ensures lights and view are from the same coordinate space.
+    /// The second element is `true` if a batch with matching `space_id` was found.
+    fn view_matrix_for_space(
+        draw_batches: &[SpaceDrawBatch],
+        space_id: i32,
+    ) -> Option<(Mat4, bool)> {
+        let matching = draw_batches
+            .iter()
+            .find(|b| !b.is_overlay && b.space_id == space_id);
+        let batch = matching.or_else(|| draw_batches.iter().find(|b| !b.is_overlay))?;
+        let view =
+            apply_view_handedness_fix(render_transform_to_matrix(&batch.view_transform).inverse());
+        Some((view, matching.is_some()))
     }
 
     fn space_id_for_lights(session: &Session, draw_batches: &[SpaceDrawBatch]) -> Option<i32> {
@@ -272,18 +345,29 @@ impl RenderPass for ClusteredLightPass {
     }
 
     fn execute(&mut self, ctx: &mut super::RenderPassContext) -> Result<(), RenderPassError> {
-        let view_mat = match Self::view_matrix_from_batches(ctx.draw_batches) {
-            Some(v) => v,
+        let space_id = match Self::space_id_for_lights(ctx.session, ctx.draw_batches) {
+            Some(id) => id,
             None => {
-                logger::trace!("Clustered light pass skipped: no non-overlay batch");
+                logger::debug!(
+                    "Clustered light pass skipped: no space for lights (primary_view_space_id or non-overlay batch not found)"
+                );
                 return Ok(());
             }
         };
 
-        let space_id = match Self::space_id_for_lights(ctx.session, ctx.draw_batches) {
-            Some(id) => id,
+        let (view_mat, batch_matched) = match Self::view_matrix_for_space(
+            ctx.draw_batches,
+            space_id,
+        ) {
+            Some(v) => v,
             None => {
-                logger::trace!("Clustered light pass skipped: no space for lights");
+                let overlay_count = ctx.draw_batches.iter().filter(|b| b.is_overlay).count();
+                let non_overlay_count = ctx.draw_batches.len() - overlay_count;
+                logger::debug!(
+                    "Clustered light pass skipped: no non-overlay batch (batches: {} overlay, {} non-overlay)",
+                    overlay_count,
+                    non_overlay_count
+                );
                 return Ok(());
             }
         };
@@ -294,8 +378,9 @@ impl RenderPass for ClusteredLightPass {
             .unwrap_or_default();
 
         logger::trace!(
-            "clustered_light pass space_id={} light_count={} lights=[{}]",
+            "clustered_light pass space_id={} batch_matched={} light_count={} lights=[{}]",
             space_id,
+            batch_matched,
             lights.len(),
             lights
                 .iter()
@@ -311,6 +396,29 @@ impl RenderPass for ClusteredLightPass {
                 .collect::<Vec<_>>()
                 .join("; ")
         );
+
+        if !batch_matched && ctx.session.primary_view_space_id().is_some() && !lights.is_empty() {
+            let view = view_mat;
+            let pos_view_samples: Vec<_> = lights
+                .iter()
+                .take(3)
+                .map(|l| {
+                    let p = Vec4::new(
+                        l.world_position.x,
+                        l.world_position.y,
+                        l.world_position.z,
+                        1.0,
+                    );
+                    let v = view * p;
+                    format!("({:.2},{:.2},{:.2})", v.x, v.y, v.z)
+                })
+                .collect();
+            logger::trace!(
+                "clustered_light view/space mismatch: space_id={} differs from first non-overlay batch; light pos_view (first 3)=[{}]",
+                space_id,
+                pos_view_samples.join("; ")
+            );
+        }
 
         let light_count = lights.len().min(MAX_LIGHTS);
         let effective_light_count = light_count.max(1);
@@ -337,23 +445,36 @@ impl RenderPass for ClusteredLightPass {
             .ensure_buffer(&ctx.gpu.device, effective_light_count)
         {
             Some(b) => b,
-            None => return Ok(()),
+            None => {
+                logger::debug!(
+                    "Clustered light pass skipped: light buffer ensure_buffer returned None (effective_light_count={})",
+                    effective_light_count
+                );
+                return Ok(());
+            }
         };
 
         let ClusterBufferRefs {
             cluster_light_counts: cluster_counts,
             cluster_light_indices: cluster_indices,
             params_buffer,
-        } = match ctx
-            .gpu
-            .cluster_buffer_cache
-            .ensure_buffers(&ctx.gpu.device, ctx.viewport)
-        {
+        } = match ctx.gpu.cluster_buffer_cache.ensure_buffers(
+            &ctx.gpu.device,
+            ctx.viewport,
+            CLUSTER_COUNT_Z,
+        ) {
             Some(refs) => refs,
-            None => return Ok(()),
+            None => {
+                logger::debug!(
+                    "Clustered light pass skipped: cluster ensure_buffers returned None (viewport={:?})",
+                    ctx.viewport
+                );
+                return Ok(());
+            }
         };
 
         if !self.ensure_pipeline(&ctx.gpu.device) {
+            logger::debug!("Clustered light pass skipped: ensure_pipeline failed");
             return Ok(());
         }
 
@@ -367,6 +488,7 @@ impl RenderPass for ClusteredLightPass {
 
         ctx.gpu.cluster_count_x = cluster_count_x;
         ctx.gpu.cluster_count_y = cluster_count_y;
+        ctx.gpu.cluster_count_z = CLUSTER_COUNT_Z;
         ctx.gpu.light_count = light_count as u32;
 
         let proj_glam = Mat4::from_cols_array(&[
@@ -390,9 +512,8 @@ impl RenderPass for ClusteredLightPass {
 
         let view_cols = view_mat.to_cols_array();
         let proj_cols = proj_glam.to_cols_array();
-        let view_proj = proj_glam * view_mat;
-        let inv_view_proj = view_proj.inverse();
-        let inv_cols = inv_view_proj.to_cols_array();
+        let inv_proj = proj_glam.inverse();
+        let inv_proj_cols = inv_proj.to_cols_array();
         let params = ClusterParams {
             view: [
                 [view_cols[0], view_cols[1], view_cols[2], view_cols[3]],
@@ -406,11 +527,31 @@ impl RenderPass for ClusteredLightPass {
                 [proj_cols[8], proj_cols[9], proj_cols[10], proj_cols[11]],
                 [proj_cols[12], proj_cols[13], proj_cols[14], proj_cols[15]],
             ],
-            inv_view_proj: [
-                [inv_cols[0], inv_cols[1], inv_cols[2], inv_cols[3]],
-                [inv_cols[4], inv_cols[5], inv_cols[6], inv_cols[7]],
-                [inv_cols[8], inv_cols[9], inv_cols[10], inv_cols[11]],
-                [inv_cols[12], inv_cols[13], inv_cols[14], inv_cols[15]],
+            inv_proj: [
+                [
+                    inv_proj_cols[0],
+                    inv_proj_cols[1],
+                    inv_proj_cols[2],
+                    inv_proj_cols[3],
+                ],
+                [
+                    inv_proj_cols[4],
+                    inv_proj_cols[5],
+                    inv_proj_cols[6],
+                    inv_proj_cols[7],
+                ],
+                [
+                    inv_proj_cols[8],
+                    inv_proj_cols[9],
+                    inv_proj_cols[10],
+                    inv_proj_cols[11],
+                ],
+                [
+                    inv_proj_cols[12],
+                    inv_proj_cols[13],
+                    inv_proj_cols[14],
+                    inv_proj_cols[15],
+                ],
             ],
             viewport_width: width as f32,
             viewport_height: height as f32,
@@ -418,8 +559,10 @@ impl RenderPass for ClusteredLightPass {
             light_count: light_count as u32,
             cluster_count_x,
             cluster_count_y,
+            cluster_count_z: CLUSTER_COUNT_Z,
             near_clip: ctx.session.near_clip().max(0.01),
             far_clip: ctx.session.far_clip(),
+            _pad: [0; 16],
         };
 
         ctx.gpu
@@ -460,7 +603,11 @@ impl RenderPass for ClusteredLightPass {
             });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &bind_group, &[]);
-        pass.dispatch_workgroups(cluster_count_x, cluster_count_y, 1);
+        pass.dispatch_workgroups(
+            cluster_count_x.div_ceil(8),
+            cluster_count_y.div_ceil(8),
+            CLUSTER_COUNT_Z,
+        );
 
         Ok(())
     }
@@ -469,5 +616,68 @@ impl RenderPass for ClusteredLightPass {
 impl Default for ClusteredLightPass {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::{Quaternion, Vector3};
+
+    fn make_batch(space_id: i32, is_overlay: bool, pos: (f32, f32, f32)) -> SpaceDrawBatch {
+        SpaceDrawBatch {
+            space_id,
+            is_overlay,
+            view_transform: crate::shared::RenderTransform {
+                position: Vector3::new(pos.0, pos.1, pos.2),
+                scale: Vector3::new(1.0, 1.0, 1.0),
+                rotation: Quaternion::identity(),
+            },
+            draws: vec![],
+        }
+    }
+
+    #[test]
+    fn view_matrix_for_space_returns_matching_batch() {
+        let batches = vec![
+            make_batch(3, false, (1.0, 0.0, 0.0)),
+            make_batch(5, false, (10.0, 0.0, 0.0)),
+        ];
+        let (view, matched) =
+            ClusteredLightPass::view_matrix_for_space(&batches, 5).expect("should have view");
+        assert!(matched, "space_id=5 should match batch 2");
+        let inv = view.inverse();
+        let cam_pos = inv.w_axis;
+        assert!(
+            (cam_pos.x - 10.0).abs() < 1e-5,
+            "camera should be at (10,0,0)"
+        );
+    }
+
+    #[test]
+    fn view_matrix_for_space_fallback_when_no_match() {
+        let batches = vec![
+            make_batch(3, false, (1.0, 0.0, 0.0)),
+            make_batch(5, false, (10.0, 0.0, 0.0)),
+        ];
+        let (view, matched) =
+            ClusteredLightPass::view_matrix_for_space(&batches, 99).expect("should fallback");
+        assert!(!matched, "space_id=99 has no match, should use fallback");
+        let inv = view.inverse();
+        let cam_pos = inv.w_axis;
+        assert!(
+            (cam_pos.x - 1.0).abs() < 1e-5,
+            "fallback should use first non-overlay (space 3)"
+        );
+    }
+
+    #[test]
+    fn view_matrix_for_space_none_when_no_non_overlay() {
+        let batches = vec![
+            make_batch(3, true, (1.0, 0.0, 0.0)),
+            make_batch(5, true, (10.0, 0.0, 0.0)),
+        ];
+        let result = ClusteredLightPass::view_matrix_for_space(&batches, 5);
+        assert!(result.is_none(), "all overlay batches should return None");
     }
 }

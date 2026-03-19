@@ -9,8 +9,8 @@ use std::mem::size_of;
 const TILE_SIZE: u32 = 16;
 /// Maximum lights per tile (matches clustered_light pass).
 const MAX_LIGHTS_PER_TILE: u32 = 32;
-/// Size of ClusterParams uniform (3 mat4 + 2 f32 + 4 u32 + 2 f32 = 224 bytes).
-const CLUSTER_PARAMS_SIZE: u64 = 224;
+/// Size of ClusterParams uniform (3 mat4 + 2 f32 + 5 u32 + 2 f32, padded for alignment).
+const CLUSTER_PARAMS_SIZE: u64 = 256;
 
 /// References to cluster buffers for the compute pass.
 pub struct ClusterBufferRefs<'a> {
@@ -22,12 +22,12 @@ pub struct ClusterBufferRefs<'a> {
     pub params_buffer: &'a wgpu::Buffer,
 }
 
-/// Cache for cluster buffers. Recreates only when viewport changes.
+/// Cache for cluster buffers. Recreates when viewport or cluster_count_z changes.
 pub struct ClusterBufferCache {
     cluster_light_counts: Option<wgpu::Buffer>,
     cluster_light_indices: Option<wgpu::Buffer>,
     params_buffer: Option<wgpu::Buffer>,
-    cached_viewport: (u32, u32),
+    cached_viewport: ((u32, u32), u32),
     /// Incremented when buffers are recreated. Used for invalidating PBR bind group cache.
     pub version: u64,
 }
@@ -39,27 +39,30 @@ impl ClusterBufferCache {
             cluster_light_counts: None,
             cluster_light_indices: None,
             params_buffer: None,
-            cached_viewport: (0, 0),
+            cached_viewport: ((0, 0), 0),
             version: 0,
         }
     }
 
-    /// Ensures buffers exist for the given viewport. Recreates only when viewport changes.
-    /// Returns references to the buffers, or None if viewport is zero-sized.
+    /// Ensures buffers exist for the given viewport and depth slice count.
+    /// Recreates only when viewport or cluster_count_z changes.
     pub fn ensure_buffers(
         &mut self,
         device: &wgpu::Device,
         viewport: (u32, u32),
+        cluster_count_z: u32,
     ) -> Option<ClusterBufferRefs<'_>> {
         let (width, height) = viewport;
         if width == 0 || height == 0 {
             return None;
         }
-        if self.cluster_light_counts.is_none() || self.cached_viewport != viewport {
+        let cluster_count_x = width.div_ceil(TILE_SIZE);
+        let cluster_count_y = height.div_ceil(TILE_SIZE);
+        let cluster_count = (cluster_count_x * cluster_count_y * cluster_count_z) as usize;
+        let cache_key = (viewport, cluster_count_z);
+        if self.cluster_light_counts.is_none() || self.cached_viewport != cache_key {
             self.version = self.version.wrapping_add(1);
-            let cluster_count_x = width.div_ceil(TILE_SIZE);
-            let cluster_count_y = height.div_ceil(TILE_SIZE);
-            let cluster_count = (cluster_count_x * cluster_count_y) as usize;
+            self.cached_viewport = cache_key;
 
             self.cluster_light_counts = Some(device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("cluster light counts"),
@@ -79,7 +82,6 @@ impl ClusterBufferCache {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }));
-            self.cached_viewport = viewport;
         }
         Some(ClusterBufferRefs {
             cluster_light_counts: self.cluster_light_counts.as_ref()?,
@@ -88,9 +90,21 @@ impl ClusterBufferCache {
         })
     }
 
-    /// Returns references to cluster buffers if they exist and match the viewport.
-    pub fn get_buffers(&self, viewport: (u32, u32)) -> Option<ClusterBufferRefs<'_>> {
-        if self.cached_viewport != viewport {
+    /// Returns references to cluster buffers if they exist and match the viewport and cluster_count_z.
+    pub fn get_buffers(
+        &self,
+        viewport: (u32, u32),
+        cluster_count_z: u32,
+    ) -> Option<ClusterBufferRefs<'_>> {
+        let cache_key = (viewport, cluster_count_z);
+        if self.cached_viewport != cache_key {
+            logger::trace!(
+                "cluster get_buffers mismatch: requested viewport={:?} cluster_count_z={}, cached viewport={:?} cluster_count_z={}",
+                viewport,
+                cluster_count_z,
+                self.cached_viewport.0,
+                self.cached_viewport.1
+            );
             return None;
         }
         Some(ClusterBufferRefs {

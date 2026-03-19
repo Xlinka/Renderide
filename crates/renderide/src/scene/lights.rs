@@ -276,6 +276,9 @@ impl LightCache {
     }
 
     /// Resolves cached lights to world space using scene world matrices.
+    ///
+    /// For buffer lights (LightsBufferRenderer), range is scaled by the parent transform's
+    /// average lossy scale to match Renderite.Unity's LightsBufferRenderer behavior.
     pub fn resolve_lights(
         &self,
         space_id: i32,
@@ -307,12 +310,20 @@ impl LightCache {
             let color = cached.data.color;
             let color = Vec3::new(color.x, color.y, color.z);
 
+            let range = if cached.state.global_unique_id >= 0 {
+                let (scale, _, _) = world.to_scale_rotation_translation();
+                let uniform_scale = (scale.x + scale.y + scale.z) / 3.0;
+                cached.data.range * uniform_scale
+            } else {
+                cached.data.range
+            };
+
             resolved.push(ResolvedLight {
                 world_position: world_pos,
                 world_direction: world_dir,
                 color,
                 intensity: cached.data.intensity,
-                range: cached.data.range,
+                range,
                 spot_angle: cached.data.angle,
                 light_type: cached.state.light_type,
                 global_unique_id: cached.state.global_unique_id,
@@ -637,6 +648,33 @@ mod tests {
         assert!((resolved2[0].world_position.x - 10.0).abs() < 1e-5);
         assert!((resolved2[1].world_position.y - 20.0).abs() < 1e-5);
         assert!((resolved2[2].world_position.z - 30.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_resolve_lights_buffer_light_range_scaled_by_parent() {
+        let mut cache = LightCache::new();
+        let space_id = 0;
+        let light_data = vec![make_light_data((1.0, 0.0, 0.0), (1.0, 0.0, 0.0))];
+        cache.store_full(100, light_data);
+
+        let additions: Vec<i32> = vec![0];
+        let states = vec![make_state(0, 100, LightType::point)];
+        cache.apply_update(space_id, &[], &additions, &states);
+
+        let world_matrix =
+            Mat4::from_scale_rotation_translation(Vec3::splat(2.0), Quat::IDENTITY, Vec3::ZERO);
+        let resolved =
+            cache.resolve_lights(
+                space_id,
+                |tid| if tid == 0 { Some(world_matrix) } else { None },
+            );
+
+        assert_eq!(resolved.len(), 1);
+        assert!(
+            (resolved[0].range - 20.0).abs() < 1e-5,
+            "buffer light range should be scaled by parent (10 * 2 = 20), got {}",
+            resolved[0].range
+        );
     }
 
     #[test]

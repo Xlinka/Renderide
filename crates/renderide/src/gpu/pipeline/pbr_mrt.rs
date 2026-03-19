@@ -315,6 +315,9 @@ impl RenderPipeline for PbrMRTPipeline {
         view_position: [f32; 3],
         cluster_count_x: u32,
         cluster_count_y: u32,
+        cluster_count_z: u32,
+        near_clip: f32,
+        far_clip: f32,
         light_count: u32,
         light_buffer: &wgpu::Buffer,
         cluster_light_counts: &wgpu::Buffer,
@@ -325,8 +328,12 @@ impl RenderPipeline for PbrMRTPipeline {
             _pad0: 0.0,
             cluster_count_x,
             cluster_count_y,
+            cluster_count_z,
+            near_clip,
+            far_clip,
             light_count,
             _pad1: 0,
+            _pad2: [0; 1],
         };
         Some(self.create_scene_bind_group_inner(
             device,

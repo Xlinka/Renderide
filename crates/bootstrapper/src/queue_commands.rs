@@ -52,6 +52,7 @@ pub fn handle_command(
             LoopAction::Continue
         }
         HostCommand::Shutdown => {
+            eprintln!("Host closed itself (SHUTDOWN command received)");
             logger::info!("Got shutdown command");
             LoopAction::Break
         }

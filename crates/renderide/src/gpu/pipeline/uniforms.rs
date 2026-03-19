@@ -19,7 +19,9 @@ pub(crate) struct OverlayStencilUniforms {
     pub _pad: [f32; 16],
 }
 
-/// Scene uniforms for PBR pipeline: view position, cluster counts, light count.
+/// Scene uniforms for PBR pipeline: view position, cluster counts, clip planes, light count.
+///
+/// Size is padded to 48 bytes to match WGSL uniform buffer alignment (16-byte boundary).
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SceneUniforms {
@@ -27,8 +29,13 @@ pub struct SceneUniforms {
     pub _pad0: f32,
     pub cluster_count_x: u32,
     pub cluster_count_y: u32,
+    pub cluster_count_z: u32,
+    pub near_clip: f32,
+    pub far_clip: f32,
     pub light_count: u32,
     pub _pad1: u32,
+    /// Padding to 48 bytes for WGSL uniform buffer alignment.
+    pub _pad2: [u32; 1],
 }
 
 /// MVP + 256 bone matrices + blendshape weights for skinned pipeline.

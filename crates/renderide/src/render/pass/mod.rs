@@ -28,6 +28,31 @@ pub use projection::{
 pub use rtao_blur::RtaoBlurPass;
 pub use rtao_compute::RtaoComputePass;
 
+/// Returns the view (camera) position for the PBR scene, using the same space selection as
+/// [`ClusteredLightPass`]: primary_view_space_id or the first non-overlay batch's space_id,
+/// then the batch matching that space. Keeps view_position, cluster culling, and lights aligned.
+fn pbr_view_position_for_space(draw_batches: &[SpaceDrawBatch], session: &Session) -> [f32; 3] {
+    let space_id = session.primary_view_space_id().or_else(|| {
+        draw_batches
+            .iter()
+            .find(|b| !b.is_overlay)
+            .map(|b| b.space_id)
+    });
+    let batch = space_id
+        .and_then(|sid| {
+            draw_batches
+                .iter()
+                .find(|b| !b.is_overlay && b.space_id == sid)
+        })
+        .or_else(|| draw_batches.iter().find(|b| !b.is_overlay));
+    batch
+        .map(|b| {
+            let m = crate::scene::render_transform_to_matrix(&b.view_transform);
+            [m.w_axis.x, m.w_axis.y, m.w_axis.z]
+        })
+        .unwrap_or([0.0, 0.0, 0.0])
+}
+
 /// Pre-collected mesh draws and view parameters for the main view.
 ///
 /// Produced by [`prepare_mesh_draws_for_view`] during the collect phase.
@@ -232,9 +257,18 @@ impl RenderGraph {
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
 
-        ctx.gpu.cluster_count_x = 0;
-        ctx.gpu.cluster_count_y = 0;
-        ctx.gpu.light_count = 0;
+        // Cluster counts and light_count are NOT reset here. ClusteredLightPass sets them when it
+        // runs. If it skips, we keep the previous frame's values so the mesh pass can still use
+        // cluster buffers from the last successful run (avoids "lights flash then vanish" when
+        // clustered_light occasionally skips).
+
+        let overlay_count = ctx.draw_batches.iter().filter(|b| b.is_overlay).count();
+        let non_overlay_count = ctx.draw_batches.len().saturating_sub(overlay_count);
+        logger::trace!(
+            "render frame batches: {} overlay, {} non-overlay (clustered_light needs non-overlay)",
+            overlay_count,
+            non_overlay_count
+        );
 
         let (
             color_view,
@@ -463,35 +497,57 @@ impl RenderPass for MeshRenderPass {
         let light_buffer_version = ctx.gpu.light_buffer_cache.version;
         let cluster_buffer_version = ctx.gpu.cluster_buffer_cache.version;
 
-        let pbr_scene = match (
-            ctx.gpu.cluster_buffer_cache.get_buffers(ctx.viewport),
-            ctx.gpu
-                .light_buffer_cache
-                .ensure_buffer(&ctx.gpu.device, ctx.gpu.light_count.max(1) as usize),
-        ) {
-            (Some(crefs), Some(lb))
-                if ctx.gpu.cluster_count_x > 0 && ctx.gpu.cluster_count_y > 0 =>
-            {
-                let view_position = ctx
-                    .draw_batches
-                    .iter()
-                    .find(|b| !b.is_overlay)
-                    .map(|b| {
-                        let m = crate::scene::render_transform_to_matrix(&b.view_transform);
-                        [m.w_axis.x, m.w_axis.y, m.w_axis.z]
-                    })
-                    .unwrap_or([0.0, 0.0, 0.0]);
+        let cluster_buffers = ctx
+            .gpu
+            .cluster_buffer_cache
+            .get_buffers(ctx.viewport, ctx.gpu.cluster_count_z);
+        let light_buffer = ctx
+            .gpu
+            .light_buffer_cache
+            .ensure_buffer(&ctx.gpu.device, ctx.gpu.light_count.max(1) as usize);
+        let cluster_counts_ok = ctx.gpu.cluster_count_x > 0
+            && ctx.gpu.cluster_count_y > 0
+            && ctx.gpu.cluster_count_z > 0;
+        let cluster_buffers_is_none = cluster_buffers.is_none();
+        let light_buffer_is_none = light_buffer.is_none();
+
+        let pbr_scene = match (cluster_buffers, light_buffer, cluster_counts_ok) {
+            (Some(crefs), Some(lb), true) => {
+                let view_position = pbr_view_position_for_space(ctx.draw_batches, ctx.session);
                 Some(mesh_draw::PbrSceneParams {
                     view_position,
                     cluster_count_x: ctx.gpu.cluster_count_x,
                     cluster_count_y: ctx.gpu.cluster_count_y,
+                    cluster_count_z: ctx.gpu.cluster_count_z,
+                    near_clip: ctx.session.near_clip().max(0.01),
+                    far_clip: ctx.session.far_clip(),
                     light_count: ctx.gpu.light_count,
                     light_buffer: lb,
                     cluster_light_counts: crefs.cluster_light_counts,
                     cluster_light_indices: crefs.cluster_light_indices,
                 })
             }
-            _ => None,
+            _ => {
+                if ctx.session.render_config().use_pbr {
+                    let reason = if !cluster_counts_ok {
+                        format!(
+                            "cluster_count_* zero (x={} y={} z={}) - clustered_light did not run this frame",
+                            ctx.gpu.cluster_count_x,
+                            ctx.gpu.cluster_count_y,
+                            ctx.gpu.cluster_count_z
+                        )
+                    } else if cluster_buffers_is_none {
+                        "cluster get_buffers returned None (viewport or cluster_count_z mismatch)"
+                            .to_string()
+                    } else if light_buffer_is_none {
+                        "light buffer ensure_buffer returned None".to_string()
+                    } else {
+                        "unknown".to_string()
+                    };
+                    logger::debug!("PBR scene disabled (no clustered lighting): {}", reason);
+                }
+                None
+            }
         };
 
         let mut draw_params = MeshDrawParams {
