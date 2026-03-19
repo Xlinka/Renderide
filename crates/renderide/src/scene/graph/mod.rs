@@ -13,7 +13,7 @@ use std::collections::{HashMap, HashSet};
 use glam::Mat4;
 
 use crate::ipc::shared_memory::SharedMemoryAccessor;
-use crate::scene::{Scene, SceneId};
+use crate::scene::{LightCache, Scene, SceneId};
 
 pub use error::SceneError;
 
@@ -60,6 +60,8 @@ pub struct SceneGraph {
     scene_caches: HashMap<SceneId, SceneCache>,
     world_matrices_dirty: HashSet<SceneId>,
     spaces_to_remove: Vec<SceneId>,
+    /// Light cache per space. Populated from LightsBufferRendererSubmission and LightsBufferRendererUpdate.
+    pub light_cache: LightCache,
 }
 
 impl SceneGraph {
@@ -70,6 +72,7 @@ impl SceneGraph {
             scene_caches: HashMap::new(),
             world_matrices_dirty: HashSet::new(),
             spaces_to_remove: Vec::new(),
+            light_cache: LightCache::new(),
         }
     }
 
@@ -240,6 +243,14 @@ impl SceneGraph {
             if let Some(ref mat_override_update) = update.render_material_overrides_update {
                 updates::apply_render_material_overrides_update(scene, shm, mat_override_update)?;
             }
+            if let Some(ref lights_update) = update.lights_buffer_renderers_update {
+                updates::apply_lights_buffer_renderers_update(
+                    &mut self.light_cache,
+                    shm,
+                    lights_update,
+                    update.id,
+                )?;
+            }
             updates::sync_drawable_layers(scene);
         }
 
@@ -252,6 +263,7 @@ impl SceneGraph {
             self.scenes.remove(id);
             self.scene_caches.remove(id);
             self.world_matrices_dirty.remove(id);
+            self.light_cache.remove_space(*id);
         }
         self.spaces_to_remove.clear();
         Ok(())

@@ -14,6 +14,7 @@
 mod config;
 mod frame;
 mod init;
+mod lights;
 mod material;
 mod mesh;
 mod noop;
@@ -123,6 +124,7 @@ impl CommandDispatcher {
                 Box::new(material::MaterialCommandHandler),
                 Box::new(config::ConfigCommandHandler),
                 Box::new(window::WindowCommandHandler),
+                Box::new(lights::LightsBufferCommandHandler),
                 Box::new(shared_memory::FreeSharedMemoryCommandHandler),
                 Box::new(noop::NoopCommandHandler),
                 Box::new(stub::StubCommandHandler::new()),

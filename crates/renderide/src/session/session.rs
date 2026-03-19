@@ -2,7 +2,7 @@
 //!
 //! Extension point for session state, draw batch collection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use glam::Mat4;
 
@@ -13,13 +13,16 @@ use crate::ipc::receiver::CommandReceiver;
 use crate::ipc::shared_memory::SharedMemoryAccessor;
 use crate::render::batch::{DrawEntry, SpaceDrawBatch};
 use crate::render::{RenderLoop, RenderTaskExecutor};
-use crate::scene::{Drawable, Scene, SceneGraph, render_transform_to_matrix};
+use crate::scene::{Drawable, ResolvedLight, Scene, SceneGraph, render_transform_to_matrix};
 use crate::session::commands::{AssetContext, CommandContext, CommandDispatcher, CommandResult, FrameContext, SessionFlags};
 use crate::session::frame_data::{apply_clip_and_output_state, select_primary_view, validate_active_non_overlay};
 use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
 use crate::session::state::{InitState, ViewState};
 use crate::shared::VertexAttributeType;
-use crate::shared::{FrameStartData, FrameSubmitData, InputState, LayerType, RendererCommand};
+use crate::shared::{
+    FrameStartData, FrameSubmitData, InputState, LayerType, LightsBufferRendererConsumed,
+    RendererCommand,
+};
 use crate::stencil::{StencilOperation, StencilState};
 
 /// Main session: coordinates command ingest, scene, and assets.
@@ -52,6 +55,8 @@ pub struct Session {
     primary_view_position_is_external: Option<bool>,
     /// Root transform of primary space (for diagnostic: compare with view when override differs).
     primary_root_transform: Option<crate::shared::RenderTransform>,
+    /// Resolved lights per space, populated each frame during collect_draw_batches.
+    resolved_lights: HashMap<i32, Vec<ResolvedLight>>,
 }
 
 impl Session {
@@ -83,6 +88,7 @@ impl Session {
             primary_view_override: None,
             primary_view_position_is_external: None,
             primary_root_transform: None,
+            resolved_lights: HashMap::new(),
         }
     }
 
@@ -378,6 +384,7 @@ impl Session {
             .map(|(id, _)| *id)
             .collect();
 
+        self.resolved_lights.clear();
         let mut batches = Vec::new();
         let overlay_view_override = self.primary_view_transform().cloned();
         for space_id in space_ids {
@@ -388,11 +395,38 @@ impl Session {
                 true,
                 overlay_view_override,
             ));
+            let resolved = self.scene_graph.light_cache.resolve_lights(space_id, |tid| {
+                self.scene_graph.get_world_matrix(space_id, tid)
+            });
+            if !resolved.is_empty() {
+                self.resolved_lights.insert(space_id, resolved);
+            }
         }
         batches.sort_by_key(|b| b.is_overlay);
         let overlay_count = batches.iter().filter(|b| b.is_overlay).count();
         logger::trace!("collected {} overlay batches", overlay_count);
         batches
+    }
+
+    /// Returns resolved lights for a space, if any. Populated during collect_draw_batches.
+    pub fn resolved_lights_for_space(&self, space_id: i32) -> Option<&[ResolvedLight]> {
+        self.resolved_lights.get(&space_id).map(|v| v.as_slice())
+    }
+
+    /// Sends LightsBufferRendererConsumed for all resolved lights from the current frame.
+    /// Call after rendering to signal to the host that light data was consumed.
+    pub fn send_lights_consumed_for_rendered_spaces(&mut self) {
+        for lights in self.resolved_lights.values() {
+            for light in lights {
+                if light.global_unique_id >= 0 {
+                    self.receiver.send(RendererCommand::lights_buffer_renderer_consumed(
+                        LightsBufferRendererConsumed {
+                            global_unique_id: light.global_unique_id,
+                        },
+                    ));
+                }
+            }
+        }
     }
 
     /// Collects draw batches for a single space (e.g. CameraRenderTask).

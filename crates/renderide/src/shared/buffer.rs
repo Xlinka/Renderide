@@ -23,7 +23,6 @@ pub struct SharedMemoryBufferDescriptor {
 
 impl SharedMemoryBufferDescriptor {
     /// Returns true if the descriptor has no data (length is zero).
-    /// Matches C# `SharedMemoryBufferDescriptor.IsEmpty`.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0

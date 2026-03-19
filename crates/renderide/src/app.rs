@@ -266,6 +266,8 @@ impl RenderideApp {
             }
             let present_us = t3.elapsed().as_micros() as u64;
 
+            self.session.send_lights_consumed_for_rendered_spaces();
+
             let total_us = frame_start.elapsed().as_micros() as u64;
             self.frame_diagnostic
                 .add_frame(session_us, collect_us, render_us, present_us, total_us);

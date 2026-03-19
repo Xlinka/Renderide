@@ -31,7 +31,6 @@ pub struct ConnectionParams {
 }
 
 /// Parse -QueueName and -QueueCapacity from command line args.
-/// Matches the C# GetConnectionParameters logic (case-insensitive).
 pub fn get_connection_parameters() -> Option<ConnectionParams> {
     let args: Vec<String> = env::args().collect();
     if args.is_empty() {

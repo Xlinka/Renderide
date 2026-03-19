@@ -240,8 +240,7 @@ impl CommandHandler for StubCommandHandler {
 
             // --- Lights buffer ---
             RendererCommand::lights_buffer_renderer_submission(_) => {
-                self.log_once("lights_buffer_renderer_submission");
-                CommandResult::Handled
+                unreachable!("command handled by earlier handler")
             }
             RendererCommand::lights_buffer_renderer_consumed(_) => CommandResult::Handled,
 

@@ -461,3 +461,4 @@ target
 *.log
 references_external/
 profile.json.gz
+.cursorignore
