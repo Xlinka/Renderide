@@ -3,6 +3,17 @@
 //! Owns the RenderideApp handler that bridges winit events to the session, GPU, and render loop.
 //! Swapchain recovery ([`wgpu::SurfaceError`], suboptimal acquire) is handled in [`recover_from_surface_error`]
 //! and [`acquire_surface_texture_with_recovery`], with resize delegating to [`crate::gpu::reconfigure_surface_for_window`].
+//!
+//! ## Frame-rate and HUD configuration
+//!
+//! At startup the app reads `configuration.ini` (next to the exe or in the cwd) via
+//! [`crate::config::AppConfig::load`].  The following keys are honoured:
+//!
+//! | Section     | Key              | Default | Description                                      |
+//! |-------------|------------------|---------|--------------------------------------------------|
+//! | `[display]` | `focused_fps`    | 240     | Max FPS when window is focused (0 = uncapped).   |
+//! | `[display]` | `unfocused_fps`  | 60      | Max FPS when window is unfocused (0 = uncapped). |
+//! | `[hud]`     | `show_hud`       | true    | Show/hide the debug HUD overlay.                 |
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -14,16 +25,13 @@ use winit::event::{DeviceEvent, ElementState, MouseButton, MouseScrollDelta, Win
 use winit::event_loop::{ActiveEventLoop, ControlFlow, DeviceEvents, EventLoop};
 use winit::window::{CursorGrabMode, Window, WindowAttributes};
 
+use crate::config::AppConfig;
 use crate::diagnostics::{DebugHud, LiveFrameDiagnostics};
 use crate::gpu::GpuState;
 use crate::input::{WindowInputState, winit_key_to_renderite_key};
 use crate::render::{MainViewFrameInput, RenderLoop, RenderTarget, RenderingContext, set_context};
 use crate::session::Session;
 
-/// Target frame interval when focused (240 Hz). Throttles redraws when using WaitUntil.
-const FOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 240);
-/// Target frame interval when unfocused (60 Hz).
-const UNFOCUSED_TARGET_INTERVAL: Duration = Duration::from_micros(1_000_000 / 60);
 /// Interval between log flushes.
 const LOG_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -244,10 +252,19 @@ struct RenderideApp {
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
     debug_hud: Option<DebugHud>,
+    /// Settings loaded from `configuration.ini` at startup.
+    app_config: AppConfig,
 }
 
 impl RenderideApp {
     fn new() -> Self {
+        let app_config = AppConfig::load();
+        logger::info!(
+            "AppConfig: focused_fps={} unfocused_fps={} show_hud={}",
+            app_config.focused_fps,
+            app_config.unfocused_fps,
+            app_config.show_hud,
+        );
         Self {
             session: Session::new(),
             window: None,
@@ -259,6 +276,31 @@ impl RenderideApp {
             last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
             debug_hud: None,
+            app_config,
+        }
+    }
+
+    /// Returns the target frame interval for the **focused** state.
+    ///
+    /// `focused_fps = 0` → [`Duration::ZERO`] which is used to set [`ControlFlow::Poll`]
+    /// (fully uncapped).
+    fn focused_interval(&self) -> Duration {
+        if self.app_config.focused_fps == 0 {
+            Duration::ZERO
+        } else {
+            Duration::from_micros(1_000_000 / self.app_config.focused_fps as u64)
+        }
+    }
+
+    /// Returns the target frame interval for the **unfocused** (tabbed-out) state.
+    ///
+    /// `unfocused_fps = 0` → 1 ms (effectively uncapped but still uses `WaitUntil` to
+    /// avoid a pure spin loop draining the CPU).
+    fn unfocused_interval(&self) -> Duration {
+        if self.app_config.unfocused_fps == 0 {
+            Duration::from_millis(1)
+        } else {
+            Duration::from_micros(1_000_000 / self.app_config.unfocused_fps as u64)
         }
     }
 
@@ -304,12 +346,18 @@ impl RenderideApp {
                         "GPU initialized: ray_tracing_available={}",
                         g.ray_tracing_available
                     );
-                    self.debug_hud = match DebugHud::new(&g.device, &g.queue, g.config.format) {
-                        Ok(hud) => Some(hud),
-                        Err(e) => {
-                            logger::warn!("Debug HUD init failed: {}", e);
-                            None
+                    // Only create the HUD if show_hud = true in configuration.ini.
+                    self.debug_hud = if self.app_config.show_hud {
+                        match DebugHud::new(&g.device, &g.queue, g.config.format) {
+                            Ok(hud) => Some(hud),
+                            Err(e) => {
+                                logger::warn!("Debug HUD init failed: {}", e);
+                                None
+                            }
                         }
+                    } else {
+                        logger::info!("Debug HUD disabled via configuration.ini (show_hud = false)");
+                        None
                     };
                     self.render_loop = Some(RenderLoop::new(&g.device, &g.config));
                     self.gpu = Some(g);
@@ -393,7 +441,6 @@ impl RenderideApp {
                         if let Err(ref e) = rendered {
                             recover_from_surface_error(gpu, window, e, "Main view render");
                         }
-<<<<<<< HEAD
                         (
                             rendered,
                             collect_us,
@@ -402,15 +449,13 @@ impl RenderideApp {
                             render_us,
                             pre_collected.prep_stats,
                         )
-=======
-                        (rendered, collect_us, render_us, pre_collected.prep_stats)
->>>>>>> e74444e9383cfedea521f96f71daf00929de321b
                     }
                 },
             };
 
             let t3 = Instant::now();
             if let Ok(target) = render_result {
+                // HUD rendering is skipped when show_hud = false (debug_hud will be None).
                 if let Some(debug_hud) = self.debug_hud.as_mut()
                     && let Err(e) = debug_hud.render(&gpu.device, &gpu.queue, &target)
                 {
@@ -646,18 +691,25 @@ impl ApplicationHandler for RenderideApp {
             if self.input.window_focused {
                 self.last_unfocused_redraw = None;
                 window.request_redraw();
-                event_loop.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + FOCUSED_TARGET_INTERVAL,
-                ));
+                let interval = self.focused_interval();
+                if interval.is_zero() {
+                    // focused_fps = 0: fully uncapped — poll as fast as possible.
+                    event_loop.set_control_flow(ControlFlow::Poll);
+                } else {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(
+                        Instant::now() + interval,
+                    ));
+                }
             } else {
+                let interval = self.unfocused_interval();
                 event_loop.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + UNFOCUSED_TARGET_INTERVAL,
+                    Instant::now() + interval,
                 ));
 
                 let now = Instant::now();
                 let should_redraw = self
                     .last_unfocused_redraw
-                    .map(|t| now.duration_since(t) >= UNFOCUSED_TARGET_INTERVAL)
+                    .map(|t| now.duration_since(t) >= interval)
                     .unwrap_or(true);
                 if should_redraw {
                     self.last_unfocused_redraw = Some(now);
