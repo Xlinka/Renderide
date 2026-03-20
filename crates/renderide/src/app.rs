@@ -384,12 +384,7 @@ impl RenderideApp {
                         if let Err(ref e) = rendered {
                             recover_from_surface_error(gpu, window, e, "Main view render");
                         }
-                        (
-                            rendered,
-                            collect_us,
-                            render_us,
-                            pre_collected.prep_stats,
-                        )
+                        (rendered, collect_us, render_us, pre_collected.prep_stats)
                     }
                 },
             };
