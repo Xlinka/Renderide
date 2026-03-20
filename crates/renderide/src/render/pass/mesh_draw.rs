@@ -374,6 +374,21 @@ fn collect_mesh_draws_for_batch(
                 root_bone,
                 d.model_matrix,
             );
+
+            // Frustum cull skinned meshes using bone world positions.
+            // Overlays are excluded from culling (they render in a different space).
+            // See `crate::render::visibility::skinned` for the strategy.
+            if frustum_culling && !batch.is_overlay {
+                if !crate::render::visibility::skinned_mesh_potentially_visible(
+                    &mesh.bounds,
+                    &bone_matrices,
+                    view_proj_glam,
+                ) {
+                    stats.frustum_culled_skinned_draws += 1;
+                    continue;
+                }
+            }
+
             skinned_draws.push(SkinnedBatchedDraw {
                 mesh_asset_id: d.mesh_asset_id,
                 mvp: skinned_mvp,

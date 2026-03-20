@@ -122,6 +122,8 @@ pub struct MeshDrawPrepStats {
     pub submitted_skinned_draws: usize,
     /// Rigid draws rejected by CPU frustum culling.
     pub frustum_culled_rigid_draws: usize,
+    /// Skinned draws rejected by CPU frustum culling (bone-position AABB test).
+    pub frustum_culled_skinned_draws: usize,
     /// Rigid draws kept because upload bounds were degenerate, so culling was skipped.
     pub skipped_cull_degenerate_bounds: usize,
     /// Draws skipped because `mesh_asset_id < 0`.
@@ -155,6 +157,7 @@ impl MeshDrawPrepStats {
         self.submitted_rigid_draws += other.submitted_rigid_draws;
         self.submitted_skinned_draws += other.submitted_skinned_draws;
         self.frustum_culled_rigid_draws += other.frustum_culled_rigid_draws;
+        self.frustum_culled_skinned_draws += other.frustum_culled_skinned_draws;
         self.skipped_cull_degenerate_bounds += other.skipped_cull_degenerate_bounds;
         self.skipped_invalid_mesh_asset_id += other.skipped_invalid_mesh_asset_id;
         self.skipped_missing_mesh_asset += other.skipped_missing_mesh_asset;

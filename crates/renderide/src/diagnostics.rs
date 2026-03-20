@@ -197,8 +197,11 @@ impl DebugHud {
                         sample.prep_stats.rigid_input_draws, sample.prep_stats.skinned_input_draws
                     ));
                     ui.text(format!(
-                        "Culled rigid {}  |  degenerate skip {}",
+                        "Culled rigid {}  skinned {}  total {}  |  degenerate skip {}",
                         sample.prep_stats.frustum_culled_rigid_draws,
+                        sample.prep_stats.frustum_culled_skinned_draws,
+                        sample.prep_stats.frustum_culled_rigid_draws
+                            + sample.prep_stats.frustum_culled_skinned_draws,
                         sample.prep_stats.skipped_cull_degenerate_bounds
                     ));
                     ui.text(format!(
