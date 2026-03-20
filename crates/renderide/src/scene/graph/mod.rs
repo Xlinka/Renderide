@@ -122,12 +122,17 @@ impl SceneGraph {
     /// The host sends bind poses in Unity-style column-major format (see Unity Mesh.bindposes):
     /// each matrix is 64 bytes with column 0 (4 floats), then column 1, then column 2, then column 3.
     /// After `bytemuck::pod_read_unaligned`, `bind[col][row]` = M[row][col].
+    ///
+    /// `smr_world` is the SkinnedMeshRenderer node's current world matrix. When a bone is unmapped
+    /// (tid < 0) or its world matrix is unavailable, `smr_world` is used as the fallback so the
+    /// vertex stays at its bind-pose world position relative to the SMR — not at world origin.
     pub fn compute_bone_matrices(
         &self,
         space_id: i32,
         bone_transform_ids: &[i32],
         bind_poses: &[[[f32; 4]; 4]],
         root_bone_transform_id: Option<i32>,
+        smr_world: Mat4,
     ) -> Vec<[[f32; 4]; 4]> {
         if bone_transform_ids.len() > bind_poses.len() {
             logger::trace!(
@@ -147,16 +152,19 @@ impl SceneGraph {
         for (i, &tid) in bone_transform_ids.iter().enumerate() {
             let bind = bind_poses.get(i).copied().unwrap_or_else(identity_4x4);
             let bind_mat = glam_mat4_from_bind_pose(&bind);
-            let world = if tid >= 0 {
-                self.get_world_matrix(space_id, tid as usize)
-                    .unwrap_or(Mat4::IDENTITY)
+            let combined = if tid < 0 {
+                smr_world
             } else {
-                Mat4::IDENTITY
-            };
-            let combined = if use_root {
-                world * inv_root * bind_mat
-            } else {
-                world * bind_mat
+                match self.get_world_matrix(space_id, tid as usize) {
+                    Some(world) => {
+                        if use_root {
+                            world * inv_root * bind_mat
+                        } else {
+                            world * bind_mat
+                        }
+                    }
+                    None => smr_world,
+                }
             };
             out.push(glam_mat4_to_bind_pose(combined));
         }

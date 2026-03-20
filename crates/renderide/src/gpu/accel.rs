@@ -470,6 +470,8 @@ pub fn update_tlas(
         std::iter::once(&tlas),
     );
 
-    state.last_instance_snapshot.clone_from(&state.instance_scratch);
+    state
+        .last_instance_snapshot
+        .clone_from(&state.instance_scratch);
     state.tlas = Some(tlas);
 }

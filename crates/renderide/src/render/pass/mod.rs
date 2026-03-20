@@ -107,6 +107,106 @@ pub(crate) type CachedMeshDraws = (
     Vec<mesh_draw::BatchedDraw>,
 );
 
+/// Per-slot bone info for full bone tree debug.
+#[derive(Clone, Debug, Default)]
+pub struct BoneSlotInfo {
+    /// Transform ID for this slot (-1 = unmapped).
+    pub tid: i32,
+    /// Current world position, if available.
+    pub world_pos: Option<[f32; 3]>,
+    /// Parent transform ID (-1 = root or unknown).
+    pub parent_tid: i32,
+    /// Parent's current world position, if available.
+    pub parent_world_pos: Option<[f32; 3]>,
+}
+
+/// Compact per-frame snapshot of the first valid skinned draw for HUD diagnostics.
+#[derive(Clone, Debug, Default)]
+pub struct SkinnedDebugSample {
+    pub space_id: i32,
+    pub node_id: i32,
+    pub mesh_asset_id: i32,
+    pub is_overlay: bool,
+    pub vertex_count: u32,
+    pub bind_pose_count: usize,
+    pub bone_ids_len: usize,
+    pub root_bone_transform_id: Option<i32>,
+    pub model_position: [f32; 3],
+    pub root_bone_world_position: Option<[f32; 3]>,
+    /// For each bone slot that vertex 0 references: (slot_index, transform_id, world_pos).
+    pub v0_bone_info: Vec<(i32, i32, Option<[f32; 3]>)>,
+    pub first_vertex_indices: [i32; 4],
+    pub first_vertex_weights: [f32; 4],
+    pub blendshape_weights_preview: Vec<f32>,
+    /// All bone slots for the full tree view. Index = slot index.
+    pub all_bone_slots: Vec<BoneSlotInfo>,
+    /// Indices into `all_bone_slots` whose world Y is suspiciously low relative to root.
+    pub bad_bone_slots: Vec<usize>,
+    /// Full parent chain of the root bone: (tid, world_pos). Index 0 = root bone, last = scene root.
+    /// Shows exactly which Resonite slot the rig is attached to.
+    pub root_chain: Vec<(i32, Option<[f32; 3]>)>,
+}
+
+/// CPU mesh-draw prep counters for one frame.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MeshDrawPrepStats {
+    /// Total draws visited across all batches before mesh/GPU validation.
+    pub total_input_draws: usize,
+    /// Total non-skinned draws visited.
+    pub rigid_input_draws: usize,
+    /// Total skinned draws visited.
+    pub skinned_input_draws: usize,
+    /// Submitted rigid draws after CPU culling/validation.
+    pub submitted_rigid_draws: usize,
+    /// Submitted skinned draws after validation.
+    pub submitted_skinned_draws: usize,
+    /// Rigid draws rejected by CPU frustum culling.
+    pub frustum_culled_rigid_draws: usize,
+    /// Rigid draws kept because upload bounds were degenerate, so culling was skipped.
+    pub skipped_cull_degenerate_bounds: usize,
+    /// Draws skipped because `mesh_asset_id < 0`.
+    pub skipped_invalid_mesh_asset_id: usize,
+    /// Draws skipped because the mesh asset was not found.
+    pub skipped_missing_mesh_asset: usize,
+    /// Draws skipped because the mesh had no vertices or indices.
+    pub skipped_empty_mesh: usize,
+    /// Draws skipped because GPU buffers were not resident.
+    pub skipped_missing_gpu_buffers: usize,
+    /// Skinned draws skipped because bind poses were missing.
+    pub skipped_skinned_missing_bind_poses: usize,
+    /// Skinned draws skipped because bone IDs were missing or empty.
+    pub skipped_skinned_missing_bone_ids: usize,
+    /// Skinned draws skipped because bone ID count exceeded bind pose count.
+    pub skipped_skinned_id_count_mismatch: usize,
+    /// Skinned draws skipped because the skinned vertex buffer was missing.
+    pub skipped_skinned_missing_vertex_buffer: usize,
+}
+
+impl MeshDrawPrepStats {
+    /// Total draws submitted after prep.
+    pub fn submitted_draws(&self) -> usize {
+        self.submitted_rigid_draws + self.submitted_skinned_draws
+    }
+
+    fn accumulate(&mut self, other: &Self) {
+        self.total_input_draws += other.total_input_draws;
+        self.rigid_input_draws += other.rigid_input_draws;
+        self.skinned_input_draws += other.skinned_input_draws;
+        self.submitted_rigid_draws += other.submitted_rigid_draws;
+        self.submitted_skinned_draws += other.submitted_skinned_draws;
+        self.frustum_culled_rigid_draws += other.frustum_culled_rigid_draws;
+        self.skipped_cull_degenerate_bounds += other.skipped_cull_degenerate_bounds;
+        self.skipped_invalid_mesh_asset_id += other.skipped_invalid_mesh_asset_id;
+        self.skipped_missing_mesh_asset += other.skipped_missing_mesh_asset;
+        self.skipped_empty_mesh += other.skipped_empty_mesh;
+        self.skipped_missing_gpu_buffers += other.skipped_missing_gpu_buffers;
+        self.skipped_skinned_missing_bind_poses += other.skipped_skinned_missing_bind_poses;
+        self.skipped_skinned_missing_bone_ids += other.skipped_skinned_missing_bone_ids;
+        self.skipped_skinned_id_count_mismatch += other.skipped_skinned_id_count_mismatch;
+        self.skipped_skinned_missing_vertex_buffer += other.skipped_skinned_missing_vertex_buffer;
+    }
+}
+
 /// Reference to cached mesh draws for render pass context.
 pub(crate) type CachedMeshDrawsRef<'a> = (
     &'a [mesh_draw::SkinnedBatchedDraw],
@@ -126,7 +226,11 @@ fn run_collect_mesh_draws(
     gpu: &crate::gpu::GpuState,
     proj: Matrix4<f32>,
     overlay_projection_override: Option<ViewParams>,
-) -> CachedMeshDraws {
+) -> (
+    CachedMeshDraws,
+    MeshDrawPrepStats,
+    Vec<SkinnedDebugSample>,
+) {
     let collect_ctx = CollectMeshDrawsContext {
         session,
         draw_batches,
@@ -134,7 +238,24 @@ fn run_collect_mesh_draws(
         proj,
         overlay_projection_override,
     };
-    collect_mesh_draws(&collect_ctx)
+    let (
+        non_overlay_skinned,
+        overlay_skinned,
+        non_overlay_non_skinned,
+        overlay_non_skinned,
+        stats,
+        skinned_sample,
+    ) = collect_mesh_draws(&collect_ctx);
+    (
+        (
+            non_overlay_skinned,
+            overlay_skinned,
+            non_overlay_non_skinned,
+            overlay_non_skinned,
+        ),
+        stats,
+        skinned_sample,
+    )
 }
 
 /// Pre-collected mesh draws and view parameters for the main view.
@@ -149,6 +270,10 @@ pub struct PreCollectedFrameData {
     pub overlay_projection_override: Option<ViewParams>,
     /// Cached mesh draws for mesh and overlay passes.
     pub(crate) cached_mesh_draws: CachedMeshDraws,
+    /// CPU-side mesh draw preparation counters for diagnostics.
+    pub prep_stats: MeshDrawPrepStats,
+    /// All skinned draw samples captured during mesh prep for HUD diagnostics.
+    pub skinned_sample: Vec<SkinnedDebugSample>,
 }
 
 /// Prepares mesh draws for the main view during the collect phase.
@@ -172,7 +297,7 @@ pub fn prepare_mesh_draws_for_view(
     let proj = view_params.to_projection_matrix();
     let overlay_projection_override =
         ViewParams::overlay_projection_for_frame(session, draw_batches, aspect);
-    let cached_mesh_draws = run_collect_mesh_draws(
+    let (cached_mesh_draws, prep_stats, skinned_sample) = run_collect_mesh_draws(
         session,
         draw_batches,
         gpu,
@@ -183,6 +308,8 @@ pub fn prepare_mesh_draws_for_view(
         proj,
         overlay_projection_override,
         cached_mesh_draws,
+        prep_stats,
+        skinned_sample,
     }
 }
 
@@ -1032,12 +1159,8 @@ impl RenderGraph {
                     ctx.proj,
                     ctx.overlay_projection_override.clone(),
                 );
-                Some((
-                    &computed.0[..],
-                    &computed.1[..],
-                    &computed.2[..],
-                    &computed.3[..],
-                ))
+                let cached = &computed.0;
+                Some((&cached.0[..], &cached.1[..], &cached.2[..], &cached.3[..]))
             }
         };
 

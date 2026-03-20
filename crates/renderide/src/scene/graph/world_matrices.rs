@@ -89,6 +89,7 @@ fn get_local_matrix(
 /// Incremental world matrix computation: only recomputes nodes with `computed[i] == false`.
 /// Walks up from each uncomputed node to find the first computed ancestor, then multiplies down.
 /// Uses glam for SIMD-optimized matrix multiply and local matrix cache to avoid redundant TRS conversion.
+/// Detects cycles (any revisited node in the upward walk) and treats each cycled node as a root.
 pub(super) fn compute_world_matrices_incremental(
     scene: &Scene,
     world_matrices: &mut [Mat4],
@@ -100,27 +101,57 @@ pub(super) fn compute_world_matrices_incremental(
     let node_parents = &scene.node_parents;
     let nodes = &scene.nodes;
     let mut stack = Vec::with_capacity(64.min(n));
+    // Visited set for the current upward walk; reused each iteration to avoid repeated allocation.
+    let mut walk_visited: Vec<usize> = Vec::with_capacity(32);
 
     for transform_index in (0..n).rev() {
         if computed[transform_index] {
             continue;
         }
 
+        stack.clear();
+        walk_visited.clear();
+
         let mut maybe_uppermost_matrix: Option<Mat4> = None;
         let mut id = transform_index;
-        let mut steps = 0;
-        while id < n && steps < n {
-            steps += 1;
+        let mut cycle_detected = false;
+
+        loop {
+            if id >= n {
+                break;
+            }
             if computed[id] {
                 maybe_uppermost_matrix = Some(world_matrices[id]);
                 break;
             }
+            // Cycle check: if this node was already visited in the current walk, it's a cycle.
+            if walk_visited.contains(&id) {
+                cycle_detected = true;
+                logger::trace!(
+                    "Parent cycle detected in scene {} at transform {} — treating cycled nodes as roots",
+                    scene.id, id
+                );
+                break;
+            }
+            walk_visited.push(id);
             stack.push(id);
             let p = node_parents.get(id).copied().unwrap_or(-1);
             if p < 0 || (p as usize) >= n || p == id as i32 {
-                break;
+                break; // reached a root
             }
             id = p as usize;
+        }
+
+        if cycle_detected {
+            // Treat every node collected in this walk as a root: world = local only.
+            for &cid in &stack {
+                if !computed[cid] {
+                    let local = get_local_matrix(nodes, local_matrices, local_dirty, cid);
+                    world_matrices[cid] = local;
+                    computed[cid] = true;
+                }
+            }
+            continue;
         }
 
         let mut parent_matrix = match maybe_uppermost_matrix {

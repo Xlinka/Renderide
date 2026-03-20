@@ -47,6 +47,7 @@ pub(crate) fn apply_transforms_update(
             .map(|&i| i as usize)
             .collect();
         indices.sort_by(|a, b| b.cmp(a));
+        indices.dedup(); // Resonite sometimes sends duplicate IDs; removing twice corrupts the scene
         for &idx in &indices {
             if idx >= scene.nodes.len() {
                 continue;

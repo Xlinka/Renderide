@@ -6,12 +6,168 @@
 use glam::Mat4;
 use nalgebra::Matrix4;
 
+use super::{BoneSlotInfo, MeshDrawPrepStats, SkinnedDebugSample};
 use crate::gpu::pipeline::SceneUniforms;
 use crate::gpu::{GpuMeshBuffers, PipelineKey, PipelineManager, PipelineVariant, RenderPipeline};
 use crate::render::SpaceDrawBatch;
 use crate::render::visibility::view_proj_glam_for_batch;
 use crate::scene::math::matrix_glam_to_na;
 use std::collections::HashMap;
+
+fn translation_xyz(m: Mat4) -> [f32; 3] {
+    let (_, _, t) = m.to_scale_rotation_translation();
+    [t.x, t.y, t.z]
+}
+
+fn first_vertex_weight_preview(mesh: &crate::assets::MeshAsset) -> ([i32; 4], [f32; 4]) {
+    if let (Some(bc), Some(bw)) = (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref()) {
+        let n = bc.first().copied().unwrap_or(0) as usize;
+        let n = n.min(4);
+        let mut indices = [0i32; 4];
+        let mut weights = [0.0f32; 4];
+        for j in 0..n {
+            if j * 8 + 8 <= bw.len() {
+                indices[j] =
+                    i32::from_le_bytes(bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]));
+                weights[j] = f32::from_le_bytes(bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]));
+            }
+        }
+        (indices, weights)
+    } else {
+        ([0; 4], [0.0; 4])
+    }
+}
+
+fn build_skinned_debug_sample(
+    batch: &SpaceDrawBatch,
+    draw: &crate::render::DrawEntry,
+    mesh: &crate::assets::MeshAsset,
+    ids: &[i32],
+    scene_graph: &crate::scene::SceneGraph,
+) -> SkinnedDebugSample {
+    let (first_vertex_indices, first_vertex_weights) = first_vertex_weight_preview(mesh);
+    // For each bone slot vertex 0 references, look up the transform ID and world position.
+    let v0_bone_info: Vec<(i32, i32, Option<[f32; 3]>)> = first_vertex_indices
+        .iter()
+        .filter(|&&slot| slot >= 0)
+        .map(|&slot| {
+            let transform_id = ids.get(slot as usize).copied().unwrap_or(-1);
+            let pos = if transform_id >= 0 {
+                scene_graph
+                    .get_world_matrix(batch.space_id, transform_id as usize)
+                    .map(translation_xyz)
+            } else {
+                None
+            };
+            (slot, transform_id, pos)
+        })
+        .collect();
+    let root_bone_world_position = draw
+        .root_bone_transform_id
+        .filter(|&id| id >= 0)
+        .and_then(|id| scene_graph.get_world_matrix(batch.space_id, id as usize))
+        .map(translation_xyz);
+
+    let root_y = root_bone_world_position.map(|p| p[1]);
+
+    // Build full bone slot table with world pos + parent info for each slot.
+    let all_bone_slots: Vec<BoneSlotInfo> = ids
+        .iter()
+        .map(|&tid| {
+            let world_pos = if tid >= 0 {
+                scene_graph
+                    .get_world_matrix(batch.space_id, tid as usize)
+                    .map(translation_xyz)
+            } else {
+                None
+            };
+            let parent_tid = if tid >= 0 {
+                scene_graph
+                    .get_scene(batch.space_id)
+                    .and_then(|s| s.node_parents.get(tid as usize).copied())
+                    .unwrap_or(-1)
+            } else {
+                -1
+            };
+            let parent_world_pos = if parent_tid >= 0 {
+                scene_graph
+                    .get_world_matrix(batch.space_id, parent_tid as usize)
+                    .map(translation_xyz)
+            } else {
+                None
+            };
+            BoneSlotInfo { tid, world_pos, parent_tid, parent_world_pos }
+        })
+        .collect();
+
+    // Flag slots whose world Y is suspiciously low: more than 0.25 below root Y,
+    // or absolute Y < 0.05 when no root is known.
+    let bad_bone_slots: Vec<usize> = all_bone_slots
+        .iter()
+        .enumerate()
+        .filter_map(|(i, b)| {
+            if b.tid < 0 {
+                return None;
+            }
+            let y = b.world_pos.map(|p| p[1])?;
+            let suspicious = match root_y {
+                Some(ry) => y < ry - 0.25,
+                None => y.abs() < 0.05,
+            };
+            if suspicious { Some(i) } else { None }
+        })
+        .collect();
+
+    // Walk the parent chain from root bone up to the scene root (max 16 levels).
+    let root_chain: Vec<(i32, Option<[f32; 3]>)> = {
+        let mut chain = Vec::new();
+        if let Some(root_tid) = draw.root_bone_transform_id.filter(|&id| id >= 0) {
+            let mut current = root_tid;
+            let mut seen = std::collections::HashSet::new();
+            loop {
+                if seen.contains(&current) { break; } // cycle guard
+                seen.insert(current);
+                let pos = scene_graph
+                    .get_world_matrix(batch.space_id, current as usize)
+                    .map(translation_xyz);
+                chain.push((current, pos));
+                if chain.len() >= 16 { break; }
+                let parent = scene_graph
+                    .get_scene(batch.space_id)
+                    .and_then(|s| s.node_parents.get(current as usize).copied());
+                match parent {
+                    Some(p) if p >= 0 => current = p,
+                    _ => break,
+                }
+            }
+        }
+        chain
+    };
+
+    SkinnedDebugSample {
+        space_id: batch.space_id,
+        node_id: draw.node_id,
+        mesh_asset_id: draw.mesh_asset_id,
+        is_overlay: batch.is_overlay,
+        vertex_count: mesh.vertex_count.max(0) as u32,
+        bind_pose_count: mesh.bind_poses.as_ref().map(|v| v.len()).unwrap_or(0),
+        bone_ids_len: ids.len(),
+        root_bone_transform_id: draw.root_bone_transform_id,
+        model_position: translation_xyz(draw.model_matrix),
+        root_bone_world_position,
+        v0_bone_info,
+        first_vertex_indices,
+        first_vertex_weights,
+        blendshape_weights_preview: draw
+            .blendshape_weights
+            .as_ref()
+            .map(|w| w.iter().take(8).copied().collect())
+            .unwrap_or_default(),
+        all_bone_slots,
+        bad_bone_slots,
+        root_chain,
+    }
+}
 
 /// Minimal context for mesh draw collection.
 ///
@@ -179,7 +335,8 @@ fn collect_mesh_draws_for_batch(
     ctx: &CollectMeshDrawsContext<'_>,
     batch: &SpaceDrawBatch,
     first_skinned_logged: &mut bool,
-) -> (Vec<SkinnedBatchedDraw>, Vec<BatchedDraw>) {
+    skinned_sample: &mut Vec<SkinnedDebugSample>,
+) -> (Vec<SkinnedBatchedDraw>, Vec<BatchedDraw>, MeshDrawPrepStats) {
     let mesh_assets = ctx.session.asset_registry();
     let scene_graph = ctx.session.scene_graph();
     let debug_skinned = ctx.session.render_config().debug_skinned;
@@ -190,28 +347,41 @@ fn collect_mesh_draws_for_batch(
     let est = batch.draws.len();
     let mut non_skinned_draws: Vec<BatchedDraw> = Vec::with_capacity(est);
     let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::with_capacity(est);
+    let mut stats = MeshDrawPrepStats::default();
 
     let view_proj_glam =
         view_proj_glam_for_batch(batch, &ctx.proj, ctx.overlay_projection_override.as_ref());
 
     for d in &batch.draws {
+        stats.total_input_draws += 1;
+        if d.is_skinned {
+            stats.skinned_input_draws += 1;
+        } else {
+            stats.rigid_input_draws += 1;
+        }
+
         let (buffers_ref, mesh) = if d.mesh_asset_id >= 0 {
             let Some(mesh) = mesh_assets.get_mesh(d.mesh_asset_id) else {
+                stats.skipped_missing_mesh_asset += 1;
                 continue;
             };
             if mesh.vertex_count <= 0 || mesh.index_count <= 0 {
+                stats.skipped_empty_mesh += 1;
                 continue;
             }
             let Some(b) = ctx.gpu.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+                stats.skipped_missing_gpu_buffers += 1;
                 continue;
             };
             (b, mesh)
         } else {
+            stats.skipped_invalid_mesh_asset_id += 1;
             continue;
         };
 
         if frustum_culling && !d.is_skinned {
             if crate::render::visibility::mesh_bounds_degenerate_for_cull(&mesh.bounds) {
+                stats.skipped_cull_degenerate_bounds += 1;
                 logger::trace!(
                     "frustum cull skipped for rigid mesh: degenerate upload bounds (mesh_asset_id={})",
                     d.mesh_asset_id
@@ -229,6 +399,7 @@ fn collect_mesh_draws_for_batch(
                         d.mesh_asset_id
                     );
                 }
+                stats.frustum_culled_rigid_draws += 1;
                 continue;
             }
         }
@@ -237,6 +408,7 @@ fn collect_mesh_draws_for_batch(
 
         if d.is_skinned {
             let Some(bind_poses) = mesh.bind_poses.as_ref() else {
+                stats.skipped_skinned_missing_bind_poses += 1;
                 logger::trace!(
                     "Skinned draw skipped: mesh missing bind_poses (mesh={})",
                     d.mesh_asset_id
@@ -244,6 +416,7 @@ fn collect_mesh_draws_for_batch(
                 continue;
             };
             let Some(ids) = d.bone_transform_ids.as_deref() else {
+                stats.skipped_skinned_missing_bone_ids += 1;
                 logger::trace!(
                     "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
                     d.mesh_asset_id
@@ -251,6 +424,7 @@ fn collect_mesh_draws_for_batch(
                 continue;
             };
             if ids.is_empty() {
+                stats.skipped_skinned_missing_bone_ids += 1;
                 logger::trace!(
                     "Skinned draw skipped: bone_transform_ids missing or empty (mesh={})",
                     d.mesh_asset_id
@@ -258,6 +432,7 @@ fn collect_mesh_draws_for_batch(
                 continue;
             }
             if ids.len() > bind_poses.len() {
+                stats.skipped_skinned_id_count_mismatch += 1;
                 logger::trace!(
                     "Skinned draw skipped: bone_transform_ids.len()={} > bind_poses.len()={} (mesh={})",
                     ids.len(),
@@ -267,12 +442,14 @@ fn collect_mesh_draws_for_batch(
                 continue;
             }
             let Some(_) = buffers_ref.vertex_buffer_skinned.as_ref() else {
+                stats.skipped_skinned_missing_vertex_buffer += 1;
                 logger::trace!(
                     "Skinned draw skipped: vertex_buffer_skinned missing (mesh={})",
                     d.mesh_asset_id
                 );
                 continue;
             };
+            skinned_sample.push(build_skinned_debug_sample(batch, d, mesh, ids, scene_graph));
             if debug_skinned && !*first_skinned_logged {
                 *first_skinned_logged = true;
                 let first_3_ids: Vec<i32> = ids.iter().take(3).copied().collect();
@@ -280,29 +457,7 @@ fn collect_mesh_draws_for_batch(
                     .first()
                     .map(|b| format!("{:?}", b))
                     .unwrap_or_else(|| "none".to_string());
-                let (first_vert_indices, first_vert_weights) = if let (Some(bc), Some(bw)) =
-                    (mesh.bone_counts.as_ref(), mesh.bone_weights.as_ref())
-                {
-                    let n = bc.first().copied().unwrap_or(0) as usize;
-                    let n = n.min(4);
-                    let mut indices = [0i32; 4];
-                    let mut weights = [0.0f32; 4];
-                    for j in 0..n {
-                        if j * 8 + 8 <= bw.len() {
-                            let idx = i32::from_le_bytes(
-                                bw[j * 8 + 4..j * 8 + 8].try_into().unwrap_or([0; 4]),
-                            );
-                            let w = f32::from_le_bytes(
-                                bw[j * 8..j * 8 + 4].try_into().unwrap_or([0; 4]),
-                            );
-                            indices[j] = idx;
-                            weights[j] = w;
-                        }
-                    }
-                    (format!("{:?}", indices), format!("{:?}", weights))
-                } else {
-                    ("n/a".to_string(), "n/a".to_string())
-                };
+                let (first_vert_indices, first_vert_weights) = first_vertex_weight_preview(mesh);
                 logger::debug!(
                     "skinned draw: mesh={} node_id={} bone_ids_len={} first_3_ids={:?} first_bind={} first_vert_indices={} first_vert_weights={} has_skinned_vb={}",
                     d.mesh_asset_id,
@@ -310,8 +465,8 @@ fn collect_mesh_draws_for_batch(
                     ids.len(),
                     first_3_ids,
                     first_bind,
-                    first_vert_indices,
-                    first_vert_weights,
+                    format!("{:?}", first_vert_indices),
+                    format!("{:?}", first_vert_weights),
                     buffers_ref.vertex_buffer_skinned.is_some()
                 );
             }
@@ -336,8 +491,13 @@ fn collect_mesh_draws_for_batch(
             } else {
                 None
             };
-            let bone_matrices =
-                scene_graph.compute_bone_matrices(batch.space_id, ids, bind_poses, root_bone);
+            let bone_matrices = scene_graph.compute_bone_matrices(
+                batch.space_id,
+                ids,
+                bind_poses,
+                root_bone,
+                d.model_matrix,
+            );
             skinned_draws.push(SkinnedBatchedDraw {
                 mesh_asset_id: d.mesh_asset_id,
                 mvp: skinned_mvp,
@@ -348,6 +508,7 @@ fn collect_mesh_draws_for_batch(
                 pipeline_variant: d.pipeline_variant.clone(),
                 stencil_state: d.stencil_state,
             });
+            stats.submitted_skinned_draws += 1;
             continue;
         }
 
@@ -359,9 +520,10 @@ fn collect_mesh_draws_for_batch(
             is_overlay: batch.is_overlay,
             stencil_state: d.stencil_state,
         });
+        stats.submitted_rigid_draws += 1;
     }
 
-    (skinned_draws, non_skinned_draws)
+    (skinned_draws, non_skinned_draws, stats)
 }
 
 /// Splits flat skinned/non-skinned lists into overlay vs non-overlay groups for pass recording.
@@ -397,19 +559,39 @@ pub(super) fn collect_mesh_draws(
     Vec<SkinnedBatchedDraw>,
     Vec<BatchedDraw>,
     Vec<BatchedDraw>,
+    MeshDrawPrepStats,
+    Vec<SkinnedDebugSample>,
 ) {
     let total_draws: usize = ctx.draw_batches.iter().map(|b| b.draws.len()).sum();
     let mut non_skinned_draws: Vec<BatchedDraw> = Vec::with_capacity(total_draws);
     let mut skinned_draws: Vec<SkinnedBatchedDraw> = Vec::with_capacity(total_draws);
     let mut first_skinned_logged = false;
+    let mut stats = MeshDrawPrepStats::default();
+    let mut skinned_sample = Vec::new();
 
     for batch in ctx.draw_batches {
-        let (mut s, mut n) = collect_mesh_draws_for_batch(ctx, batch, &mut first_skinned_logged);
+        let (mut s, mut n, batch_stats) = collect_mesh_draws_for_batch(
+            ctx,
+            batch,
+            &mut first_skinned_logged,
+            &mut skinned_sample,
+        );
         skinned_draws.append(&mut s);
         non_skinned_draws.append(&mut n);
+        stats.accumulate(&batch_stats);
     }
 
-    partition_mesh_draw_lists(skinned_draws, non_skinned_draws)
+    let (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned) =
+        partition_mesh_draw_lists(skinned_draws, non_skinned_draws);
+
+    (
+        non_overlay_skinned,
+        overlay_skinned,
+        non_overlay_non_skinned,
+        overlay_non_skinned,
+        stats,
+        skinned_sample,
+    )
 }
 
 /// Resolves the pipeline variant for a draw group, applying MRT/PBR and orthographic overrides.
