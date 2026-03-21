@@ -1,4 +1,10 @@
 //! Transform hierarchy updates from host.
+//!
+//! When a [`TransformsUpdate`] carries no structural or pose changes (no cache resize, no
+//! removals, no growth to `target_transform_count`, no parent or pose entries applied), the
+//! world-matrix cache is left undisturbed: [`mark_descendants_uncomputed`] is skipped and the
+//! scene id is not inserted into `world_matrices_dirty`, so [`SceneGraph::compute_world_matrices`]
+//! can early-out on the next frame.
 
 use std::collections::HashSet;
 
@@ -26,6 +32,8 @@ pub(crate) fn apply_transforms_update(
     frame_index: i32,
 ) -> Result<Vec<(i32, usize)>, SceneError> {
     let mut transform_removals = Vec::new();
+    // When true, world matrix cache must be recomputed and `mark_descendants_uncomputed` must run.
+    let mut invalidate_world_matrices = false;
 
     if cache.world_matrices.len() != scene.nodes.len() {
         cache
@@ -36,6 +44,7 @@ pub(crate) fn apply_transforms_update(
             .local_matrices
             .resize(scene.nodes.len(), Mat4::IDENTITY);
         cache.local_dirty.resize(scene.nodes.len(), true);
+        invalidate_world_matrices = true;
     }
 
     if update.removals.length > 0 {
@@ -50,6 +59,7 @@ pub(crate) fn apply_transforms_update(
             .collect();
         indices.sort_by(|a, b| b.cmp(a));
         indices.dedup(); // Resonite sometimes sends duplicate IDs; removing twice corrupts the scene
+        let mut had_removal = false;
         for &idx in &indices {
             if idx >= scene.nodes.len() {
                 continue;
@@ -86,11 +96,16 @@ pub(crate) fn apply_transforms_update(
                 cache.local_matrices.swap_remove(idx);
                 cache.local_dirty.swap_remove(idx);
             }
+            had_removal = true;
         }
-        // Structure changed: children cache needs rebuild before next mark_descendants call.
-        cache.children_dirty = true;
+        if had_removal {
+            // Structure changed: children cache needs rebuild before next mark_descendants call.
+            cache.children_dirty = true;
+            invalidate_world_matrices = true;
+        }
     }
 
+    let nodes_before_grow = scene.nodes.len();
     while (scene.nodes.len() as i32) < update.target_transform_count {
         scene.nodes.push(render_transform_identity());
         scene.node_parents.push(-1);
@@ -98,6 +113,9 @@ pub(crate) fn apply_transforms_update(
         cache.computed.push(false);
         cache.local_matrices.push(Mat4::IDENTITY);
         cache.local_dirty.push(true);
+    }
+    if scene.nodes.len() != nodes_before_grow {
+        invalidate_world_matrices = true;
     }
 
     let mut changed_indices = std::collections::HashSet::new();
@@ -120,6 +138,7 @@ pub(crate) fn apply_transforms_update(
         }
         if had_parent_update {
             cache.children_dirty = true;
+            invalidate_world_matrices = true;
         }
     }
 
@@ -155,6 +174,10 @@ pub(crate) fn apply_transforms_update(
         }
     }
 
+    if !changed_indices.is_empty() {
+        invalidate_world_matrices = true;
+    }
+
     for i in &changed_indices {
         if *i < cache.computed.len() {
             cache.computed[*i] = false;
@@ -168,8 +191,10 @@ pub(crate) fn apply_transforms_update(
         rebuild_children(&scene.node_parents, scene.nodes.len(), &mut cache.children);
         cache.children_dirty = false;
     }
-    mark_descendants_uncomputed(&cache.children, &mut cache.computed);
-    world_matrices_dirty.insert(scene_id);
+    if invalidate_world_matrices {
+        mark_descendants_uncomputed(&cache.children, &mut cache.computed);
+        world_matrices_dirty.insert(scene_id);
+    }
 
     Ok(transform_removals)
 }

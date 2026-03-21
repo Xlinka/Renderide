@@ -15,7 +15,10 @@ use wgpu::util::DeviceExt;
 use crate::assets::{self, AssetRegistry, MeshAsset};
 use crate::render::batch::SpaceDrawBatch;
 use crate::render::view::ViewParams;
-use crate::render::visibility::{rigid_mesh_potentially_visible, view_proj_glam_for_batch};
+use crate::render::visibility::{
+    RigidFrustumCullCache, RigidFrustumCullCacheKey, rigid_mesh_potentially_visible,
+    rigid_mesh_potentially_visible_cached, view_proj_glam_for_batch,
+};
 use crate::shared::{VertexAttributeFormat, VertexAttributeType};
 
 use super::mesh::GpuMeshBuffers;
@@ -393,6 +396,9 @@ pub fn build_tlas(
 /// the rebuild is skipped entirely (no GPU work). Otherwise the TLAS is rebuilt and the snapshot
 /// is updated.
 ///
+/// `rigid_frustum_cull_cache` is shared with mesh draw collection so rigid AABBs are reused when
+/// instance transforms match the previous lookup.
+///
 /// Caller must ensure the device has [`wgpu::Features::EXPERIMENTAL_RAY_QUERY`] enabled.
 #[allow(clippy::too_many_arguments)]
 pub fn update_tlas(
@@ -405,6 +411,7 @@ pub fn update_tlas(
     overlay_projection_override: Option<&ViewParams>,
     asset_registry: &AssetRegistry,
     frustum_culling: bool,
+    rigid_frustum_cull_cache: &mut RigidFrustumCullCache,
 ) {
     state.instance_scratch.clear();
     for batch in draw_batches {
@@ -419,28 +426,33 @@ pub fn update_tlas(
             if accel_cache.get(d.mesh_asset_id).is_none() {
                 continue;
             }
-            if frustum_culling {
-                if let Some(mesh) = asset_registry.get_mesh(d.mesh_asset_id) {
-                    if crate::render::visibility::mesh_bounds_degenerate_for_cull(&mesh.bounds) {
+            if frustum_culling && let Some(mesh) = asset_registry.get_mesh(d.mesh_asset_id) {
+                if crate::render::visibility::mesh_bounds_degenerate_for_cull(&mesh.bounds) {
+                    logger::trace!(
+                        "TLAS frustum cull skipped: degenerate upload bounds (mesh_asset_id={})",
+                        d.mesh_asset_id
+                    );
+                } else if !rigid_mesh_potentially_visible_cached(
+                    &mesh.bounds,
+                    d.model_matrix,
+                    view_proj,
+                    RigidFrustumCullCacheKey::new(
+                        batch.space_id,
+                        d.node_id,
+                        d.mesh_asset_id,
+                        &mesh.bounds,
+                    ),
+                    rigid_frustum_cull_cache,
+                ) {
+                    if crate::render::visibility::mesh_bounds_max_half_extent(&mesh.bounds)
+                        < crate::render::visibility::SUSPICIOUS_MESH_BOUNDS_MAX_EXTENT
+                    {
                         logger::trace!(
-                            "TLAS frustum cull skipped: degenerate upload bounds (mesh_asset_id={})",
+                            "TLAS frustum culled instance with suspiciously small bounds (mesh_asset_id={})",
                             d.mesh_asset_id
                         );
-                    } else if !rigid_mesh_potentially_visible(
-                        &mesh.bounds,
-                        d.model_matrix,
-                        view_proj,
-                    ) {
-                        if crate::render::visibility::mesh_bounds_max_half_extent(&mesh.bounds)
-                            < crate::render::visibility::SUSPICIOUS_MESH_BOUNDS_MAX_EXTENT
-                        {
-                            logger::trace!(
-                                "TLAS frustum culled instance with suspiciously small bounds (mesh_asset_id={})",
-                                d.mesh_asset_id
-                            );
-                        }
-                        continue;
                     }
+                    continue;
                 }
             }
             let transform = matrix4_to_affine_3x4(&d.model_matrix);

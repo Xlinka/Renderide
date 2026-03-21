@@ -39,7 +39,8 @@ fn first_vertex_weight_preview(mesh: &crate::assets::MeshAsset) -> ([i32; 4], [f
 pub(super) struct CollectMeshDrawsContext<'a> {
     pub(super) session: &'a crate::session::Session,
     pub(super) draw_batches: &'a [crate::render::SpaceDrawBatch],
-    pub(super) gpu: &'a crate::gpu::GpuState,
+    pub(super) mesh_buffer_cache: &'a std::collections::HashMap<i32, GpuMeshBuffers>,
+    pub(super) rigid_frustum_cull_cache: &'a mut crate::render::visibility::RigidFrustumCullCache,
     pub(super) proj: nalgebra::Matrix4<f32>,
     pub(super) overlay_projection_override: Option<crate::render::ViewParams>,
 }
@@ -210,7 +211,7 @@ fn pipeline_uses_standalone_mrt_gbuffer_origin_bind_group(
 ///
 /// `first_skinned_logged` coordinates the optional one-time debug log across batches.
 fn collect_mesh_draws_for_batch(
-    ctx: &CollectMeshDrawsContext<'_>,
+    ctx: &mut CollectMeshDrawsContext<'_>,
     batch: &SpaceDrawBatch,
     first_skinned_logged: &mut bool,
 ) -> (Vec<SkinnedBatchedDraw>, Vec<BatchedDraw>, MeshDrawPrepStats) {
@@ -246,7 +247,7 @@ fn collect_mesh_draws_for_batch(
                 stats.skipped_empty_mesh += 1;
                 continue;
             }
-            let Some(b) = ctx.gpu.mesh_buffer_cache.get(&d.mesh_asset_id) else {
+            let Some(b) = ctx.mesh_buffer_cache.get(&d.mesh_asset_id) else {
                 stats.skipped_missing_gpu_buffers += 1;
                 continue;
             };
@@ -263,10 +264,17 @@ fn collect_mesh_draws_for_batch(
                     "frustum cull skipped for rigid mesh: degenerate upload bounds (mesh_asset_id={})",
                     d.mesh_asset_id
                 );
-            } else if !crate::render::visibility::rigid_mesh_potentially_visible(
+            } else if !crate::render::visibility::rigid_mesh_potentially_visible_cached(
                 &mesh.bounds,
                 d.model_matrix,
                 view_proj_glam,
+                crate::render::visibility::RigidFrustumCullCacheKey::new(
+                    batch.space_id,
+                    d.node_id,
+                    d.mesh_asset_id,
+                    &mesh.bounds,
+                ),
+                ctx.rigid_frustum_cull_cache,
             ) {
                 if crate::render::visibility::mesh_bounds_max_half_extent(&mesh.bounds)
                     < crate::render::visibility::SUSPICIOUS_MESH_BOUNDS_MAX_EXTENT
@@ -451,7 +459,7 @@ fn partition_mesh_draw_lists(
 ///
 /// Returns (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned).
 pub(super) fn collect_mesh_draws(
-    ctx: &CollectMeshDrawsContext<'_>,
+    ctx: &mut CollectMeshDrawsContext<'_>,
 ) -> (
     Vec<SkinnedBatchedDraw>,
     Vec<SkinnedBatchedDraw>,

@@ -63,6 +63,8 @@ pub struct GpuState {
     pub last_pbr_scene_cache_light_version: u64,
     /// Last cluster buffer version when cache was valid. Used to invalidate on resize.
     pub last_pbr_scene_cache_cluster_version: u64,
+    /// Reuses world-space AABBs for rigid frustum culling when model matrices are unchanged.
+    pub rigid_frustum_cull_cache: crate::render::visibility::RigidFrustumCullCache,
 }
 
 /// Initializes wgpu surface, device, queue, and mesh pipeline.
@@ -250,6 +252,7 @@ pub async fn init_gpu(
         pbr_scene_bind_group_cache: std::collections::HashMap::new(),
         last_pbr_scene_cache_light_version: 0,
         last_pbr_scene_cache_cluster_version: 0,
+        rigid_frustum_cull_cache: crate::render::visibility::RigidFrustumCullCache::default(),
     })
 }
 

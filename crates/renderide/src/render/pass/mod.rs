@@ -186,19 +186,20 @@ pub(crate) type CachedMeshDrawsRef<'a> = (
 fn run_collect_mesh_draws(
     session: &Session,
     draw_batches: &[SpaceDrawBatch],
-    gpu: &crate::gpu::GpuState,
+    gpu: &mut crate::gpu::GpuState,
     proj: Matrix4<f32>,
     overlay_projection_override: Option<ViewParams>,
 ) -> (CachedMeshDraws, MeshDrawPrepStats) {
-    let collect_ctx = CollectMeshDrawsContext {
+    let mut collect_ctx = CollectMeshDrawsContext {
         session,
         draw_batches,
-        gpu,
+        mesh_buffer_cache: &gpu.mesh_buffer_cache,
+        rigid_frustum_cull_cache: &mut gpu.rigid_frustum_cull_cache,
         proj,
         overlay_projection_override,
     };
     let (non_overlay_skinned, overlay_skinned, non_overlay_non_skinned, overlay_non_skinned, stats) =
-        collect_mesh_draws(&collect_ctx);
+        collect_mesh_draws(&mut collect_ctx);
     (
         (
             non_overlay_skinned,
@@ -1104,7 +1105,7 @@ impl RenderGraph {
                 computed = run_collect_mesh_draws(
                     ctx.session,
                     ctx.draw_batches,
-                    &*ctx.gpu,
+                    ctx.gpu,
                     ctx.proj,
                     ctx.overlay_projection_override.clone(),
                 );
@@ -1126,6 +1127,7 @@ impl RenderGraph {
                 ctx.overlay_projection_override.as_ref(),
                 ctx.session.asset_registry(),
                 ctx.session.render_config().frustum_culling,
+                &mut ctx.gpu.rigid_frustum_cull_cache,
             );
         }
 

@@ -35,7 +35,10 @@ use super::view::ViewParams;
 
 // ─── Public re-exports ────────────────────────────────────────────────────────
 
-pub use rigid::rigid_mesh_potentially_visible;
+pub use rigid::{
+    RigidFrustumCullBoundsTag, RigidFrustumCullCache, RigidFrustumCullCacheKey,
+    rigid_mesh_potentially_visible, rigid_mesh_potentially_visible_cached,
+};
 pub use skinned::{
     skinned_mesh_potentially_visible, skinned_mesh_potentially_visible_from_bone_origins,
 };
