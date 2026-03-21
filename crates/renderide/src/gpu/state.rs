@@ -114,10 +114,16 @@ pub(crate) fn instance_flags_for_init(gpu_validation_layers: bool) -> wgpu::Inst
 ///
 /// Validation layers are off unless `gpu_validation_layers` is true or enabled via `WGPU_VALIDATION`
 /// (see [`instance_flags_for_init`]).
+///
+/// When `ray_tracing_enabled` is false, the device is created without
+/// [`wgpu::Features::EXPERIMENTAL_RAY_QUERY`] or acceleration-structure limits, matching a
+/// non-ray-tracing adapter regardless of hardware capability (see
+/// [`crate::config::RenderConfig::ray_tracing_enabled`]).
 pub async fn init_gpu(
     window: &Window,
     vsync: bool,
     gpu_validation_layers: bool,
+    ray_tracing_enabled: bool,
 ) -> Result<GpuState, Box<dyn std::error::Error + Send + Sync>> {
     let enabled_backends = wgpu::Instance::enabled_backend_features();
     let use_vulkan_only = enabled_backends.contains(wgpu::Backends::VULKAN);
@@ -155,9 +161,10 @@ pub async fn init_gpu(
         .map_err(|e| format!("request_adapter: {:?}", e))?;
 
     let adapter_info = adapter.get_info();
-    let ray_query_supported = adapter
+    let adapter_reports_ray_query = adapter
         .features()
         .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+    let ray_query_supported = ray_tracing_enabled && adapter_reports_ray_query;
 
     let required_features = if ray_query_supported {
         wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::EXPERIMENTAL_RAY_QUERY
@@ -204,7 +211,9 @@ pub async fn init_gpu(
                     adapter_info.name,
                     max_blas
                 );
-            } else if !ray_query_supported {
+            } else if !ray_tracing_enabled {
+                logger::info!("Ray tracing disabled: ray_tracing_enabled=false in configuration");
+            } else if !adapter_reports_ray_query {
                 logger::info!(
                     "Ray tracing unavailable: adapter does not support EXPERIMENTAL_RAY_QUERY (Vulkan/DX12 ray tracing)"
                 );

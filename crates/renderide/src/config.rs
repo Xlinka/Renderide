@@ -297,6 +297,12 @@ pub struct RenderConfig {
     /// are fixed at first [`crate::gpu::init_gpu`]). See README for `RENDERIDE_GPU_VALIDATION` and
     /// `WGPU_VALIDATION`.
     pub gpu_validation_layers: bool,
+    /// When false, [`crate::gpu::init_gpu`] never requests [`wgpu::Features::EXPERIMENTAL_RAY_QUERY`]
+    /// or acceleration-structure device limits, so RTAO / ray-query PBR paths stay uninitialized.
+    /// Use on drivers or stacks that crash when ray-tracing APIs are enabled. Default true
+    /// (attempt RT when the adapter supports it). Like [`Self::gpu_validation_layers`], this is
+    /// only applied when the GPU device is first created, not on later config updates.
+    pub ray_tracing_enabled: bool,
     /// When true, log diagnostic info for the first skinned draw each frame.
     pub debug_skinned: bool,
     /// When true, log blendshape batch count and first few weights each frame.
@@ -434,6 +440,18 @@ fn apply_render_config_ini_entry(config: &mut RenderConfig, section: &str, key: 
             } else {
                 eprintln!(
                     "[renderide] ini: gpu_validation_layers parse error (raw = {:?})",
+                    value
+                );
+            }
+        }
+        ("rendering", "ray_tracing_enabled") => {
+            if let Some(v) = parse_bool(value) {
+                config.ray_tracing_enabled = v;
+                eprintln!("[renderide] ini: ray_tracing_enabled = {}", v);
+                logger::info!("ini: ray_tracing_enabled = {}", v);
+            } else {
+                eprintln!(
+                    "[renderide] ini: ray_tracing_enabled parse error (raw = {:?})",
                     value
                 );
             }
@@ -619,8 +637,8 @@ impl RenderConfig {
     ///   frame payload; INI values apply until the first frame (or when running without host data).
     /// - **`[display]`** — `vsync` (bool).
     /// - **`[rendering]`** — `use_debug_uv`, `use_pbr`, `skinned_apply_mesh_root_transform`,
-    ///   `skinned_use_root_bone`, `gpu_validation_layers`, `debug_skinned`, `debug_blendshapes`,
-    ///   `skinned_flip_handedness`, `parallel_mesh_draw_prep_batches`,
+    ///   `skinned_use_root_bone`, `gpu_validation_layers`, `ray_tracing_enabled`, `debug_skinned`,
+    ///   `debug_blendshapes`, `skinned_flip_handedness`, `parallel_mesh_draw_prep_batches`,
     ///   `log_collect_draw_batches_timing` (bools); `rtao_enabled`, `ray_traced_shadows_enabled`
     ///   (bools); `rtao_strength`, `ao_radius` (floats); `frustum_culling` (bool).
     ///
@@ -629,6 +647,7 @@ impl RenderConfig {
     /// - `RENDERIDE_NO_FRUSTUM_CULL=1` — disables CPU frustum culling for rigid and skinned meshes.
     /// - `RENDERIDE_PARALLEL_MESH_PREP=0` — disables parallel per-batch mesh-draw collection.
     /// - `RENDERIDE_NO_RTAO=1` — disables RTAO even when ray tracing is available.
+    /// - `RENDERIDE_NO_RAY_TRACING=1` — disables ray-query device creation ([`Self::ray_tracing_enabled`]).
     /// - `RENDERIDE_RAY_TRACED_SHADOWS=1` — enables PBR ray-traced shadows when the GPU supports them.
     /// - `RENDERIDE_NO_RAY_TRACED_SHADOWS=1` — disables PBR ray-traced shadows (overrides the enable var).
     /// - `RENDERIDE_GPU_VALIDATION=1` — enables wgpu validation layers at GPU init ([`Self::gpu_validation_layers`]).
@@ -651,12 +670,13 @@ impl RenderConfig {
             );
             let display = format!("RenderConfig (INI): display vsync={}", config.vsync);
             let rendering = format!(
-                "RenderConfig (INI): rendering debug_uv={} pbr={} skin_root={} skin_root_bone={} gpu_val={} dbg_skin={} dbg_blend={} flip_h={} parallel_prep={} log_collect={} rtao={} rt_shadows={} rtao_str={} ao_r={} frustum={}",
+                "RenderConfig (INI): rendering debug_uv={} pbr={} skin_root={} skin_root_bone={} gpu_val={} rt={} dbg_skin={} dbg_blend={} flip_h={} parallel_prep={} log_collect={} rtao={} rt_shadows={} rtao_str={} ao_r={} frustum={}",
                 config.use_debug_uv,
                 config.use_pbr,
                 config.skinned_apply_mesh_root_transform,
                 config.skinned_use_root_bone,
                 config.gpu_validation_layers,
+                config.ray_tracing_enabled,
                 config.debug_skinned,
                 config.debug_blendshapes,
                 config.skinned_flip_handedness,
@@ -688,6 +708,9 @@ impl RenderConfig {
         }
         if std::env::var("RENDERIDE_NO_RTAO").as_deref() == Ok("1") {
             config.rtao_enabled = false;
+        }
+        if std::env::var("RENDERIDE_NO_RAY_TRACING").as_deref() == Ok("1") {
+            config.ray_tracing_enabled = false;
         }
         match std::env::var("RENDERIDE_RAY_TRACED_SHADOWS").as_deref() {
             Ok("1") | Ok("true") | Ok("yes") => config.ray_traced_shadows_enabled = true,
@@ -725,6 +748,7 @@ impl Default for RenderConfig {
             skinned_apply_mesh_root_transform: true,
             skinned_use_root_bone: false,
             gpu_validation_layers: false,
+            ray_tracing_enabled: true,
             debug_skinned: false,
             debug_blendshapes: false,
             skinned_flip_handedness: false,
@@ -761,6 +785,7 @@ use_pbr = false
 use_debug_uv = true
 rtao_strength = 0.25
 ray_traced_shadows_enabled = true
+ray_tracing_enabled = false
 "#;
         let mut c = RenderConfig::default();
         for (section, key, value) in parse_ini(ini) {
@@ -774,5 +799,6 @@ ray_traced_shadows_enabled = true
         assert!(c.use_debug_uv);
         assert!((c.rtao_strength - 0.25).abs() < f32::EPSILON);
         assert!(c.ray_traced_shadows_enabled);
+        assert!(!c.ray_tracing_enabled);
     }
 }

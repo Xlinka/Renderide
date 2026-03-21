@@ -377,6 +377,7 @@ impl RenderideApp {
                 window,
                 self.session.render_config().vsync,
                 self.session.render_config().gpu_validation_layers,
+                self.session.render_config().ray_tracing_enabled,
             )) {
                 Ok(g) => {
                     logger::info!(
