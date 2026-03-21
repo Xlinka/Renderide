@@ -18,25 +18,49 @@ use std::path::PathBuf;
 
 // ─── INI parser ───────────────────────────────────────────────────────────────
 
-/// Searches for `configuration.ini` next to the running executable, then in
-/// the current working directory.  Returns the first path that exists.
+/// Searches for `configuration.ini` in several locations and returns the first
+/// path that exists.  Search order:
+///
+/// 1. Directory of the running executable (release installs, next to `.exe`).
+/// 2. Parent of the exe directory (e.g. exe lives in `bin/`).
+/// 3. Current working directory (`cargo run` from the repo root).
+/// 4. Two levels up from cwd (repo root when cwd is `crates/renderide`).
+///
+/// Every candidate is printed to stderr so you can see exactly where it looks.
 pub fn find_config_ini() -> Option<PathBuf> {
-    // 1. Directory containing the running executable (good for release builds).
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
     if let Ok(exe) = std::env::current_exe() {
+        // 1. Same dir as exe.
         if let Some(dir) = exe.parent() {
-            let p = dir.join("configuration.ini");
-            if p.exists() {
-                return Some(p);
+            candidates.push(dir.join("configuration.ini"));
+            // 2. One level above exe dir.
+            if let Some(parent) = dir.parent() {
+                candidates.push(parent.join("configuration.ini"));
             }
         }
     }
-    // 2. Current working directory (good for `cargo run` from the repo root).
+
     if let Ok(cwd) = std::env::current_dir() {
-        let p = cwd.join("configuration.ini");
-        if p.exists() {
-            return Some(p);
+        // 3. Current working directory.
+        candidates.push(cwd.join("configuration.ini"));
+        // 4. Two levels up from cwd.
+        if let Some(p1) = cwd.parent() {
+            if let Some(p2) = p1.parent() {
+                candidates.push(p2.join("configuration.ini"));
+            }
         }
     }
+
+    eprintln!("[renderide] Searching for configuration.ini in:");
+    for candidate in &candidates {
+        let exists = candidate.exists();
+        eprintln!("  {} [{}]", candidate.display(), if exists { "FOUND" } else { "not found" });
+        if exists {
+            return Some(candidate.clone());
+        }
+    }
+    eprintln!("[renderide] configuration.ini not found — using built-in defaults.");
     None
 }
 
@@ -115,43 +139,109 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Loads [`AppConfig`] from `configuration.ini` if found, otherwise returns
     /// [`Default::default`].
+    ///
+    /// Call this **after** `logger::init` so that the search results are
+    /// written to `Renderide.log` (in addition to stderr).
     pub fn load() -> Self {
         let mut cfg = Self::default();
-        let Some(path) = find_config_ini() else {
-            return cfg;
-        };
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!(
-                    "[renderide] configuration.ini read error ({}): {}",
-                    path.display(),
-                    e
-                );
+
+        // Build the candidate list and report every path we try — both to
+        // stderr (visible in a console) and via logger (written to Renderide.log).
+        let candidates = Self::config_candidates();
+        logger::info!("Searching for configuration.ini:");
+        for (path, exists) in &candidates {
+            let tag = if *exists { "FOUND" } else { "not found" };
+            eprintln!("[renderide] config search: {} [{}]", path.display(), tag);
+            logger::info!("  {} [{}]", path.display(), tag);
+        }
+
+        let path = match candidates.into_iter().find(|(_, exists)| *exists) {
+            Some((p, _)) => p,
+            None => {
+                let msg = "configuration.ini not found — using built-in defaults.";
+                eprintln!("[renderide] {}", msg);
+                logger::warn!("{}", msg);
                 return cfg;
             }
         };
+
+        logger::info!("Loading configuration from: {}", path.display());
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = format!(
+                    "configuration.ini read error ({}): {}",
+                    path.display(),
+                    e
+                );
+                eprintln!("[renderide] {}", msg);
+                logger::error!("{}", msg);
+                return cfg;
+            }
+        };
+
         for (section, key, value) in parse_ini(&content) {
             match (section.as_str(), key.as_str()) {
                 ("display", "focused_fps") => {
                     if let Ok(v) = value.parse::<u32>() {
                         cfg.focused_fps = v;
+                        eprintln!("[renderide] ini: focused_fps = {}", v);
+                        logger::info!("ini: focused_fps = {}", v);
+                    } else {
+                        eprintln!("[renderide] ini: focused_fps parse error (raw = {:?})", value);
                     }
                 }
                 ("display", "unfocused_fps") => {
                     if let Ok(v) = value.parse::<u32>() {
                         cfg.unfocused_fps = v;
+                        eprintln!("[renderide] ini: unfocused_fps = {}", v);
+                        logger::info!("ini: unfocused_fps = {}", v);
+                    } else {
+                        eprintln!("[renderide] ini: unfocused_fps parse error (raw = {:?})", value);
                     }
                 }
                 ("hud", "show_hud") => {
                     if let Some(v) = parse_bool(&value) {
                         cfg.show_hud = v;
+                        eprintln!("[renderide] ini: show_hud = {}", v);
+                        logger::info!("ini: show_hud = {}", v);
+                    } else {
+                        eprintln!("[renderide] ini: show_hud parse error (raw = {:?})", value);
                     }
                 }
                 _ => {}
             }
         }
+
+        let summary = format!(
+            "AppConfig loaded: focused_fps={} unfocused_fps={} show_hud={}",
+            cfg.focused_fps, cfg.unfocused_fps, cfg.show_hud
+        );
+        eprintln!("[renderide] {}", summary);
+        logger::info!("{}", summary);
         cfg
+    }
+
+    /// Returns `(path, exists)` for every candidate location, in priority order.
+    fn config_candidates() -> Vec<(PathBuf, bool)> {
+        let mut out: Vec<PathBuf> = Vec::new();
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                out.push(dir.join("configuration.ini"));
+                if let Some(parent) = dir.parent() {
+                    out.push(parent.join("configuration.ini"));
+                }
+            }
+        }
+        if let Ok(cwd) = std::env::current_dir() {
+            out.push(cwd.join("configuration.ini"));
+            if let Some(p1) = cwd.parent() {
+                if let Some(p2) = p1.parent() {
+                    out.push(p2.join("configuration.ini"));
+                }
+            }
+        }
+        out.into_iter().map(|p| { let e = p.exists(); (p, e) }).collect()
     }
 }
 
@@ -222,38 +312,65 @@ impl RenderConfig {
 
         // Layer 2: configuration.ini overrides.
         if let Some(path) = find_config_ini() {
+            logger::info!("RenderConfig: loading from {}", path.display());
             if let Ok(content) = std::fs::read_to_string(&path) {
                 for (section, key, value) in parse_ini(&content) {
                     match (section.as_str(), key.as_str()) {
                         ("display", "vsync") => {
                             if let Some(v) = parse_bool(&value) {
                                 config.vsync = v;
+                                eprintln!("[renderide] ini: vsync = {}", v);
+                                logger::info!("ini: vsync = {}", v);
+                            } else {
+                                eprintln!("[renderide] ini: vsync parse error (raw = {:?})", value);
                             }
                         }
                         ("rendering", "rtao_enabled") => {
                             if let Some(v) = parse_bool(&value) {
                                 config.rtao_enabled = v;
+                                eprintln!("[renderide] ini: rtao_enabled = {}", v);
+                                logger::info!("ini: rtao_enabled = {}", v);
+                            } else {
+                                eprintln!("[renderide] ini: rtao_enabled parse error (raw = {:?})", value);
                             }
                         }
                         ("rendering", "rtao_strength") => {
                             if let Ok(v) = value.parse::<f32>() {
                                 config.rtao_strength = v;
+                                eprintln!("[renderide] ini: rtao_strength = {}", v);
+                                logger::info!("ini: rtao_strength = {}", v);
+                            } else {
+                                eprintln!("[renderide] ini: rtao_strength parse error (raw = {:?})", value);
                             }
                         }
                         ("rendering", "ao_radius") => {
                             if let Ok(v) = value.parse::<f32>() {
                                 config.ao_radius = v;
+                                eprintln!("[renderide] ini: ao_radius = {}", v);
+                                logger::info!("ini: ao_radius = {}", v);
+                            } else {
+                                eprintln!("[renderide] ini: ao_radius parse error (raw = {:?})", value);
                             }
                         }
                         ("rendering", "frustum_culling") => {
                             if let Some(v) = parse_bool(&value) {
                                 config.frustum_culling = v;
+                                eprintln!("[renderide] ini: frustum_culling = {}", v);
+                                logger::info!("ini: frustum_culling = {}", v);
+                            } else {
+                                eprintln!("[renderide] ini: frustum_culling parse error (raw = {:?})", value);
                             }
                         }
                         _ => {}
                     }
                 }
             }
+            let summary = format!(
+                "RenderConfig loaded: vsync={} rtao_enabled={} rtao_strength={} ao_radius={} frustum_culling={}",
+                config.vsync, config.rtao_enabled, config.rtao_strength, config.ao_radius, config.frustum_culling
+            );
+            eprintln!("[renderide] {}", summary);
+            logger::info!("{}", summary);
         }
 
         // Layer 3: env var overrides (highest priority).

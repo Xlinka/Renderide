@@ -248,7 +248,10 @@ struct RenderideApp {
     render_loop: Option<RenderLoop>,
     exit_code: Option<i32>,
     input: WindowInputState,
-    last_unfocused_redraw: Option<Instant>,
+    /// Timestamp of the last rendered frame, shared by both focused and unfocused throttle paths.
+    last_redraw: Option<Instant>,
+    /// Wall-clock start of the previous `run_frame()` call, used for actual FPS tracking.
+    last_frame_wall_start: Option<Instant>,
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
     debug_hud: Option<DebugHud>,
@@ -272,7 +275,8 @@ impl RenderideApp {
             render_loop: None,
             exit_code: None,
             input: WindowInputState::default(),
-            last_unfocused_redraw: None,
+            last_redraw: None,
+            last_frame_wall_start: None,
             last_log_flush: None,
             frame_diagnostic: FrameDiagnostic::new(),
             debug_hud: None,
@@ -328,6 +332,11 @@ impl RenderideApp {
     /// Returns `Some(exit_code)` if the session requested exit, otherwise `None`.
     fn run_frame(&mut self) -> Option<i32> {
         let frame_start = Instant::now();
+        let wall_interval_us = self
+            .last_frame_wall_start
+            .map(|t| frame_start.duration_since(t).as_micros() as u64)
+            .unwrap_or(0);
+        self.last_frame_wall_start = Some(frame_start);
 
         // Phase 1: Update — session update and command processing.
         if let Some(code) = self.session.update() {
@@ -514,6 +523,7 @@ impl RenderideApp {
                 render_us,
                 present_us,
                 total_us,
+                wall_interval_us,
                 // GPU timing
                 gpu_mesh_pass_ms: render_loop.last_gpu_mesh_pass_ms(),
                 // Draw stats
@@ -590,6 +600,31 @@ impl ApplicationHandler for RenderideApp {
                 event_loop.exit();
             }
             WindowEvent::RedrawRequested => {
+                // ── Frame-rate throttle ──────────────────────────────────────────────
+                // On Windows the OS generates continuous WM_PAINT messages that become
+                // RedrawRequested events, completely bypassing about_to_wait throttling.
+                // Both focused and unfocused paths are gated here using their respective
+                // last-redraw timestamps.  about_to_wait only controls WaitUntil timing
+                // and calls request_redraw() — it never calls run_frame() directly.
+                // Pick the cap for the current focus state.
+                let interval = if self.input.window_focused {
+                    self.focused_interval()
+                } else {
+                    self.unfocused_interval()
+                };
+                if !interval.is_zero() {
+                    let now = Instant::now();
+                    let elapsed = self
+                        .last_redraw
+                        .map(|t| now.duration_since(t))
+                        .unwrap_or(interval); // first frame: always render
+                    if elapsed < interval {
+                        return;
+                    }
+                    // Record BEFORE GPU work so the deadline is stable.
+                    self.last_redraw = Some(now);
+                }
+                // ────────────────────────────────────────────────────────────────────
                 if let Some(ref window) = self.window {
                     let size = window.inner_size();
                     self.input.window_resolution = (size.width, size.height);
@@ -688,41 +723,35 @@ impl ApplicationHandler for RenderideApp {
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         if let Some(ref window) = self.window {
-            if self.input.window_focused {
-                self.last_unfocused_redraw = None;
-                window.request_redraw();
-                let interval = self.focused_interval();
+                // Both focused and unfocused use the same pattern:
+                //   - request_redraw() only when the target interval has elapsed
+                //   - WaitUntil the next deadline so the OS can sleep the thread
+                // RedrawRequested does the actual throttle gate via last_redraw.
+                // Using a single shared timestamp avoids resets when focus changes.
+                let interval = if self.input.window_focused {
+                    self.focused_interval()
+                } else {
+                    self.unfocused_interval()
+                };
                 if interval.is_zero() {
-                    // focused_fps = 0: fully uncapped — poll as fast as possible.
+                    // focused_fps = 0: fully uncapped.
+                    window.request_redraw();
                     event_loop.set_control_flow(ControlFlow::Poll);
                 } else {
-                    event_loop.set_control_flow(ControlFlow::WaitUntil(
-                        Instant::now() + interval,
-                    ));
-                }
-            } else {
-                let interval = self.unfocused_interval();
-                event_loop.set_control_flow(ControlFlow::WaitUntil(
-                    Instant::now() + interval,
-                ));
-
-                let now = Instant::now();
-                let should_redraw = self
-                    .last_unfocused_redraw
-                    .map(|t| now.duration_since(t) >= interval)
-                    .unwrap_or(true);
-                if should_redraw {
-                    self.last_unfocused_redraw = Some(now);
-                    let mut input = self.input.take_input_state();
-                    if let Some(ref mut m) = input.mouse {
-                        m.is_active = m.is_active || self.session.cursor_lock_requested();
+                    let now = Instant::now();
+                    let elapsed = self
+                        .last_redraw
+                        .map(|t| now.duration_since(t))
+                        .unwrap_or(interval);
+                    if elapsed >= interval {
+                        window.request_redraw();
                     }
-                    self.session.set_pending_input(input);
-                    if self.run_frame().is_some() {
-                        event_loop.exit();
-                    }
+                    let next_frame = self
+                        .last_redraw
+                        .map(|t| t + interval)
+                        .unwrap_or(now);
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(next_frame));
                 }
-            }
         }
     }
 }

@@ -37,6 +37,9 @@ pub struct LiveFrameDiagnostics {
     pub render_us: u64,
     pub present_us: u64,
     pub total_us: u64,
+    /// Wall-clock microseconds since the previous `run_frame()` call (includes sleep time).
+    /// Use this for actual FPS; `total_us` only measures active work per call.
+    pub wall_interval_us: u64,
 
     // ── GPU timing ───────────────────────────────────────────────────────────
     /// GPU mesh rasterisation pass time (timestamp query, updated every 60 frames).
@@ -81,10 +84,10 @@ impl LiveFrameDiagnostics {
     }
 
     fn fps(&self) -> f64 {
-        if self.total_us == 0 {
+        if self.wall_interval_us == 0 {
             0.0
         } else {
-            1_000_000.0 / self.total_us as f64
+            1_000_000.0 / self.wall_interval_us as f64
         }
     }
 
@@ -473,6 +476,7 @@ mod tests {
             render_us: 3_000,
             present_us: 500,
             total_us,
+            wall_interval_us: total_us,
             gpu_mesh_pass_ms: gpu_ms,
             batch_count: 4,
             overlay_batch_count: 1,
