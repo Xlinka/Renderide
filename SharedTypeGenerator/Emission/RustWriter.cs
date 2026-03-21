@@ -10,6 +10,7 @@ public class RustWriter : IDisposable
     private readonly Stream _stream;
     private int _indent;
 
+    /// <summary>Opens <paramref name="path"/> for write (truncating if it exists).</summary>
     public RustWriter(string path)
     {
         _stream = File.OpenWrite(path);
@@ -22,6 +23,7 @@ public class RustWriter : IDisposable
             _writer.Write("    ");
     }
 
+    /// <summary>Writes a full-line Rust comment at the current indent.</summary>
     public void Comment(string text)
     {
         WriteIndent();
@@ -43,8 +45,7 @@ public class RustWriter : IDisposable
     /// <summary>Writes a blank line.</summary>
     public void BlankLine() => _writer.WriteLine();
 
-    // ── Struct / Enum / Impl openers ──────────────────────────────
-
+    /// <summary>Opens <c>pub enum</c> with <c>#[repr(...)]</c> and optional extra derives; dispose the returned <see cref="Block"/> to close the body.</summary>
     public Block BeginEnum(string name, string reprType, params string[] extraDerives)
     {
         string derives = extraDerives.Length > 0
@@ -56,6 +57,7 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Opens a tagged <c>pub enum</c> (union-style variants with payloads), without a primitive repr.</summary>
     public Block BeginUnion(string name, params string[] extraDerives)
     {
         string derives = extraDerives.Length > 0
@@ -66,6 +68,7 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Opens a normal Rust <c>pub struct</c> with fields.</summary>
     public Block BeginStruct(string name, params string[] extraDerives)
     {
         string derives = extraDerives.Length > 0
@@ -76,6 +79,7 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Opens <c>#[repr(C)] pub struct</c> for layout-compatible POD types.</summary>
     public Block BeginExternStruct(string name, params string[] extraDerives)
     {
         string derives = extraDerives.Length > 0
@@ -87,6 +91,7 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Emits a single-field <c>#[repr(transparent)]</c> newtype wrapper.</summary>
     public void TransparentStruct(string name, string innerType)
     {
         WriteIndent(); _writer.WriteLine("#[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]");
@@ -95,12 +100,14 @@ public class RustWriter : IDisposable
         _writer.Write("(pub "); _writer.Write(innerType.HumanizeType()); _writer.WriteLine(");");
     }
 
+    /// <summary>Opens <c>impl TypeName</c> for inherent methods.</summary>
     public Block BeginImpl(string name)
     {
         WriteIndent(); _writer.Write("impl "); _writer.Write(name.HumanizeType()); _writer.WriteLine(" {");
         return new Block(this, false);
     }
 
+    /// <summary>Opens <c>impl Trait for Type</c>.</summary>
     public Block BeginTraitImpl(string traitName, string typeName)
     {
         WriteIndent(); _writer.Write("impl "); _writer.Write(traitName);
@@ -108,6 +115,7 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Opens a function inside the current impl; empty <paramref name="returnType"/> omits the return arrow.</summary>
     public Block BeginMethod(string name, string returnType, string[]? generics, string[] parameters, bool isPublic = true)
     {
         WriteIndent();
@@ -131,23 +139,23 @@ public class RustWriter : IDisposable
         return new Block(this, false);
     }
 
+    /// <summary>Opens an <c>if</c> block with the given condition expression.</summary>
     public Block BeginIf(string condition)
     {
         WriteIndent(); _writer.Write("if "); _writer.Write(condition); _writer.WriteLine(" {");
         return new Block(this, false);
     }
 
-    // ── Members ──────────────────────────────────────────────────
-
+    /// <summary>Emits a <c>pub field: type,</c> line; names starting with <c>_</c> are not humanized (e.g. padding).</summary>
     public void StructMember(string name, string type)
     {
         WriteIndent();
-        // Synthetic names (e.g. _padding) are not transformed
         string rustName = name.StartsWith("_") ? name : name.HumanizeField();
         _writer.Write("pub "); _writer.Write(rustName);
         _writer.Write(": "); _writer.Write(type.HumanizeType()); _writer.WriteLine(',');
     }
 
+    /// <summary>Emits a unit enum variant, optionally marked <c>#[default]</c>.</summary>
     public void EnumMember(string name, bool isDefault = false)
     {
         if (isDefault)
@@ -157,6 +165,7 @@ public class RustWriter : IDisposable
         WriteIndent(); _writer.Write(name.HumanizeField()); _writer.WriteLine(',');
     }
 
+    /// <summary>Emits a C-style enum variant with an explicit discriminant.</summary>
     public void EnumMemberWithValue(string name, string value, bool isDefault = false)
     {
         if (isDefault)
@@ -167,6 +176,7 @@ public class RustWriter : IDisposable
         _writer.Write(" = "); _writer.Write(value); _writer.WriteLine(',');
     }
 
+    /// <summary>Emits a tuple-style enum variant <c>Variant(Type)</c> for tagged unions.</summary>
     public void EnumVariantWithPayload(string variantName, string payloadType)
     {
         WriteIndent();
@@ -174,11 +184,10 @@ public class RustWriter : IDisposable
         _writer.Write(payloadType.HumanizeType()); _writer.WriteLine("),");
     }
 
-    // ── Block management ─────────────────────────────────────────
-
     internal void Indent() => _indent++;
     internal void Dedent() => _indent--;
 
+    /// <summary>Closes the current block with <c>}</c> or <c>};</c> when <paramref name="semicolon"/> is true.</summary>
     public void CloseBlock(bool semicolon)
     {
         WriteIndent();

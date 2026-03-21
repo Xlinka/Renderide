@@ -13,10 +13,11 @@ public class FieldClassifier
     private readonly Type _iMemoryPackable;
     private readonly Type _polymorphicBase;
 
-    public FieldClassifier(Type[] assemblyTypes)
+    /// <summary>Creates a classifier using well-known types from the shared assembly.</summary>
+    public FieldClassifier(WellKnownTypes wellKnown)
     {
-        _iMemoryPackable = assemblyTypes.First(t => t.Name == "IMemoryPackable");
-        _polymorphicBase = assemblyTypes.First(t => t.Name == "PolymorphicMemoryPackableEntity`1").GetGenericTypeDefinition();
+        _iMemoryPackable = wellKnown.IMemoryPackable;
+        _polymorphicBase = wellKnown.PolymorphicMemoryPackableEntityDefinition;
     }
 
     /// <summary>Classifies a field based on its type and the C# Pack method name used to serialize it.

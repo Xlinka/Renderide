@@ -8,7 +8,7 @@ using SharedTypeGenerator.Logging;
 
 namespace SharedTypeGenerator.Tests;
 
-/// <summary>Base for roundtrip tests. Loads Renderite.Shared, provides type list and pack/unpack helpers.</summary>
+/// <summary>Base for roundtrip tests. Loads Renderite.Shared, provides the analyzed type list and C# pack helper.</summary>
 public abstract class RoundtripTestBase
 {
     private static string GetAssemblyPath()
@@ -88,18 +88,4 @@ public abstract class RoundtripTestBase
         var written = packer.ComputeLength(buffer.AsSpan());
         return (buffer, written);
     }
-
-    protected static object UnpackFromBuffer(Type type, byte[] buffer, int length, IMemoryPackerEntityPool pool)
-    {
-        var instance = Activator.CreateInstance(type) ?? throw new InvalidOperationException($"Could not create {type.Name}");
-        var span = buffer.AsSpan(0, length);
-        var unpacker = new MemoryUnpacker(span, pool);
-
-        if (instance is not IMemoryPackable packable)
-            throw new InvalidOperationException($"{type.Name} does not implement IMemoryPackable");
-        packable.Unpack(ref unpacker);
-
-        return instance;
-    }
-
 }

@@ -10,11 +10,15 @@ public class RustEmitter
 {
     private readonly RustWriter _w;
     private readonly string _engineVersion;
+    private readonly bool _ilVerbose;
 
-    public RustEmitter(RustWriter writer, string engineVersion)
+    /// <summary>Creates an emitter targeting <paramref name="writer"/>.</summary>
+    /// <param name="ilVerbose">When true, emits leading comments naming each C# type before its Rust definition.</param>
+    public RustEmitter(RustWriter writer, string engineVersion, bool ilVerbose = false)
     {
         _w = writer;
         _engineVersion = engineVersion;
+        _ilVerbose = ilVerbose;
     }
 
     /// <summary>Emits the complete shared.rs file from the analyzed type list.</summary>
@@ -59,6 +63,9 @@ public class RustEmitter
 
     private void EmitType(TypeDescriptor type)
     {
+        if (_ilVerbose)
+            _w.Comment($"IL-verbose: C# {type.CSharpName} ({type.Shape})");
+
         switch (type.Shape)
         {
             case TypeShape.PolymorphicBase:

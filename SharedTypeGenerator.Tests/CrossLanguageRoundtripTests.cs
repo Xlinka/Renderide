@@ -8,8 +8,7 @@ using Xunit;
 
 namespace SharedTypeGenerator.Tests;
 
-/// <summary>C# → Rust → C# roundtrip tests. Compares packed bytes: C# pack → Rust unpack+pack → assert bytes match.
-/// Skips when the Rust roundtrip binary is not available.</summary>
+/// <summary>C# → Rust → C# roundtrip tests: C# packs, the Rust <c>roundtrip</c> binary unpacks and repacks, and the byte buffers must match.</summary>
 public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
 {
     private static (Assembly asm, List<TypeDescriptor> types)? _cache;
@@ -41,6 +40,27 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         return null;
     }
 
+    private static bool IsCiEnvironment()
+    {
+        string? ci = Environment.GetEnvironmentVariable("CI");
+        return string.Equals(ci, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ci, "1", StringComparison.Ordinal);
+    }
+
+    private static void RequireRoundtripBinaryOrSkip(string? binary)
+    {
+        if (binary != null)
+            return;
+        if (IsCiEnvironment())
+        {
+            throw new InvalidOperationException(
+                "Roundtrip binary is required when CI=true. From the repository root run: cargo build -p renderide --bin roundtrip");
+        }
+
+        Skip.If(true,
+            "Roundtrip binary not found under target/debug or target/release. From the repository root run: cargo build -p renderide --bin roundtrip");
+    }
+
     public static IEnumerable<object[]> RoundtripableTypes()
     {
         var (asm, types) = Cached;
@@ -53,12 +73,12 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         }
     }
 
-    [Theory]
+    [SkippableTheory]
     [MemberData(nameof(RoundtripableTypes))]
     public void CSharpToRustToCSharp_ByteCompare(string typeName, Type type)
     {
         var binary = GetRoundtripBinaryPath();
-        if (binary == null) return;
+        RequireRoundtripBinaryOrSkip(binary);
 
         var (asm, _) = Cached;
         var original = CreateInstance(asm, type);
@@ -71,7 +91,7 @@ public sealed class CrossLanguageRoundtripTests : RoundtripTestBase
         try
         {
             File.WriteAllBytes(inputPath, bytesA);
-            RunRoundtripBinary(binary, typeName, inputPath, outputPath);
+            RunRoundtripBinary(binary!, typeName, inputPath, outputPath);
             var bytesB = File.ReadAllBytes(outputPath);
             Assert.True(bytesA.SequenceEqual(bytesB), $"{typeName}: C# packed bytes != Rust roundtrip bytes");
         }
