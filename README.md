@@ -85,7 +85,7 @@ cargo run --bin bootstrapper -- --log-level debug
 
 ## GPU validation (debugging)
 
-wgpu can enable backend validation (on Vulkan, the validation layers when installed). This is off by default so debug builds stay usable.
+wgpu can enable backend validation (on Vulkan, the validation layers when installed). This is off by default so performance stays high.
 
 - **Enable:** set `RENDERIDE_GPU_VALIDATION=1` (or `true` / `yes`) before starting the renderer so `RenderConfig::gpu_validation_layers` is true at first GPU init (see `crates/renderide/src/config.rs`). Validation is chosen when the wgpu instance is created and cannot be toggled later without restarting the process.
 - **Override:** wgpu’s `WGPU_VALIDATION` is still applied via [`InstanceFlags::with_env`](https://docs.rs/wgpu/latest/wgpu/struct.InstanceFlags.html#method.with_env) after that config: any value other than `0` forces validation on; `0` forces it off.
