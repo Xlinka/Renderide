@@ -1,14 +1,52 @@
 # Renderide
 
-A Rust renderer for Resonite, replacing the Unity renderer with a custom Unity-like one using wgpu.
+A Rust renderer for Resonite, replacing the Unity renderer with a custom Unity-like one using [wgpu](https://github.com/gfx-rs/wgpu).
 
 ## Warning
 
-There are a lot of performance, support, and stability issues with the renderer currently. It is not intended for consumer use at the moment and comes with many rendering features enabled for testing purposes. There may be other visual bugs or unexpected behavior.
+This renderer is experimental: performance, platform support, and stability are limited. It is not for general consumer use currently; many features are enabled for testing, and visual bugs or unexpected behavior are possible.
+
+## Prerequisites
+
+### Rust
+
+Install the current stable toolchain with [rustup](https://rustup.rs/). On Linux and macOS you can use:
+
+`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+On Windows, download and run [rustup-init.exe](https://rustup.rs/) from the same site, or use `winget install Rustlang.Rustup` if you use winget.
+
+This workspace uses Rust edition 2024. If `cargo build` fails with an edition error, run `rustup update stable` and try again.
+
+### Resonite and Renderite
+
+To run the full stack you need a Resonite installation that includes Renderite (so `Renderite.Host.dll` is present). The bootstrapper runs the host with the system `dotnet` executable; install a compatible .NET runtime if prompted.
+
+Resonite is located via `RESONITE_DIR`, `STEAM_PATH`, common Steam install paths, or Steam’s `libraryfolders.vdf`. On Windows the bootstrapper can also consult the Steam registry. Set `RESONITE_DIR` to your game folder if discovery fails.
+
+### Optional (contributors)
+
+- [.NET 10 SDK](https://dotnet.microsoft.com/download) for SharedTypeGenerator and UnityShaderConverter under `generators/`.
+- [Slang](https://shader-slang.com/) only if you run UnityShaderConverter with `slangc` (put `slangc` on `PATH`, set `SLANGC`, or pass `--slangc`). Use `--skip-slang` to skip that when committed WGSL is enough.
+
+## Build and run
+
+Run these from the `Renderide/` directory (the Cargo workspace root).
+
+```bash
+cargo build --release
+cargo run --release -p bootstrapper
+```
+
+The bootstrapper expects the `renderide` binary next to itself (for example under `target/release/`). On Linux it may run the process as `Renderite.Renderer` and create a symlink to `renderide` if needed; on Windows it uses `renderide.exe`.
+
+On Linux, if Wine is in use, the bootstrapper uses `LinuxBootstrap.sh` from the Resonite directory. On Windows, Wine does not apply.
+
+Optional [`configuration.ini`](configuration.ini) may sit next to the renderer executable or in the current working directory. Keys and layout are defined in [`crates/renderide/src/config.rs`](crates/renderide/src/config.rs).
 
 ## Overview
 
-Resonite (formerly Neos VR) is a FrooxEngine-based VR and social platform. Renderite is its renderer abstraction layer (Host, Shared, Unity). Renderide acts as a drop-in renderer replacement, cross-platform with a focus on Linux via native dotnet host.
+Resonite (formerly Neos VR) is a VR and social platform. Renderite is its renderer abstraction (Host, Shared, Unity). Renderide is a cross-platform drop-in renderer that works with the native .NET host on Windows, Linux, and other supported setups.
 
 ```mermaid
 flowchart TB
@@ -22,7 +60,7 @@ flowchart TB
         GameEngine[Game engine init]
     end
     subgraph Renderide [Renderide Rust]
-        Renderer[wgpu/winit renderer]
+        Renderer[wgpu winit renderer]
     end
     CreateQueues --> SpawnHost
     SpawnHost --> QueueLoop
@@ -31,161 +69,76 @@ flowchart TB
     Renderide <-->|session IPC queues| Host
 ```
 
-For queue names, the bootstrapper message loop, and which lines on the wire spawn the renderer (`StartRenderer`), see [Architecture](#architecture).
+## Repository layout
 
-## Architecture
+IPC summary: `{prefix}.bootstrapper_in` / `{prefix}.bootstrapper_out` connect the host and bootstrapper. The host and Renderide use separate shared-memory queues named in the renderer argv. Messages other than control tokens such as `HEARTBEAT` and `SHUTDOWN` can carry argv tokens used to spawn `renderide`.
 
-Queues: `{prefix}.bootstrapper_in` / `{prefix}.bootstrapper_out` between Host and bootstrapper; Host and Renderide use separate shared-memory queues named in the renderer argv. Anything that is not `HEARTBEAT`, `SHUTDOWN`, `GETTEXT`, or `SETTEXT…` is treated as argv tokens for spawning `renderide` (the Rust side names this `StartRenderer`).
+### Rust crates
 
-| Crate | Path | Purpose |
-|-------|------|---------|
-| interprocess | `crates/interprocess/` | Shared-memory queues (Publisher/Subscriber), circular buffers. Used by bootstrapper and renderide for IPC. |
-| logger | `crates/logger/` | Shared logging helpers used by bootstrapper and renderide (files, levels, panic hook). |
-| bootstrapper | `crates/bootstrapper/` | Spawns Renderite.Host from the Resonite install, runs the queue loop, and launches Renderide when the host sends spawn tokens (see Overview). Supports Wine on Linux. |
-| renderide | `crates/renderide/` | Main renderer: wgpu, winit, session/IPC receiver, shared types + packing, scene graph, assets, GPU meshes. Hand-written shaders under `src/shaders/`; WGSL from Unity ShaderLab via UnityShaderConverter ([UnityShaderConverter](#unityshaderconverter)). Binaries: `renderide`, `roundtrip`. |
+| Crate | Path | Role |
+|-------|------|------|
+| interprocess | [`crates/interprocess/`](crates/interprocess/) | Shared-memory IPC queues |
+| logger | [`crates/logger/`](crates/logger/) | Logging shared by bootstrapper and renderer |
+| bootstrapper | [`crates/bootstrapper/`](crates/bootstrapper/) | Spawns Renderite.Host, queue loop, starts Renderide |
+| renderide | [`crates/renderide/`](crates/renderide/) | Renderer (`renderide`, `roundtrip` binaries), scene, assets, shaders |
 
-## Third-party folders
+### Third-party trees
 
-These are git submodules under [`third_party/`](third_party/):
+| Path | Role |
+|------|------|
+| [`third_party/UnityShaderParser/`](third_party/UnityShaderParser/) | Unity ShaderLab / HLSL parsing for UnityShaderConverter |
+| [`third_party/Resonite.UnityShaders/`](third_party/Resonite.UnityShaders/) | Upstream Resonite shaders (default converter input roots include this and sample shaders) |
 
-| Folder | Role |
-|--------|------|
-| UnityShaderParser | [`third_party/UnityShaderParser/`](third_party/UnityShaderParser/) — Parses Unity ShaderLab and embedded HLSL. UnityShaderConverter references this project to read `.shader` files. |
-| Resonite.UnityShaders | [`third_party/Resonite.UnityShaders/`](third_party/Resonite.UnityShaders/) — Upstream Resonite public shaders (e.g. under `Assets/Shaders/`). Included in the converter’s default scan roots alongside `generators/UnityShaderConverter/SampleShaders/`. |
+## Development
 
-Initialize or update submodules from the repo root when cloning:
+### SharedTypeGenerator
 
-```bash
-git submodule update --init --recursive
-```
-
-## SharedTypeGenerator
-
-Location: `generators/SharedTypeGenerator/` (C# .NET 10)
-
-Converts `Renderite.Shared.dll` into `crates/renderide/src/shared/shared.rs`. Pipeline: TypeAnalyzer (Mono.Cecil) -> PackMethodParser (IL -> SerializationStep) -> RustTypeMapper -> RustEmitter + PackEmitter. Outputs Rust types (POD structs, packable structs, polymorphic entities, enums) with `MemoryPackable` impls matching the C# wire format.
+`generators/SharedTypeGenerator/` (C# / .NET 10) turns `Renderite.Shared.dll` into Rust types and pack logic in `crates/renderide/src/shared/shared.rs` (generated; edit the generator, not that file by hand).
 
 ```bash
-dotnet run --project generators/SharedTypeGenerator -- -i /path/to/Renderite.Shared.dll [-o output.rs]
-```
-
-Default output: `crates/renderide/src/shared/shared.rs`
-
-## UnityShaderConverter
-
-Location: `generators/UnityShaderConverter/` (C# .NET 10)
-
-Turns Unity ShaderLab sources into generated Rust modules and WGSL under `crates/renderide/src/shaders/generated/`. Parsing uses UnityShaderParser ([Third-party folders](#third-party-folders)). This tool is unrelated to SharedTypeGenerator (Cecil/IL -> `shared.rs`). Pipeline details: [Converter internals](#converter-internals).
-
-### Prerequisites
-
-- [.NET 10 SDK](https://dotnet.microsoft.com/download)
-- Slang on `PATH` (or `SLANGC` / `--slangc`) when you want `slangc` to run; optional if you use `--skip-slang` and keep committed WGSL on disk
-
-### Common workflows
-
-Always run commands from the `Renderide/` directory (or pass absolute paths for `--input` / `--output`).
-
-1. Regenerate everything except calling `slangc` (fast; keeps existing WGSL on disk):
-
-   ```bash
-   cd Renderide
-   dotnet run --project generators/UnityShaderConverter -- --skip-slang
-   ```
-
-2. Run `slangc` for eligible shaders (Slang required; uses `PATH` / `SLANGC` / `--slangc`):
-
-   ```bash
-   cd Renderide
-   dotnet run --project generators/UnityShaderConverter --
-   ```
-
-### Install Slang
-
-Install the [Slang](https://shader-slang.com/) toolchain to generate or refresh WGSL via `slangc`. With `--skip-slang`, a shader is emitted only when every pass already has a non-empty `.wgsl` next to `material.rs` under `crates/renderide/src/shaders/generated/<mod>/`.
-
-After installing Slang:
-
-- Put `slangc` on your `PATH`, or  
-- Set the `SLANGC` environment variable to the full path of the `slangc` executable, or  
-- Pass `--slangc /path/to/slangc` on the command line.
-
-### Flags and config
-
-- `--input <dir>` — repeatable; only those roots are scanned. Defaults: `generators/UnityShaderConverter/SampleShaders` and `third_party/Resonite.UnityShaders/Assets/Shaders`.
-- `--output <dir>` — default: `crates/renderide/src/shaders/generated`.
-- `--compiler-config` — merges over built-in defaults (`slangEligibleGlobPatterns`, `maxVariantCombinationsPerShader`, `enableSlangSpecialization`, `maxSpecializationConstants`).
-- `--variant-config` — per-shader define lists instead of expanding `#pragma multi_compile` automatically.
-
-`DefaultCompilerConfig.json` (next to the built executable, or overridden with `--compiler-config`) includes `**/*.shader` by default, and `maxVariantCombinationsPerShader` defaults to 512 (Cartesian product of parsed `#pragma multi_compile` / `shader_feature` groups). Several Unity “macro” pragmas (`multi_compile_fwdbase`, fog, instancing, …) are still ignored to avoid combinatorial explosion until those paths are modeled. For quick iteration, narrow `--input` or `slangEligibleGlobPatterns`. Full-tree runs stay slow and noisy.
-
-Verbose logs: add `-v` / `--verbose`.
-
-Tests: `dotnet test generators/UnityShaderConverter.Tests/`
-
-## Tests
-
-`generators/SharedTypeGenerator.Tests/` — xUnit C# tests. Cross-language round-trip: C# packs a random instance -> bytes A; Rust `roundtrip` binary unpacks and packs -> bytes B; assert A == B.
-
-Prerequisite: `Renderite.Shared.dll` in `generators/SharedTypeGenerator.Tests/lib/` or set `RENDERITE_SHARED_DLL`.
-
-```bash
-cargo build --bin roundtrip
-dotnet test generators/SharedTypeGenerator.Tests/
-dotnet test generators/UnityShaderConverter.Tests/
-cargo test -p renderide minimal_unlit_sample_wgsl_parses
-```
-
-## Logging
-
-`Bootstrapper.log` and `HostOutput.log` are written under `logs/` relative to the bootstrapper’s current working directory. At startup the bootstrapper also truncates `logs/Renderide.log` under that same directory. The renderer appends to `logs/Renderide.log` at the workspace root (compile-time path derived from `crates/renderide`). If you run the bootstrapper from the repo root, those `Renderide.log` paths are the same file; if the CWD is elsewhere, you may get two different `Renderide.log` locations.
-
-Verbosity: Bootstrapper logging defaults to `trace`. Renderide defaults to `info` when no `-LogLevel` is passed. Pass `--log-level <level>` or `-l <level>` to the bootstrapper to set both bootstrapper and Renderide max levels; the bootstrapper then adds `-LogLevel` to the renderer argv. Levels: `error`, `warn`, `info`, `debug`, `trace`.
-
-```bash
-cargo run --bin bootstrapper -- --log-level debug
-```
-
-| Log | Path | Created By |
-|-----|------|------------|
-| Bootstrapper.log | `logs/Bootstrapper.log` | Bootstrapper crate — orchestration, queue commands, errors |
-| HostOutput.log | `logs/HostOutput.log` | Bootstrapper (redirects C# host stdout/stderr with [Host stdout]/[Host stderr] prefixes) |
-| Renderide.log | `logs/Renderide.log` | Renderide crate — renderer diagnostics (path: repo root via CARGO_MANIFEST_DIR) |
-
-## GPU validation (debugging)
-
-wgpu can enable backend validation (on Vulkan, the validation layers when installed). This is off by default so performance stays high.
-
-- Enable: set `RENDERIDE_GPU_VALIDATION=1` (or `true` / `yes`) before starting the renderer so `RenderConfig::gpu_validation_layers` is true at first GPU init (see `crates/renderide/src/config.rs`). Validation is chosen when the wgpu instance is created and cannot be toggled later without restarting the process.
-- Override: wgpu’s `WGPU_VALIDATION` is still applied via [`InstanceFlags::with_env`](https://docs.rs/wgpu/latest/wgpu/struct.InstanceFlags.html#method.with_env) after that config: any value other than `0` forces validation on; `0` forces it off.
-
-Expect a large performance hit when validation is on; use it only while tracking API errors.
-
-## Building and Running
-
-Rust:
-
-```bash
-cargo build --release && ./target/release/bootstrapper
-```
-
-Generator (optional):
-
-```bash
+cd Renderide
 dotnet run --project generators/SharedTypeGenerator -- -i /path/to/Renderite.Shared.dll
 ```
 
-Resonite discovery: `RESONITE_DIR` or Steam (`~/.steam/steam/steamapps/common/Resonite`, `~/.local/share/Steam`, libraryfolders.vdf).
+Use `-o` to write elsewhere. For pipeline details, see the project sources.
 
-Bootstrapper: The renderer binary is resolved next to the bootstrapper executable (`target/release` when using `cargo run`). On Linux the process is started as `Renderite.Renderer`; the bootstrapper can create a symlink to the `renderide` binary there if missing. On Windows it uses `renderide.exe`.
+### UnityShaderConverter
 
-Wine: Bootstrapper detects Wine and uses `LinuxBootstrap.sh` in the Resonite directory.
+`generators/UnityShaderConverter/` (C# / .NET 10) emits Rust modules and WGSL under `crates/renderide/src/shaders/generated/`. Uses UnityShaderParser. Unrelated to SharedTypeGenerator.
 
-Renderer configuration: You can tune Renderide by editing `configuration.ini`. The renderer searches for that file next to its executable and in the current working directory (details in `crates/renderide/src/config.rs`). If it is missing, defaults are used. The repository includes a root [`configuration.ini`](configuration.ini) you can copy or adapt; keys and sections are not documented here because they may change—see that file and the config loader for the current layout.
+Typical commands (from `Renderide/`):
+
+```bash
+# Fast: no slangc; keeps existing WGSL on disk where present
+dotnet run --project generators/UnityShaderConverter -- --skip-slang
+
+# Full run including slangc (Slang on PATH, or SLANGC / --slangc)
+dotnet run --project generators/UnityShaderConverter --
+```
+
+Add `-v` / `--verbose` for more log output. `dotnet run --project generators/UnityShaderConverter -- --help` lists flags such as `--input`, `--output`, `--compiler-config`, and `--variant-config`.
+
+### Debugging
+
+Logs under `logs/` relative to the bootstrapper’s working directory include `Bootstrapper.log` and `HostOutput.log`. The renderer appends `Renderide.log`; its path also follows the renderide crate layout at build time, so the working directory can produce two different `Renderide.log` files. Run from a consistent directory if that matters.
+
+Verbosity: bootstrapper defaults to `trace`; renderer to `info` unless `-LogLevel` is passed. Pass `--log-level <level>` or `-l <level>` on the bootstrapper (`error`, `warn`, `info`, `debug`, `trace`) to cap both and forward `-LogLevel` to Renderide.
+
+```bat
+cargo run --release -p bootstrapper -- --log-level debug
+```
+
+GPU validation: set `RENDERIDE_GPU_VALIDATION=1` (or `true` or `yes`) before first GPU init to enable validation in [`crates/renderide/src/config.rs`](crates/renderide/src/config.rs). On Linux and macOS you typically export the variable in the shell before starting the process; on Windows use `set RENDERIDE_GPU_VALIDATION=1` in Command Prompt or `$env:RENDERIDE_GPU_VALIDATION=1` in PowerShell for the current session.
+
+wgpu’s `WGPU_VALIDATION` is still honored via [`InstanceFlags::with_env`](https://docs.rs/wgpu/latest/wgpu/struct.InstanceFlags.html#method.with_env). Expect a large performance cost; use only while debugging API issues.
 
 ## Goals
 
-- AAA-quality renderer (path tracing, RTAO, RT reflections, PBR, etc.)
-- Cross-platform (Linux native via dotnet host)
-- Type-safe IPC via generated shared types
-- Performance and correctness (skinned meshes, proper shaders, textures)
+- Solid cross-platform renderer with correct materials, meshes, and textures
+- Strong typing for host and renderer IPC via generated shared types
+- Native .NET host on Windows and Linux, with Linux Wine paths where applicable
+- Room to grow toward advanced lighting and effects as the stack matures
+
+## License
+
+See [LICENSE](LICENSE).
