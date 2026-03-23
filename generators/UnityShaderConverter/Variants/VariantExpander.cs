@@ -93,6 +93,12 @@ public static partial class VariantExpander
         return result;
     }
 
+    /// <summary>True for Unity macro pragmas we do not expand into specialization axes.</summary>
+    public static bool IsIgnoredMultiCompilePragmaLine(string line) => ShouldIgnoreMultiCompileLine(line);
+
+    /// <summary>Parses keyword tokens from a <c>#pragma multi_compile</c> or <c>shader_feature</c> line.</summary>
+    public static List<string>? ParseMultiCompileKeywords(string line) => TryParseKeywordList(line);
+
     private static bool ShouldIgnoreMultiCompileLine(string line)
     {
         string t = line.TrimStart();

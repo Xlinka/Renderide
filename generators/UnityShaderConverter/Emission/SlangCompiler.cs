@@ -39,15 +39,62 @@ public sealed class SlangCompiler
         IReadOnlyList<string> variantDefines,
         out string? stderr)
     {
+        if (TryCompileToWgslCore(
+                slangPath,
+                wgslOutPath,
+                runtimeSlangIncludeDir,
+                shaderSourceIncludeDir,
+                vertexEntry,
+                fragmentEntry,
+                variantDefines,
+                useMatrixLayout: true,
+                out stderr))
+            return true;
+
+        if (stderr is not null &&
+            stderr.Contains("matrix-layout", StringComparison.OrdinalIgnoreCase))
+        {
+            TryDelete(wgslOutPath);
+            if (TryCompileToWgslCore(
+                slangPath,
+                wgslOutPath,
+                runtimeSlangIncludeDir,
+                shaderSourceIncludeDir,
+                vertexEntry,
+                fragmentEntry,
+                variantDefines,
+                useMatrixLayout: false,
+                out stderr))
+            {
+                _logger.LogInfo(LogCategory.SlangCompile, "slangc succeeded without -matrix-layout (toolchain lacks that flag).");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool TryCompileToWgslCore(
+        string slangPath,
+        string wgslOutPath,
+        string runtimeSlangIncludeDir,
+        string shaderSourceIncludeDir,
+        string vertexEntry,
+        string fragmentEntry,
+        IReadOnlyList<string> variantDefines,
+        bool useMatrixLayout,
+        out string? stderr)
+    {
         stderr = null;
         Directory.CreateDirectory(Path.GetDirectoryName(wgslOutPath)!);
 
-        var singleArgs = new List<string>
+        var singleArgs = new List<string> { slangPath, "-target", "wgsl" };
+        if (useMatrixLayout)
         {
-            slangPath,
-            "-target", "wgsl",
-            "-matrix-layout", "column-major",
-        };
+            singleArgs.Add("-matrix-layout");
+            singleArgs.Add("column-major");
+        }
+
         AddDefines(singleArgs, variantDefines);
         singleArgs.AddRange(new[] { "-I", runtimeSlangIncludeDir, "-I", shaderSourceIncludeDir, "-o", wgslOutPath });
 
@@ -59,14 +106,14 @@ public sealed class SlangCompiler
 
         _logger.LogDebug(LogCategory.SlangCompile, $"Combined WGSL compile failed; trying per-stage merge. {errSingle}");
 
-        var vertArgs = new List<string>
+        var vertArgs = new List<string> { slangPath, "-target", "wgsl" };
+        if (useMatrixLayout)
         {
-            slangPath,
-            "-target", "wgsl",
-            "-matrix-layout", "column-major",
-            "-entry", vertexEntry,
-            "-stage", "vertex",
-        };
+            vertArgs.Add("-matrix-layout");
+            vertArgs.Add("column-major");
+        }
+
+        vertArgs.AddRange(new[] { "-entry", vertexEntry, "-stage", "vertex" });
         AddDefines(vertArgs, variantDefines);
         vertArgs.AddRange(new[] { "-I", runtimeSlangIncludeDir, "-I", shaderSourceIncludeDir, "-o", wgslOutPath + ".vert.tmp" });
 
@@ -76,14 +123,14 @@ public sealed class SlangCompiler
             return false;
         }
 
-        var fragArgs = new List<string>
+        var fragArgs = new List<string> { slangPath, "-target", "wgsl" };
+        if (useMatrixLayout)
         {
-            slangPath,
-            "-target", "wgsl",
-            "-matrix-layout", "column-major",
-            "-entry", fragmentEntry,
-            "-stage", "fragment",
-        };
+            fragArgs.Add("-matrix-layout");
+            fragArgs.Add("column-major");
+        }
+
+        fragArgs.AddRange(new[] { "-entry", fragmentEntry, "-stage", "fragment" });
         AddDefines(fragArgs, variantDefines);
         fragArgs.AddRange(new[] { "-I", runtimeSlangIncludeDir, "-I", shaderSourceIncludeDir, "-o", wgslOutPath + ".frag.tmp" });
 

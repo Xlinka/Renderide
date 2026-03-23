@@ -2,7 +2,7 @@ using UnityShaderConverter;
 
 namespace UnityShaderConverter.Tests;
 
-/// <summary>Tests for input-root resolution and nested WGSL directory layout.</summary>
+/// <summary>Tests for input-root resolution (WGSL paths now live next to each shader module).</summary>
 public sealed class ShaderInputPathsTests
 {
     [Fact]
@@ -41,24 +41,5 @@ public sealed class ShaderInputPathsTests
         string shader = Path.Combine(root, "Billboard", "Unlit.shader");
         string nested = ShaderInputPaths.GetWgslNestedDirectoryRelativeToWgslRoot(shader, root);
         Assert.Equal("Billboard", nested.Replace('\\', '/'));
-    }
-
-    [Fact]
-    public void CombineWgslOutputPath_joins_posix_nested_segments()
-    {
-        string wgslRoot = "/tmp/wgsl";
-        string path = ConverterRunner.CombineWgslOutputPath(wgslRoot, "Foo/Bar", "stem_pass0_v0.wgsl");
-        Assert.EndsWith(
-            Path.Combine("Foo", "Bar", "stem_pass0_v0.wgsl"),
-            path.Replace('\\', Path.DirectorySeparatorChar));
-    }
-
-    [Fact]
-    public void RelativePathFromGeneratedToWgsl_uses_forward_slashes()
-    {
-        string gen = Path.GetFullPath("/tmp/gen");
-        string wgslFile = Path.Combine(gen, "wgsl", "a.wgsl");
-        string rel = ConverterRunner.RelativePathFromGeneratedToWgsl(gen, wgslFile);
-        Assert.Equal("wgsl/a.wgsl", rel);
     }
 }

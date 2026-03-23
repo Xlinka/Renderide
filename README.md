@@ -42,7 +42,7 @@ Bootstrapper creates IPC queues, spawns Renderite.Host, and runs the queue loop.
 | **interprocess** | `crates/interprocess/` | Shared-memory queues (Publisher/Subscriber), circular buffers. Used by bootstrapper and renderide for IPC. |
 | **logger** | `crates/logger/` | Shared logging helpers used by bootstrapper and renderide (files, levels, panic hook). |
 | **bootstrapper** | `crates/bootstrapper/` | Orchestrator: creates `bootstrapper_in`/`bootstrapper_out` queues, spawns Renderite.Host from Resonite install, runs queue loop (`HEARTBEAT`, `SHUTDOWN`, `GETTEXT`, `SETTEXT…`, plus renderer spawn args as above). Supports Wine on Linux. |
-| **renderide** | `crates/renderide/` | Main renderer: wgpu, winit, session/IPC receiver, shared types + packing, scene graph, assets, GPU meshes. Includes **`shaders`** (`src/shaders/`) — UnityShaderConverter output (generated WGSL on disk, bundled `wgsl_sources.rs` / `materials.rs`). Binaries: `renderide`, `roundtrip`. |
+| **renderide** | `crates/renderide/` | Main renderer: wgpu, winit, session/IPC receiver, shared types + packing, scene graph, assets, GPU meshes. Includes **`shaders`** (`src/shaders/`) — UnityShaderConverter output: one folder per shader (`<stem>/mod.rs`, `material.rs`, `passN.wgsl`). Binaries: `renderide`, `roundtrip`. |
 
 ## Third-party folders
 
@@ -75,13 +75,13 @@ Default output: `crates/renderide/src/shared/shared.rs`
 
 **Location:** `generators/UnityShaderConverter/` (C# .NET 10)
 
-**Generated Rust (materials):** The converter writes **`generated/wgsl_sources.rs`** (one `pub mod` per fully successful shader, each holding `PASSx_Vy` string constants via `include_str!`) and **`generated/materials.rs`** (matching submodules with `Material`, defaults, and `wgpu` helpers), plus a small **`generated/mod.rs`**. WGSL files live under **`generated/wgsl/`**, using **nested directories** that mirror each `.shader` file’s path under its scan root so names stay unique across the Resonite tree.
+**Generated layout:** Default output root is **`crates/renderide/src/shaders/`**. For each converted Unity shader (snake_case module name) the tool writes a subdirectory (for example **`converter_minimal_unlit/`**) containing **`mod.rs`** (`pub mod material;`), **`material.rs`** (`Material`, **`VariantKey`**, `PASSn_WGSL` via `include_str!("passn.wgsl")`, `wgpu::PipelineCompilationOptions` helpers when specialization axes exist, and stub `create_render_pipeline_passn_stub`), and **one `passN.wgsl` per pass** next to `material.rs` (merged vert+frag from `slangc`). Eligible **`#pragma multi_compile` / `shader_feature`** keywords can map to Slang **`[vk::constant_id(n)]`** bools (WGSL **`override`**) when **`enableSlangSpecialization`** is true in **`DefaultCompilerConfig.json`**; if a pass fails to compile with those constants, the runner may fall back without specialization and emit an empty **`VariantKey`** for that shader so Rust matches the on-disk WGSL. **SharedTypeGenerator** is a different pipeline (Cecil/IL → `shared.rs`) and does not share generator code.
 
-Walks Unity `ShaderLab` sources, parses them with **UnityShaderParser** (see [Third-party folders](#third-party-folders) above), builds **transient** `.slang` in the system temp directory (with `generators/UnityShaderConverter/runtime_slang/UnityCompat.slang` on the include path), runs **`slangc`** when eligible, writes WGSL under **`crates/renderide/src/shaders/generated/wgsl/`**, then deletes the temp Slang inputs (success or failure). Nothing under **`generated/slang/`** is kept.
+Walks Unity `ShaderLab` sources, parses them with **UnityShaderParser** (see [Third-party folders](#third-party-folders) above), builds **transient** `.slang` in the system temp directory (with `generators/UnityShaderConverter/runtime_slang/UnityCompat.slang` on the include path), runs **`slangc`** once per pass when eligible, writes **`passN.wgsl`** into the shader folder, then deletes the temp Slang inputs (success or failure). A legacy **`shaders/generated/`** tree is removed on run if present.
 
 ### Install Slang
 
-**You need the [Slang](https://shader-slang.com/) toolchain installed** if you want the converter to generate or refresh **WGSL** via `slangc`. Without it, you can still run the tool with **`--skip-slang`**: shaders only enter the Rust bundle when **every** pass×variant already has a non-empty `.wgsl` file at the expected nested path under `crates/renderide/src/shaders/generated/wgsl/`.
+**You need the [Slang](https://shader-slang.com/) toolchain installed** if you want the converter to generate or refresh **WGSL** via `slangc`. Without it, you can still run the tool with **`--skip-slang`**: a shader is emitted only when **every** pass already has a non-empty **`passN.wgsl`** next to `material.rs` under `crates/renderide/src/shaders/<mod>/`.
 
 After installing Slang:
 
@@ -89,7 +89,7 @@ After installing Slang:
 - Set the **`SLANGC`** environment variable to the full path of the `slangc` executable, or  
 - Pass **`--slangc /path/to/slangc`** on the command line.
 
-**`DefaultCompilerConfig.json`** (next to the built executable, or overridden with **`--compiler-config`**) includes **`**/*.shader`** by default, so a run with the default scan roots attempts `slangc` on the whole tree. That can be **slow and very noisy** (most shaders still fail until UnityCompat and includes mature). For quick iteration, pass **`--input`** with a small folder and/or supply a custom **`--compiler-config`** with narrower `slangEligibleGlobPatterns`.
+**`DefaultCompilerConfig.json`** (next to the built executable, or overridden with **`--compiler-config`**) includes **`**/*.shader`** by default, and **`maxVariantCombinationsPerShader`** defaults to **512** (Cartesian product of parsed `#pragma multi_compile` / `shader_feature` groups). Several Unity “macro” pragmas (`multi_compile_fwdbase`, fog, instancing, …) are still **ignored** to avoid combinatorial explosion until those paths are modeled. For quick iteration, narrow **`--input`** or **`slangEligibleGlobPatterns`**. Full-tree runs stay slow and noisy.
 
 ### Prerequisites
 
@@ -116,11 +116,13 @@ Always run commands from the **`Renderide/`** directory (or pass absolute paths 
 
 3. **Limit what is scanned** — repeatable **`--input <dir>`** (only those roots; omit to use defaults: `generators/UnityShaderConverter/SampleShaders` and `third_party/Resonite.UnityShaders/Assets/Shaders`).
 
-4. **Change output location** — **`--output <dir>`** (default: `crates/renderide/src/shaders/generated`).
+4. **Change output location** — **`--output <dir>`** (default: `crates/renderide/src/shaders`).
 
-5. **Compiler / variant JSON** — **`--compiler-config`** merges over built-in defaults (slang eligibility glob patterns, `maxVariantCombinationsPerShader`). **`--variant-config`** supplies per-shader define lists instead of expanding `#pragma multi_compile` automatically.
+5. **Compiler / variant JSON** — **`--compiler-config`** merges over built-in defaults (slang eligibility glob patterns, `maxVariantCombinationsPerShader`, `enableSlangSpecialization`, `maxSpecializationConstants`). **`--variant-config`** supplies per-shader define lists instead of expanding `#pragma multi_compile` automatically.
 
-6. **Rust emission rule** — a shader is added to **`wgsl_sources.rs`** / **`materials.rs`** only when **every** pass×variant has a non-empty WGSL file at the computed nested path. If `slangc` fails or is skipped for that shader, fix WGSL or adjust eligibility before `cargo build -p renderide` will see that shader in **`renderide::shaders::generated`**. Duplicate Unity shader names from different source files are skipped after the first (logged as a warning).
+6. **Rust emission rule** — a shader folder is written only when **every** pass has a non-empty **`passN.wgsl`**. If `slangc` fails or is skipped, fix WGSL or adjust eligibility. Duplicate Unity shader names from different files are skipped after the first (warning). **Hand-written `shaders/mod.rs`** should `pub mod <stem>;` for each converted shader. FrooxEngine material → `Material` / `VariantKey` dispatch stays in the renderer.
+
+7. **wgpu** — match **`PipelineCompilationOptions`** / shader constants to the `wgpu` version in this crate when wiring real pipelines.
 
 **Verbose logs:** add **`-v`** / **`--verbose`**.
 
@@ -183,6 +185,8 @@ dotnet run --project generators/SharedTypeGenerator -- -i /path/to/Renderite.Sha
 **Bootstrapper:** The renderer binary is resolved next to the bootstrapper executable (`target/release` when using `cargo run`). On Linux the process is started as `Renderite.Renderer`; the bootstrapper can create a symlink to the `renderide` binary there if missing. On Windows it uses `renderide.exe`.
 
 **Wine:** Bootstrapper detects Wine and uses `LinuxBootstrap.sh` in the Resonite directory.
+
+**Renderer configuration:** You can tune Renderide by editing **`configuration.ini`**. The renderer searches for that file next to its executable and in the current working directory (details in `crates/renderide/src/config.rs`). If it is missing, defaults are used. The repository includes a root [`configuration.ini`](configuration.ini) you can copy or adapt; keys and sections are not documented here because they may change—see that file and the config loader for the current layout.
 
 ## Goals
 

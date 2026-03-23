@@ -11,5 +11,13 @@ public sealed class CompilerConfigModel
 
     /// <summary>Maximum Cartesian variant count per shader before the converter fails.</summary>
     [JsonPropertyName("maxVariantCombinationsPerShader")]
-    public int MaxVariantCombinationsPerShader { get; set; } = 32;
+    public int MaxVariantCombinationsPerShader { get; set; } = 512;
+
+    /// <summary>When true, maps <c>multi_compile</c> keywords to <c>[vk::constant_id]</c> bools for a single WGSL per pass.</summary>
+    [JsonPropertyName("enableSlangSpecialization")]
+    public bool EnableSlangSpecialization { get; set; } = true;
+
+    /// <summary>Maximum <c>vk::constant_id</c> specialization bools emitted per shader.</summary>
+    [JsonPropertyName("maxSpecializationConstants")]
+    public int MaxSpecializationConstants { get; set; } = 8;
 }

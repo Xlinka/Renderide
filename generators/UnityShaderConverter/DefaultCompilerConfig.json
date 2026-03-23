@@ -2,5 +2,7 @@
   "slangEligibleGlobPatterns": [
     "**/*.shader"
   ],
-  "maxVariantCombinationsPerShader": 32
+  "maxVariantCombinationsPerShader": 512,
+  "enableSlangSpecialization": true,
+  "maxSpecializationConstants": 8
 }
