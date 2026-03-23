@@ -25,8 +25,22 @@ public sealed class SlangEmitterTests
         };
         string slang = SlangEmitter.EmitPassSlang(pass, Array.Empty<string>(), Array.Empty<SpecializationAxis>());
         Assert.Contains("#include \"UnityCompat.slang\"", slang);
+        Assert.Contains("#include \"UnityCompatPostUnity.slang\"", slang);
         Assert.DoesNotContain("#pragma vertex", slang);
         Assert.DoesNotContain("#pragma fragment", slang);
+    }
+
+    /// <summary>Post-Unity compat include is inserted after the first run of <c>#include</c> lines.</summary>
+    [Fact]
+    public void InsertUnityCompatPostInclude_AfterInitialIncludes()
+    {
+        const string body = "#include \"A.cginc\"\n#include \"B.cginc\"\n\nfloat x;\n";
+        string result = SlangEmitter.InsertUnityCompatPostIncludeAfterInitialIncludes(body);
+        int post = result.IndexOf("UnityCompatPostUnity.slang", StringComparison.Ordinal);
+        int b = result.IndexOf("#include \"B.cginc\"", StringComparison.Ordinal);
+        int x = result.IndexOf("float x", StringComparison.Ordinal);
+        Assert.True(post > b);
+        Assert.True(x > post);
     }
 
     /// <summary>Specialization axes become <c>[vk::constant_id(n)]</c> bools before UnityCompat.</summary>
@@ -75,5 +89,16 @@ public sealed class SlangEmitterTests
         string slang = SlangEmitter.EmitPassSlang(pass, Array.Empty<string>(), axes);
         Assert.Contains("#ifdef USC_FOO", slang);
         Assert.DoesNotContain("#ifdef FOO", slang);
+    }
+
+    /// <summary>Legacy <c>sampler2D _Tex;</c> becomes <c>UNITY_DECLARE_TEX2D</c> after PostUnity include resolution.</summary>
+    [Fact]
+    public void RewriteLegacySampler2DDeclarations_ReplacesUnityStyleTextures()
+    {
+        const string body = "  sampler2D _MainTex;\n  sampler2D _DepthTex;\n";
+        string rewritten = SlangEmitter.RewriteLegacySampler2DDeclarations(body);
+        Assert.Contains("UNITY_DECLARE_TEX2D(_MainTex)", rewritten, StringComparison.Ordinal);
+        Assert.Contains("UNITY_DECLARE_TEX2D(_DepthTex)", rewritten, StringComparison.Ordinal);
+        Assert.DoesNotContain("sampler2D _MainTex", rewritten, StringComparison.Ordinal);
     }
 }
