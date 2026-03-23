@@ -1,7 +1,6 @@
 {
   "slangEligibleGlobPatterns": [
-    "UnityShaderConverter/SampleShaders/**/*.shader",
-    "**/SampleShaders/**/*.shader"
+    "**/*.shader"
   ],
   "maxVariantCombinationsPerShader": 32
 }

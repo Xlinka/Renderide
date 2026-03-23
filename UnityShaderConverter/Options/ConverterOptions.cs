@@ -14,8 +14,8 @@ public sealed class ConverterOptions
     [Option('i', "input", Required = false, HelpText = "Directory containing .shader files (repeatable). Defaults to SampleShaders + Resonite Unity shaders under the repo.")]
     public IEnumerable<string> InputDirectories { get; set; } = Array.Empty<string>();
 
-    /// <summary>Generated output root (slang/, wgsl/, rust/).</summary>
-    [Option('o', "output", Required = false, HelpText = "Output directory (default: Renderide/crates/shaders/generated).")]
+    /// <summary>Generated output root (<c>wgsl/</c>, bundled <c>wgsl_sources.rs</c> / <c>materials.rs</c>, <c>mod.rs</c>).</summary>
+    [Option('o', "output", Required = false, HelpText = "Output directory (default: crates/renderide/src/shaders/generated).")]
     public string? OutputDirectory { get; set; }
 
     /// <summary>Path to <c>slangc</c>; overrides <c>SLANGC</c> environment variable.</summary>
@@ -23,7 +23,7 @@ public sealed class ConverterOptions
     public string? SlangcPath { get; set; }
 
     /// <summary>When set, skips invoking <c>slangc</c> even for eligible shaders.</summary>
-    [Option("skip-slang", Required = false, HelpText = "Do not run slangc; still emit .slang and Rust.")]
+    [Option("skip-slang", Required = false, HelpText = "Do not run slangc; WGSL must already exist on disk for a shader to enter the Rust bundle.")]
     public bool SkipSlang { get; set; }
 
     /// <summary>Optional JSON file with slang eligibility globs, variant caps, and forced defines.</summary>
@@ -40,7 +40,7 @@ public sealed class ConverterOptions
         string renderideRoot = ResolveRenderideRoot(TryGetGitRepositoryRoot());
 
         if (OutputDirectory is null)
-            OutputDirectory = Path.Combine(renderideRoot, "crates", "shaders", "src", "generated");
+            OutputDirectory = Path.Combine(renderideRoot, "crates", "renderide", "src", "shaders", "generated");
 
         if (!InputDirectories.Any())
         {

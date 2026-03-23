@@ -38,6 +38,9 @@ pub mod session;
 /// Shared types and memory packing for host–renderer IPC.
 pub mod shared;
 
+/// UnityShaderConverter-generated WGSL, Slang intermediates, and material stubs.
+pub mod shaders;
+
 /// Runs the Renderide application. Entry point for the main binary.
 pub fn run() -> Option<i32> {
     app::run()

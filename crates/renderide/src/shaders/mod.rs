@@ -1,8 +1,9 @@
 //! Build-time converted Unity/Resonite shaders and generated material descriptors.
 //!
-//! Regenerate outputs with:
-//! `dotnet run --project UnityShaderConverter -- --skip-slang` (from the `Renderide/` directory),
-//! or omit `--skip-slang` when `slangc` is on `PATH` / `SLANGC` is set.
+//! Output is produced by **UnityShaderConverter** into [`generated`](generated/).
+//!
+//! Regenerate from the `Renderide/` directory:
+//! `dotnet run --project UnityShaderConverter --` (with `slangc` on `PATH` / `SLANGC`), or `--skip-slang` if WGSL is already on disk.
 
 pub mod generated;
 
@@ -11,7 +12,7 @@ mod wgsl_validate_tests {
     /// Validates that committed sample WGSL parses with the same `naga` revision `wgpu` uses.
     #[test]
     fn minimal_unlit_sample_wgsl_parses() {
-        let src = include_str!("generated/wgsl/converter_minimal_unlit_pass0_v0.wgsl");
+        let src = super::generated::wgsl_sources::converter_minimal_unlit::PASS0_V0;
         let mut front = naga::front::wgsl::Frontend::new();
         let _ = front
             .parse(src)

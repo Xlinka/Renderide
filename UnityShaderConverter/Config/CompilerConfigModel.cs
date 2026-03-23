@@ -5,7 +5,7 @@ namespace UnityShaderConverter.Config;
 /// <summary>JSON model for <c>--compiler-config</c> merged with <see cref="DefaultCompilerConfig"/> defaults.</summary>
 public sealed class CompilerConfigModel
 {
-    /// <summary>Glob patterns (e.g. <c>**/SampleShaders/**/*.shader</c>) selecting shaders that may invoke <c>slangc</c>.</summary>
+    /// <summary>Glob patterns (paths relative to Renderide root; default <c>**/*.shader</c>) selecting shaders that may invoke <c>slangc</c>.</summary>
     [JsonPropertyName("slangEligibleGlobPatterns")]
     public List<string> SlangEligibleGlobPatterns { get; set; } = new();
 

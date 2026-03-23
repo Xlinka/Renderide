@@ -90,6 +90,8 @@ public sealed class SlangCompiler
         if (!RunProcess(fragArgs, out string errF))
         {
             stderr = errF;
+            TryDelete(wgslOutPath + ".vert.tmp");
+            TryDelete(wgslOutPath + ".frag.tmp");
             return false;
         }
 
@@ -103,14 +105,17 @@ public sealed class SlangCompiler
                 vert +
                 "\n\n" +
                 frag);
-            TryDelete(wgslOutPath + ".vert.tmp");
-            TryDelete(wgslOutPath + ".frag.tmp");
             return true;
         }
         catch (Exception ex)
         {
             stderr = ex.Message;
             return false;
+        }
+        finally
+        {
+            TryDelete(wgslOutPath + ".vert.tmp");
+            TryDelete(wgslOutPath + ".frag.tmp");
         }
     }
 

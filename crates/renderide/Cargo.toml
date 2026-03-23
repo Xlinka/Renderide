@@ -34,5 +34,8 @@ imgui = { version = "0.12", optional = true }
 imgui-wgpu = { version = "0.27", optional = true }
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 
+[dev-dependencies]
+naga = { version = "28.0.0", features = ["wgsl-in"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_System_Memory"] }

@@ -18,6 +18,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="UnityShaderConverter.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="runtime_slang\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
