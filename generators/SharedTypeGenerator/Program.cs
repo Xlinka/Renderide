@@ -1,8 +1,9 @@
 using System.Runtime;
 using CommandLine;
 using NotEnoughLogs;
-using SharedTypeGenerator;
 using NotEnoughLogs.Behaviour;
+using NotEnoughLogs.Sinks;
+using SharedTypeGenerator;
 using SharedTypeGenerator.Logging;
 using SharedTypeGenerator.Options;
 
@@ -36,12 +37,29 @@ Parser.Default.ParseArguments<GeneratorOptions>(args)
         }
 
         LogLevel maxLevel = ResolveMaxLogLevel(options.Verbose);
-        using var logger = new Logger(new LoggerConfiguration
+        int exitCode = 0;
         {
-            Behaviour = new DirectLoggingBehaviour(),
-            MaxLevel = maxLevel,
-        });
-        GeneratorRunner.Run(options, logger);
+            using var deferSink = new DeferringIssueSink(new ConsoleSink());
+            using var logger = new Logger(
+                new[] { deferSink },
+                new LoggerConfiguration
+                {
+                    Behaviour = new DirectLoggingBehaviour(),
+                    MaxLevel = maxLevel,
+                });
+            try
+            {
+                GeneratorRunner.Run(options, logger);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(LogCategory.Bug, $"SharedTypeGenerator failed: {ex.Message}\n{ex}");
+                exitCode = 1;
+            }
+        }
+
+        if (exitCode != 0)
+            Environment.Exit(exitCode);
     });
 
 static LogLevel ResolveMaxLogLevel(bool verbose)

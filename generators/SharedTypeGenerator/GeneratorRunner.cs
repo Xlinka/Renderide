@@ -44,7 +44,7 @@ public static class GeneratorRunner
         stopwatch.Restart();
         using (var writer = new RustWriter(output))
         {
-            var emitter = new RustEmitter(writer, engineVersion, options.IlVerbose);
+            var emitter = new RustEmitter(writer, logger, engineVersion, options.IlVerbose);
             emitter.Emit(types);
         }
 
