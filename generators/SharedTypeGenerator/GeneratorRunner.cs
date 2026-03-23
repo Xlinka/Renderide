@@ -17,6 +17,8 @@ public static class GeneratorRunner
     public static void Run(GeneratorOptions options, Logger logger)
     {
         logger.LogDebug(LogCategory.Startup, "Parsed generator options");
+        if (string.IsNullOrWhiteSpace(options.AssemblyPath))
+            throw new InvalidOperationException("AssemblyPath must be set (CLI resolution should run before Run).");
         if (options.OutputRustFile == null)
             options.DetermineDefaultOutputPath();
 

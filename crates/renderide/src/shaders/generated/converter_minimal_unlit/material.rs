@@ -33,9 +33,11 @@ pub fn shader_source_pass0() -> wgpu::ShaderSource<'static> {
     wgpu::ShaderSource::Wgsl(PASS0_WGSL.into())
 }
 
-static VERTEX_ATTRIBUTES_PASS0: &[wgpu::VertexAttribute] = &[
-    wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 0, shader_location: 0 },
-];
+static VERTEX_ATTRIBUTES_PASS0: &[wgpu::VertexAttribute] = &[wgpu::VertexAttribute {
+    format: wgpu::VertexFormat::Float32x4,
+    offset: 0,
+    shader_location: 0,
+}];
 static VERTEX_BUFFER_LAYOUT_PASS0: [wgpu::VertexBufferLayout; 1] = [wgpu::VertexBufferLayout {
     array_stride: 16,
     step_mode: wgpu::VertexStepMode::Vertex,
@@ -50,18 +52,24 @@ pub struct MaterialUniform {
     pub color: Vec4,
 }
 
-fn pipeline_compilation_options_vertex_inner(_variant: &VariantKey) -> wgpu::PipelineCompilationOptions<'static> {
+fn pipeline_compilation_options_vertex_inner(
+    _variant: &VariantKey,
+) -> wgpu::PipelineCompilationOptions<'static> {
     wgpu::PipelineCompilationOptions::default()
 }
 
 /// Builds `PipelineCompilationOptions` for vertex/fragment stages (WGSL `override` / `@id`).
 /// Note: leaks a tiny slice per call; cache by `VariantKey` in hot paths.
 /// Per-pass wrappers delegate to the same implementation (specialization is per-shader).
-pub fn pipeline_compilation_options_pass0_vertex(variant: &VariantKey) -> wgpu::PipelineCompilationOptions<'static> {
+pub fn pipeline_compilation_options_pass0_vertex(
+    variant: &VariantKey,
+) -> wgpu::PipelineCompilationOptions<'static> {
     pipeline_compilation_options_vertex_inner(variant)
 }
 
-pub fn pipeline_compilation_options_pass0_fragment(variant: &VariantKey) -> wgpu::PipelineCompilationOptions<'static> {
+pub fn pipeline_compilation_options_pass0_fragment(
+    variant: &VariantKey,
+) -> wgpu::PipelineCompilationOptions<'static> {
     pipeline_compilation_options_vertex_inner(variant)
 }
 
@@ -79,7 +87,10 @@ fn push_material_bind_group_layout_entries(entries: &mut Vec<wgpu::BindGroupLayo
     });
 }
 
-pub fn create_material_bind_group_layout(device: &wgpu::Device, label: &str) -> wgpu::BindGroupLayout {
+pub fn create_material_bind_group_layout(
+    device: &wgpu::Device,
+    label: &str,
+) -> wgpu::BindGroupLayout {
     let mut entries = Vec::new();
     push_material_bind_group_layout_entries(&mut entries);
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -118,7 +129,11 @@ pub fn create_material_bind_group(
         });
         b += 1;
     }
-    device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(label), layout, entries: &entries })
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &entries,
+    })
 }
 
 /// Primitive assembly for pass 0 (from ShaderLab `Cull`). Tags: `RenderType` = `Opaque`.
@@ -141,11 +156,11 @@ pub fn depth_stencil_state_pass0(depth_format: wgpu::TextureFormat) -> wgpu::Dep
         depth_write_enabled: true,
         depth_compare: wgpu::CompareFunction::LessEqual,
         stencil: wgpu::StencilState {
-        front: wgpu::StencilFaceState::IGNORE,
-        back: wgpu::StencilFaceState::IGNORE,
-        read_mask: 0,
-        write_mask: 0,
-    },
+            front: wgpu::StencilFaceState::IGNORE,
+            back: wgpu::StencilFaceState::IGNORE,
+            read_mask: 0,
+            write_mask: 0,
+        },
         bias: wgpu::DepthBiasState {
             constant: 0,
             slope_scale: 0.0,
@@ -155,12 +170,14 @@ pub fn depth_stencil_state_pass0(depth_format: wgpu::TextureFormat) -> wgpu::Dep
 }
 
 /// First color target for pass 0 (blend + write mask from ShaderLab).
-pub fn color_target_state_pass0(surface_format: wgpu::TextureFormat) -> Option<wgpu::ColorTargetState> {
+pub fn color_target_state_pass0(
+    surface_format: wgpu::TextureFormat,
+) -> Option<wgpu::ColorTargetState> {
     Some(wgpu::ColorTargetState {
-                format: surface_format,
-                blend: None,
-                write_mask: wgpu::ColorWrites::ALL,
-            })
+        format: surface_format,
+        blend: None,
+        write_mask: wgpu::ColorWrites::ALL,
+    })
 }
 
 /// Builds a render pipeline for pass 0 using generated fixed-function state.
@@ -173,7 +190,10 @@ pub fn create_render_pipeline_pass0(
     variant: &VariantKey,
     vertex_layout_override: Option<&[wgpu::VertexBufferLayout]>,
 ) -> wgpu::RenderPipeline {
-    let vertex_buffers: &[wgpu::VertexBufferLayout] = match vertex_layout_override { Some(b) => b, None => VERTEX_BUFFER_LAYOUTS_PASS0 };
+    let vertex_buffers: &[wgpu::VertexBufferLayout] = match vertex_layout_override {
+        Some(b) => b,
+        None => VERTEX_BUFFER_LAYOUTS_PASS0,
+    };
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Converter/MinimalUnlit"),
         source: shader_source_pass0(),
@@ -216,7 +236,15 @@ pub fn create_render_pipeline(
     vertex_layout_override: Option<&[wgpu::VertexBufferLayout]>,
 ) -> wgpu::RenderPipeline {
     match pass_index {
-        0 => create_render_pipeline_pass0(device, label, layout, surface_format, depth_format, variant, vertex_layout_override),
+        0 => create_render_pipeline_pass0(
+            device,
+            label,
+            layout,
+            surface_format,
+            depth_format,
+            variant,
+            vertex_layout_override,
+        ),
         _ => panic!("invalid pass_index for this shader module"),
     }
 }

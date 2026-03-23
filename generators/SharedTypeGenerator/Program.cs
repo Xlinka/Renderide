@@ -11,6 +11,30 @@ GCSettings.LatencyMode = GCLatencyMode.Batch;
 Parser.Default.ParseArguments<GeneratorOptions>(args)
     .WithParsed(options =>
     {
+        if (string.IsNullOrWhiteSpace(options.AssemblyPath))
+        {
+            string? discovered = ResoniteAssemblyDiscovery.TryFindRenderiteSharedDll();
+            if (discovered == null)
+            {
+                Console.Error.WriteLine(
+                    "Could not find Renderite.Shared.dll. Set RENDERITE_SHARED_DLL or RESONITE_DIR, install Resonite via Steam, or pass -i / --assembly-path.");
+                Environment.Exit(1);
+                return;
+            }
+
+            options.AssemblyPath = discovered;
+        }
+        else
+        {
+            options.AssemblyPath = Path.GetFullPath(options.AssemblyPath.Trim());
+            if (!File.Exists(options.AssemblyPath))
+            {
+                Console.Error.WriteLine($"Assembly path does not exist: {options.AssemblyPath}");
+                Environment.Exit(1);
+                return;
+            }
+        }
+
         LogLevel maxLevel = ResolveMaxLogLevel(options.Verbose);
         using var logger = new Logger(new LoggerConfiguration
         {

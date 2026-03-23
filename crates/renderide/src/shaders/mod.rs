@@ -20,4 +20,3 @@ mod wgsl_validate_tests {
             .expect("sample WGSL should parse; fix the file or regenerate with slangc");
     }
 }
-
