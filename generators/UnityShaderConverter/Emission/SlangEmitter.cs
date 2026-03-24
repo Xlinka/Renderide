@@ -22,6 +22,11 @@ public static class SlangEmitter
         RegexOptions.Multiline | RegexOptions.CultureInvariant,
         TimeSpan.FromSeconds(1));
 
+    private static readonly Regex LegacySamplerCubeDeclRegex = new(
+        @"^(?<indent>\s*)samplerCUBE\s+(?<name>_[A-Za-z0-9]+|[A-Za-z][A-Za-z0-9]*)\s*;\s*$",
+        RegexOptions.Multiline | RegexOptions.CultureInvariant,
+        TimeSpan.FromSeconds(1));
+
     /// <summary>
     /// <c>appdata_full.texcoord</c> is often <c>float4</c> while <c>v2f.uv</c> is <c>float2</c>; Slang rejects the assignment without a swizzle.
     /// </summary>
@@ -65,6 +70,7 @@ public static class SlangEmitter
         programBody = InsertUnityCompatPostIncludeAfterInitialIncludes(programBody);
         programBody = RewriteLegacySampler2DDeclarations(programBody);
         programBody = RewriteLegacySampler3DDeclarations(programBody);
+        programBody = RewriteLegacySamplerCubeDeclarations(programBody);
         programBody = RewriteFloat4TexcoordUvAssignments(programBody);
 
         foreach (string line in programBody.Split('\n'))
@@ -105,6 +111,14 @@ public static class SlangEmitter
         LegacySampler3DDeclRegex.Replace(
             programBody,
             m => $"{m.Groups["indent"].Value}UNITY_DECLARE_TEX3D({m.Groups["name"].Value});");
+
+    /// <summary>
+    /// Maps legacy <c>samplerCUBE _Cube;</c> to <c>UNITY_DECLARE_TEXCUBE</c> so <c>texCUBE</c> resolves <c>SamplerState sampler_Name</c> (e.g. <c>sampler_Cube</c> for <c>_Cube</c>).
+    /// </summary>
+    internal static string RewriteLegacySamplerCubeDeclarations(string programBody) =>
+        LegacySamplerCubeDeclRegex.Replace(
+            programBody,
+            m => $"{m.Groups["indent"].Value}UNITY_DECLARE_TEXCUBE({m.Groups["name"].Value});");
 
     /// <summary>
     /// Rewrites <c>o.uv = v.texcoord;</c>-style assignments so the RHS uses <c>.xy</c> when not already swizzled.

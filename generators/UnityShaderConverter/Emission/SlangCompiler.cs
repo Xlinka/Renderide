@@ -11,11 +11,17 @@ namespace UnityShaderConverter.Emission;
 /// <remarks>
 /// Global Unity platform and sampling shims live in <c>runtime_slang/UnityCompat.slang</c> and
 /// <c>runtime_slang/UnityCompatPostUnity.slang</c> (included by <see cref="SlangEmitter"/>), not in duplicate <c>-D</c> flags here.
+    /// Slang <c>error[E00004]: cannot write output file</c> often follows unresolved diagnostics (e.g. warning <c>39019</c> when not
+    /// listed in <c>-warnings-disable</c>); it can also indicate a truly unwritable output path, read-only tree, or concurrent writers.
 /// </remarks>
 public sealed class SlangCompiler
 {
     /// <summary>Slang warning IDs that are noisy during Unity header conversion but rarely indicate WGSL failure.</summary>
-    /// <remarks>30056 covers deprecated non-short-circuiting <c>?:</c> in vendored Unity <c>.cginc</c> files.</remarks>
+    /// <remarks>
+    /// 30056 covers deprecated non-short-circuiting <c>?:</c> in vendored Unity <c>.cginc</c> files.
+    /// 39019 is <c>implicit global shader parameter</c> for legacy <c>half4 _Foo;</c> uniforms; when enabled as a warning, Slang
+    /// fails WGSL emission with <c>error[E00004]: cannot write output file</c> even though the message suggests adding <c>uniform</c>.
+    /// </remarks>
     private static readonly string[] DefaultDisabledSlangWarningIds =
     {
         "15205",
@@ -23,6 +29,7 @@ public sealed class SlangCompiler
         "15400",
         "30081",
         "30056",
+        "39019",
     };
 
     private readonly string _slangcExecutable;
@@ -56,6 +63,49 @@ public sealed class SlangCompiler
         }
 
         return sb.ToString().TrimEnd();
+    }
+
+    /// <summary>Returns the first non-empty line of Slang stderr (or stdout), truncated for user-facing summaries.</summary>
+    public static string FormatSlangStderrSummary(string? stderr, int maxLength = 400)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+            return "(no stderr)";
+
+        ReadOnlySpan<char> span = stderr.AsSpan().Trim();
+        int newline = span.IndexOfAny('\r', '\n');
+        ReadOnlySpan<char> first = newline >= 0 ? span[..newline] : span;
+        string s = first.Trim().ToString();
+        if (s.Length > maxLength)
+            return string.Concat(s.AsSpan(0, maxLength), "…");
+        return s;
+    }
+
+    /// <summary>
+    /// Produces a single line for <see cref="LogLevel.Info"/> when combined WGSL compile fails: the first Slang
+    /// <c>error[E…]</c> line after <see cref="FilterSlangDiagnosticsForErrorsOnly"/>, otherwise a short summary of the remaining text.
+    /// </summary>
+    public static string FormatSlangStderrErrorDigest(string? stderr, int maxLength = 320)
+    {
+        if (string.IsNullOrWhiteSpace(stderr))
+            return "Slang: (no stderr)";
+
+        string withoutWarnings = FilterSlangDiagnosticsForErrorsOnly(stderr);
+        string source = string.IsNullOrWhiteSpace(withoutWarnings) ? stderr.Trim() : withoutWarnings;
+
+        foreach (string line in source.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            string t = line.Trim();
+            if (t.Length == 0)
+                continue;
+            if (t.Contains("error[", StringComparison.OrdinalIgnoreCase))
+            {
+                if (t.Length > maxLength)
+                    return string.Concat(t.AsSpan(0, maxLength), "…");
+                return t;
+            }
+        }
+
+        return $"Slang: {FormatSlangStderrSummary(source, maxLength)}";
     }
 
     /// <summary>
@@ -97,12 +147,12 @@ public sealed class SlangCompiler
     }
 
     /// <summary>Compiles Slang to WGSL (single module when <c>slangc</c> supports it; otherwise merged stages).</summary>
-    /// <param name="unityCgIncludesDir">Optional directory with <c>UnityCG.cginc</c> (same as ShaderLab resolution); when <c>null</c>, Unity <c>#include</c> may fail.</param>
+    /// <param name="unityCgIncludesDirs">Ordered <c>-I</c> directories with Unity <c>.cginc</c> trees (may be empty).</param>
     public bool TryCompileToWgsl(
         string slangPath,
         string wgslOutPath,
         string runtimeSlangIncludeDir,
-        string? unityCgIncludesDir,
+        IReadOnlyList<string> unityCgIncludesDirs,
         string shaderSourceIncludeDir,
         string vertexEntry,
         string fragmentEntry,
@@ -113,7 +163,7 @@ public sealed class SlangCompiler
                 slangPath,
                 wgslOutPath,
                 runtimeSlangIncludeDir,
-                unityCgIncludesDir,
+                unityCgIncludesDirs,
                 shaderSourceIncludeDir,
                 vertexEntry,
                 fragmentEntry,
@@ -130,7 +180,7 @@ public sealed class SlangCompiler
                     slangPath,
                     wgslOutPath,
                     runtimeSlangIncludeDir,
-                    unityCgIncludesDir,
+                    unityCgIncludesDirs,
                     shaderSourceIncludeDir,
                     vertexEntry,
                     fragmentEntry,
@@ -138,7 +188,7 @@ public sealed class SlangCompiler
                     useMatrixLayout: false,
                     out stderr))
             {
-                _logger.LogDebug(LogCategory.SlangCompile, "slangc succeeded without -matrix-layout (toolchain lacks that flag).");
+                _logger.LogTrace(LogCategory.SlangCompile, "slangc succeeded without -matrix-layout (toolchain lacks that flag).");
                 return true;
             }
         }
@@ -161,7 +211,7 @@ public sealed class SlangCompiler
         string slangPath,
         string wgslOutPath,
         string runtimeSlangIncludeDir,
-        string? unityCgIncludesDir,
+        IReadOnlyList<string> unityCgIncludesDirs,
         string shaderSourceIncludeDir,
         string vertexEntry,
         string fragmentEntry,
@@ -181,12 +231,12 @@ public sealed class SlangCompiler
         }
 
         AddDefines(singleArgs, variantDefines);
-        AppendIncludeDirectories(singleArgs, runtimeSlangIncludeDir, unityCgIncludesDir, shaderSourceIncludeDir);
+        AppendIncludeDirectories(singleArgs, runtimeSlangIncludeDir, unityCgIncludesDirs, shaderSourceIncludeDir);
         singleArgs.AddRange(new[] { "-o", wgslOutPath });
 
         if (RunProcess(singleArgs, out string errSingleRaw) && File.Exists(wgslOutPath) && new FileInfo(wgslOutPath).Length > 0)
         {
-            _logger.LogDebug(LogCategory.SlangCompile, $"Wrote combined WGSL for {Path.GetFileName(slangPath)}");
+            _logger.LogTrace(LogCategory.SlangCompile, $"Wrote combined WGSL for {Path.GetFileName(slangPath)}");
             return true;
         }
 
@@ -197,9 +247,14 @@ public sealed class SlangCompiler
             return false;
         }
 
-        _logger.LogDebug(
+        string policyStderr = ApplySlangStderrPolicy(errSingleRaw);
+        string errorDigest = FormatSlangStderrErrorDigest(policyStderr);
+        _logger.LogInfo(
             LogCategory.SlangCompile,
-            $"Combined WGSL compile failed; trying per-stage merge. {ApplySlangStderrPolicy(errSingleRaw)}");
+            $"Combined WGSL compile failed; trying per-stage merge. {errorDigest} (full stderr at trace).");
+        _logger.LogTrace(
+            LogCategory.SlangCompile,
+            $"Combined WGSL compile stderr: {policyStderr}");
 
         var vertArgs = new List<string> { slangPath, "-target", "wgsl" };
         AppendSlangWarningPolicyArgs(vertArgs);
@@ -211,7 +266,7 @@ public sealed class SlangCompiler
 
         vertArgs.AddRange(new[] { "-entry", vertexEntry, "-stage", "vertex" });
         AddDefines(vertArgs, variantDefines);
-        AppendIncludeDirectories(vertArgs, runtimeSlangIncludeDir, unityCgIncludesDir, shaderSourceIncludeDir);
+        AppendIncludeDirectories(vertArgs, runtimeSlangIncludeDir, unityCgIncludesDirs, shaderSourceIncludeDir);
         vertArgs.AddRange(new[] { "-o", wgslOutPath + ".vert.tmp" });
 
         if (!RunProcess(vertArgs, out string errVRaw))
@@ -230,7 +285,7 @@ public sealed class SlangCompiler
 
         fragArgs.AddRange(new[] { "-entry", fragmentEntry, "-stage", "fragment" });
         AddDefines(fragArgs, variantDefines);
-        AppendIncludeDirectories(fragArgs, runtimeSlangIncludeDir, unityCgIncludesDir, shaderSourceIncludeDir);
+        AppendIncludeDirectories(fragArgs, runtimeSlangIncludeDir, unityCgIncludesDirs, shaderSourceIncludeDir);
         fragArgs.AddRange(new[] { "-o", wgslOutPath + ".frag.tmp" });
 
         if (!RunProcess(fragArgs, out string errFRaw))
@@ -265,16 +320,20 @@ public sealed class SlangCompiler
         }
     }
 
-    /// <summary>Appends <c>-I</c> in order: <c>runtime_slang</c>, Unity CGIncludes (if any), shader source directory.</summary>
+    /// <summary>Appends <c>-I</c> in order: <c>runtime_slang</c>, each Unity/extra include root, shader source directory.</summary>
     private static void AppendIncludeDirectories(
         List<string> args,
         string runtimeSlangIncludeDir,
-        string? unityCgIncludesDir,
+        IReadOnlyList<string> unityCgIncludesDirs,
         string shaderSourceIncludeDir)
     {
         args.AddRange(new[] { "-I", runtimeSlangIncludeDir });
-        if (!string.IsNullOrWhiteSpace(unityCgIncludesDir))
-            args.AddRange(new[] { "-I", unityCgIncludesDir });
+        foreach (string d in unityCgIncludesDirs)
+        {
+            if (!string.IsNullOrWhiteSpace(d))
+                args.AddRange(new[] { "-I", d });
+        }
+
         args.AddRange(new[] { "-I", shaderSourceIncludeDir });
     }
 
@@ -317,7 +376,7 @@ public sealed class SlangCompiler
         foreach (string a in args)
             psi.ArgumentList.Add(a);
 
-        _logger.LogDebug(LogCategory.SlangCompile, $"slangc {string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a))}");
+        _logger.LogTrace(LogCategory.SlangCompile, $"slangc {string.Join(" ", args.Select(a => a.Contains(' ') ? $"\"{a}\"" : a))}");
 
         using var proc = new Process { StartInfo = psi };
         var sw = Stopwatch.StartNew();
@@ -338,7 +397,7 @@ public sealed class SlangCompiler
         if (sw.ElapsedMilliseconds >= 3000)
         {
             string inputName = args.Count > 0 ? Path.GetFileName(args[0]) : "?";
-            _logger.LogDebug(LogCategory.SlangCompile, $"slangc slow: {sw.ElapsedMilliseconds}ms ({inputName})");
+            _logger.LogTrace(LogCategory.SlangCompile, $"slangc slow: {sw.ElapsedMilliseconds}ms ({inputName})");
         }
 
         stderrCombined = string.Join(

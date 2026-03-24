@@ -22,6 +22,9 @@ public static class ConfigLoader
             EnableSlangSpecialization = d.EnableSlangSpecialization,
             MaxSpecializationConstants = d.MaxSpecializationConstants,
             SuppressSlangWarnings = d.SuppressSlangWarnings,
+            ExtraSlangIncludeDirectories = new List<string>(d.ExtraSlangIncludeDirectories),
+            SceneBindGroupIndex = d.SceneBindGroupIndex,
+            MaterialBindGroupIndex = d.MaterialBindGroupIndex,
         };
 
     /// <summary>Merges user compiler JSON over <paramref name="defaults"/>; only keys present in the user file override defaults.</summary>
@@ -97,6 +100,38 @@ public static class ConfigLoader
             swEl.ValueKind is JsonValueKind.True or JsonValueKind.False)
         {
             merged.SuppressSlangWarnings = swEl.GetBoolean();
+        }
+
+        if (root.TryGetProperty("extraSlangIncludeDirectories", out JsonElement incEl) &&
+            incEl.ValueKind == JsonValueKind.Array)
+        {
+            var inc = new List<string>();
+            foreach (JsonElement item in incEl.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    string? s = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                        inc.Add(s);
+                }
+            }
+
+            if (inc.Count > 0)
+                merged.ExtraSlangIncludeDirectories = inc;
+        }
+
+        if (root.TryGetProperty("sceneBindGroupIndex", out JsonElement sbEl) &&
+            sbEl.ValueKind == JsonValueKind.Number &&
+            sbEl.TryGetUInt32(out uint sbIdx))
+        {
+            merged.SceneBindGroupIndex = sbIdx;
+        }
+
+        if (root.TryGetProperty("materialBindGroupIndex", out JsonElement mbEl) &&
+            mbEl.ValueKind == JsonValueKind.Number &&
+            mbEl.TryGetUInt32(out uint mbIdx))
+        {
+            merged.MaterialBindGroupIndex = mbIdx;
         }
 
         return merged;

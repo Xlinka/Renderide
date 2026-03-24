@@ -15,6 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\GeneratorLogging\GeneratorLogging.csproj" />
     <ProjectReference Include="..\..\third_party\UnityShaderParser\UnityShaderParser\UnityShaderParser.csproj" />
   </ItemGroup>
 

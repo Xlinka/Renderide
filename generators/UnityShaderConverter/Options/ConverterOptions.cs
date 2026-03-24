@@ -1,5 +1,5 @@
-using System.Diagnostics;
 using CommandLine;
+using Renderide.Generators.Logging;
 
 namespace UnityShaderConverter.Options;
 
@@ -38,6 +38,26 @@ public sealed class ConverterOptions
     [Option("cg-includes", Required = false, HelpText = "Folder with UnityCG.cginc (Unity CGIncludes). Default: bundled next to the tool, else search from shader path.")]
     public string? UnityCgIncludesDirectory { get; set; }
 
+    /// <summary>Writes generated <c>.slang</c> per pass next to WGSL when slangc runs.</summary>
+    [Option("dump-intermediate", Required = false, HelpText = "Directory to write per-pass generated .slang (and optional diagnostics).")]
+    public string? DumpIntermediateDirectory { get; set; }
+
+    /// <summary>Skips slangc/Rust refresh when shader and include inputs are unchanged (manifest under the dump or output tree).</summary>
+    [Option("compile-cache", Required = false, HelpText = "Directory for compile cache manifests (skip slangc when inputs unchanged).")]
+    public string? CompileCacheDirectory { get; set; }
+
+    /// <summary>Extra <c>-I</c> roots for <c>slangc</c> (repeatable); appended after Unity CGIncludes resolution.</summary>
+    [Option("extra-cg-include", Required = false, HelpText = "Additional include directory for slangc (repeatable).")]
+    public IEnumerable<string> ExtraCgIncludeDirectories { get; set; } = Array.Empty<string>();
+
+    /// <summary>Skips ShaderLab passes whose <c>LightMode</c> is deferred, meta, motion vectors, etc.</summary>
+    [Option("skip-non-forward-passes", Required = false, HelpText = "Drop Deferred/Meta/MotionVectors passes before emission.")]
+    public bool SkipNonForwardPasses { get; set; }
+
+    /// <summary>Skips <c>ForwardAdd</c> passes (for single-pass clustered forward after base pass uses clusters).</summary>
+    [Option("skip-forward-add-passes", Required = false, HelpText = "Drop LightMode ForwardAdd passes.")]
+    public bool SkipForwardAddPasses { get; set; }
+
     /// <summary>Force <c>slangc</c> warning suppression and error-only stderr in logs (overrides compiler config).</summary>
     [Option("suppress-slang-warnings", Required = false, HelpText = "Force slang warning suppression (-warnings-disable + error-only stderr in logs).")]
     public bool ForceSuppressSlangWarnings { get; set; }
@@ -49,7 +69,7 @@ public sealed class ConverterOptions
     /// <summary>Resolves default input and output paths relative to the git repository root (Renderide parent).</summary>
     public void DetermineDefaultPaths()
     {
-        string renderideRoot = ResolveRenderideRoot(TryGetGitRepositoryRoot());
+        string renderideRoot = RenderidePathResolver.ResolveRenderideRoot(RenderidePathResolver.TryGetGitRepositoryRoot());
 
         if (OutputDirectory is null)
             OutputDirectory = Path.Combine(renderideRoot, "crates", "renderide", "src", "shaders");
@@ -62,79 +82,5 @@ public sealed class ConverterOptions
                 Path.Combine(renderideRoot, "third_party", "Resonite.UnityShaders", "Assets", "Shaders"),
             };
         }
-    }
-
-    private static string ResolveRenderideRoot(string? gitTopLevel)
-    {
-        if (gitTopLevel is not null)
-        {
-            if (Directory.Exists(Path.Combine(gitTopLevel, "crates", "renderide")))
-                return Path.GetFullPath(gitTopLevel);
-            string nested = Path.Combine(gitTopLevel, "Renderide");
-            if (Directory.Exists(Path.Combine(nested, "crates", "renderide")))
-                return Path.GetFullPath(nested);
-        }
-
-        return FallbackRenderideRootFromCwd();
-    }
-
-    private static string FallbackRenderideRootFromCwd()
-    {
-        var dir = new DirectoryInfo(Directory.GetCurrentDirectory());
-        while (dir is not null)
-        {
-            if (Directory.Exists(Path.Combine(dir.FullName, "crates", "renderide")))
-                return dir.FullName;
-            if (Directory.Exists(Path.Combine(dir.FullName, "Renderide", "crates", "renderide")))
-                return Path.Combine(dir.FullName, "Renderide");
-            dir = dir.Parent;
-        }
-
-        return Path.Combine(Directory.GetCurrentDirectory(), "Renderide");
-    }
-
-    private static string? TryGetGitRepositoryRoot()
-    {
-        var psi = new ProcessStartInfo
-        {
-            FileName = "git",
-            Arguments = "rev-parse --show-toplevel",
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true,
-        };
-
-        using var process = new Process { StartInfo = psi };
-        try
-        {
-            process.Start();
-        }
-        catch
-        {
-            return null;
-        }
-
-        if (!process.WaitForExit(10_000))
-        {
-            try
-            {
-                process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // ignored
-            }
-
-            return null;
-        }
-
-        if (process.ExitCode != 0)
-            return null;
-
-        string line = process.StandardOutput.ReadToEnd().Split(
-            new[] { '\r', '\n' },
-            StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "";
-        return string.IsNullOrWhiteSpace(line) ? null : line.Trim();
     }
 }

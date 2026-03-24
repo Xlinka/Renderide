@@ -8,6 +8,12 @@ namespace UnityShaderConverter.Analysis;
 /// <summary>Parses ShaderLab via UnityShaderParser and builds <see cref="ShaderFileDocument"/>.</summary>
 public static class ShaderLabAnalyzer
 {
+    /// <summary>
+    /// Prefix for the single error returned when a shader is skipped because it uses <c>#pragma surface</c>.
+    /// Used by <see cref="IsSurfaceShaderExclusion"/> for failure categorization.
+    /// </summary>
+    public const string SurfaceShaderNotSupportedPrefix = "Surface shader not supported:";
+
     /// <summary>Parses a single <c>.shader</c> file using auto-detected Unity <c>CGIncludes</c>.</summary>
     public static bool TryAnalyze(string shaderPath, out ShaderFileDocument? document, out List<Diagnostic> diagnostics, out List<string> errors) =>
         TryAnalyze(shaderPath, null, out document, out diagnostics, out errors);
@@ -53,7 +59,21 @@ public static class ShaderLabAnalyzer
             return false;
         }
 
+        int totalSubShaders = root.SubShaders.Count;
+        var analyzerWarnings = new List<string>();
+        if (totalSubShaders > 1)
+        {
+            analyzerWarnings.Add(
+                $"Shader defines {totalSubShaders} SubShader blocks; UnityShaderConverter uses only the first SubShader.");
+        }
+
         SubShaderNode sub0 = root.SubShaders[0];
+        if (TryBuildSurfaceShaderExclusionError(sub0, out string? surfaceErr))
+        {
+            errors.Add(surfaceErr!);
+            return false;
+        }
+
         var properties = ExtractProperties(root.Properties ?? new List<ShaderPropertyNode>());
         var passes = new List<ShaderPassDocument>();
         var multiCompiles = new List<string>();
@@ -76,9 +96,8 @@ public static class ShaderLabAnalyzer
                     return false;
                 }
 
-                ShaderPassDocument addedPass = passDoc!;
-                passes.Add(addedPass);
-                foreach (string line in ExtractMultiCompileLines(addedPass.ProgramSource))
+                passes.Add(passDoc!);
+                foreach (string line in ExtractMultiCompileLines(passDoc!.ProgramSource))
                     multiCompiles.Add(line);
                 codePassIndex++;
             }
@@ -98,9 +117,15 @@ public static class ShaderLabAnalyzer
             SubShaderTags = subShaderTags,
             Passes = passes,
             MultiCompilePragmas = DeduplicateSorted(multiCompiles),
+            AnalyzerWarnings = analyzerWarnings,
+            TotalSubShaderCount = totalSubShaders,
         };
         return true;
     }
+
+    /// <summary>True when <paramref name="errors"/> includes a surface-shader exclusion (see <see cref="SurfaceShaderNotSupportedPrefix"/>).</summary>
+    public static bool IsSurfaceShaderExclusion(IReadOnlyList<string> errors) =>
+        errors.Any(static e => e.StartsWith(SurfaceShaderNotSupportedPrefix, StringComparison.Ordinal));
 
     /// <summary>
     /// Builds an include resolver: optional override, then <c>UnityBuiltinCGIncludes</c> next to the app, then repo walk from <paramref name="shaderPath"/>.
@@ -111,6 +136,40 @@ public static class ShaderLabAnalyzer
         if (paths.Count == 0)
             return new DefaultPreProcessorIncludeResolver();
         return new DefaultPreProcessorIncludeResolver(paths.ToList());
+    }
+
+    /// <summary>
+    /// When any code pass in the first subshader contains <c>#pragma surface</c>, conversion is skipped for the whole file.
+    /// </summary>
+    private static bool TryBuildSurfaceShaderExclusionError(SubShaderNode sub0, out string? error)
+    {
+        int passIndex = 0;
+        foreach (ShaderPassNode pass in sub0.Passes ?? new List<ShaderPassNode>())
+        {
+            if (pass is not ShaderCodePassNode codePass)
+                continue;
+            HLSLProgramBlock? blockNullable = codePass.ProgramBlock;
+            if (blockNullable is null)
+            {
+                passIndex++;
+                continue;
+            }
+
+            string program = blockNullable.Value.CodeWithoutIncludes;
+            if (PragmaParser.HasSurfacePragma(program))
+            {
+                error =
+                    $"{SurfaceShaderNotSupportedPrefix} pass {passIndex} contains `#pragma surface`. " +
+                    "UnityShaderConverter does not expand surface shaders. In Unity, use Compile and show code, copy the HLSL for the pass you need into a shader that uses only " +
+                    "`#pragma vertex` and `#pragma fragment` (remove `#pragma surface` from ShaderLab), or maintain a hand-written port.";
+                return true;
+            }
+
+            passIndex++;
+        }
+
+        error = null;
+        return false;
     }
 
     private static IReadOnlyList<string> DeduplicateSorted(List<string> lines)
@@ -148,6 +207,7 @@ public static class ShaderLabAnalyzer
 
         HLSLProgramBlock block = blockNullable.Value;
         string program = block.CodeWithoutIncludes;
+
         if (PragmaParser.HasGeometryStage(program))
         {
             error = "Pass uses #pragma geometry which is not supported by UnityShaderConverter yet.";
@@ -156,15 +216,19 @@ public static class ShaderLabAnalyzer
 
         if (!PragmaParser.TryGetVertexEntry(program, out string vert))
         {
-            error = "Pass must declare #pragma vertex for this converter.";
+            error = $"Pass {passIndex} must declare #pragma vertex for this converter.";
             return false;
         }
 
         if (!PragmaParser.TryGetFragmentEntry(program, out string frag))
         {
-            error = "Pass must declare #pragma fragment for this converter.";
+            error = $"Pass {passIndex} must declare #pragma fragment for this converter.";
             return false;
         }
+
+        float? pragmaTarget = null;
+        if (PragmaParser.TryGetShaderTarget(program, out float tgt))
+            pragmaTarget = tgt;
 
         string? passName = null;
         foreach (ShaderLabCommandNode? cmd in codePass.Commands ?? new List<ShaderLabCommandNode>())
@@ -187,6 +251,7 @@ public static class ShaderLabAnalyzer
             FragmentEntry = frag,
             RenderStateSummary = RenderStateFormatter.Summarize(cmdList),
             FixedFunctionState = RenderStateExtractor.Extract(cmdList, subShaderTags),
+            PragmaShaderTarget = pragmaTarget,
         };
         return true;
     }

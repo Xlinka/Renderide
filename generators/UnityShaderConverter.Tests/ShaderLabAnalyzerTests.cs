@@ -44,4 +44,20 @@ public sealed class ShaderLabAnalyzerTests
         Assert.NotNull(doc);
         Assert.NotEmpty(doc!.Passes);
     }
+
+    /// <summary>Surface shaders are detected and excluded with a stable prefix and porting guidance.</summary>
+    [Fact]
+    public void TryAnalyze_SurfaceOnly_ExcludedWithSurfaceShaderPrefix()
+    {
+        string path = Path.Combine(AppContext.BaseDirectory, "TestData", "SurfaceOnly.shader");
+        Assert.True(File.Exists(path), $"Missing test file: {path}");
+        bool ok = ShaderLabAnalyzer.TryAnalyze(path, out var doc, out var diags, out var errors);
+        Assert.False(ok);
+        Assert.Null(doc);
+        Assert.Contains(
+            errors,
+            e => e.StartsWith(ShaderLabAnalyzer.SurfaceShaderNotSupportedPrefix, StringComparison.Ordinal));
+        Assert.True(ShaderLabAnalyzer.IsSurfaceShaderExclusion(errors));
+        Assert.Contains(errors, e => e.Contains("#pragma vertex", StringComparison.Ordinal) && e.Contains("#pragma fragment", StringComparison.Ordinal));
+    }
 }

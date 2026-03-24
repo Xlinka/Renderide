@@ -28,9 +28,21 @@ public sealed class CompilerConfigModel
     public int MaxSpecializationConstants { get; set; } = 8;
 
     /// <summary>
-    /// When true, passes <c>-warnings-disable</c> for common noisy Slang diagnostics and strips <c>warning[E…]</c> lines from
-    /// logged <c>slangc</c> stderr; errors are never stripped.
+    /// When true, passes <c>-warnings-disable</c> for common noisy Slang diagnostics (including implicit global shader parameters,
+    /// <c>39019</c>) and strips <c>warning[E…]</c> lines from logged <c>slangc</c> stderr; errors are never stripped.
     /// </summary>
     [JsonPropertyName("suppressSlangWarnings")]
     public bool SuppressSlangWarnings { get; set; } = true;
+
+    /// <summary>Additional <c>-I</c> directories for <c>slangc</c> after Unity CGIncludes roots (patches, version-specific trees).</summary>
+    [JsonPropertyName("extraSlangIncludeDirectories")]
+    public List<string> ExtraSlangIncludeDirectories { get; set; } = new();
+
+    /// <summary>Rust / WGSL <c>@group</c> index for clustered scene bindings (must match <c>RenderideClusterForward.slang</c>).</summary>
+    [JsonPropertyName("sceneBindGroupIndex")]
+    public uint SceneBindGroupIndex { get; set; } = 1;
+
+    /// <summary>Rust constant and WGSL <c>@group</c> for <c>MaterialUniform</c> and property textures.</summary>
+    [JsonPropertyName("materialBindGroupIndex")]
+    public uint MaterialBindGroupIndex { get; set; } = 2;
 }
