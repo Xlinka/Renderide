@@ -18,6 +18,7 @@ use glam::Vec4;
 use crate::scene::types::TextureHandle;
 
 /// Maps to WGSL `override` / `wgpu::PipelineCompilationOptions::constants` (decimal id keys per wgpu docs).
+/// `Default` matches WGSL override initializer defaults from Slang `[vk::constant_id]` (first keyword true on exclusive `multi_compile` lines).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VariantKey {
     /// ShaderLab keyword `WORLD_SPACE`
@@ -33,7 +34,7 @@ pub struct VariantKey {
 impl Default for VariantKey {
     fn default() -> Self {
         Self {
-            world_space: false,
+            world_space: true,
             local_space: false,
             alphatest: false,
             vertexcolors: false,

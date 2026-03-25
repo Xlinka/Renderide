@@ -31,8 +31,8 @@ See `crates/renderide/src/config.rs` for available keys. For example, `rendering
 ## Prerequisites
 
 ### Required
-- **Rust** stable toolchain (via [rustup](https://rustup.rs/))
-- A working **Resonite** installation
+- Rust stable toolchain (via [rustup](https://rustup.rs/))
+- A working Resonite installation
 
 ### Optional (for contributors)
 - [.NET 10 SDK](https://dotnet.microsoft.com/download) (used for generators)

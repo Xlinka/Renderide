@@ -529,7 +529,7 @@ public static class ConverterRunner
             {
                 logger.LogTrace(
                     LogCategory.SlangCompile,
-                    $"{shaderPath} pass {passIndex}: retrying without specialization injection (full first-variant defines only).");
+                    $"{shaderPath} pass {passIndex}: slangc failed with specialization (`[vk::constant_id]` / -preserve-params); retrying without specialization (full first-variant `#define`s only, single baked variant).");
                 if (TryCompileOnce(
                         shaderFile,
                         pass,
@@ -602,6 +602,14 @@ public static class ConverterRunner
         }
 
         List<string> slangDefines = PassLightModeFilter.MergeVariantDefines(baselineDefines, pass);
+        bool preserveWgslOverrides = axes.Count > 0;
+        if (preserveWgslOverrides)
+        {
+            logger.LogTrace(
+                LogCategory.SlangCompile,
+                $"{shaderPath} pass {passIndex}: slangc -preserve-params enabled ({axes.Count} specialization axis/axes for WGSL `override` / `@id`).");
+        }
+
         if (!slangCompiler.TryCompileToWgsl(
                 tempSlangPath,
                 wgslPath,
@@ -611,6 +619,7 @@ public static class ConverterRunner
                 pass.VertexEntry!,
                 pass.FragmentEntry!,
                 slangDefines,
+                preserveWgslOverrides,
                 out string? err))
         {
             failureDetail = string.IsNullOrWhiteSpace(err) ? "slangc failed with no stderr" : err;
@@ -632,6 +641,22 @@ public static class ConverterRunner
             wgsl = WgslMaterialUniformInjector.StripInjectedMaterialBlock(wgsl);
             if (injectMaterialUniformBlockWgsl)
                 wgsl = WgslMaterialUniformInjector.PrependMaterialBlock(wgsl, shaderFile.Properties, materialBindGroupIndex);
+            if (axes.Count > 0)
+            {
+                if (wgsl.Contains("override", StringComparison.Ordinal))
+                {
+                    logger.LogTrace(
+                        LogCategory.SlangCompile,
+                        $"{shaderPath} pass {passIndex}: WGSL contains `override` (pipeline specialization constants).");
+                }
+                else
+                {
+                    logger.LogTrace(
+                        LogCategory.SlangCompile,
+                        $"{shaderPath} pass {passIndex}: specialization axes present but WGSL has no `override` keyword; check Slang output or keyword usage.");
+                }
+            }
+
             File.WriteAllText(wgslPath, wgsl);
         }
         catch (Exception ex)

@@ -46,6 +46,158 @@ struct SLANG_ParameterGroup_UnityPerCamera_std140_0
 };
 
 @binding(4) @group(0) var<uniform> UnityPerCamera_0 : SLANG_ParameterGroup_UnityPerCamera_std140_0;
+@binding(1) @group(0) var unity_usc_vertexlight_sampler_compat_0 : sampler;
+
+@binding(2) @group(0) var unity_usc_ui_shared_sampler_0 : sampler;
+
+@binding(3) @group(0) var unity_usc_resonite_macro_sampler_0 : sampler;
+
+struct SLANG_ParameterGroup_UnityPerCameraRare_std140_0
+{
+    @align(16) unity_CameraWorldClipPlanes_0 : array<vec4<f32>, i32(6)>,
+    @align(16) unity_CameraProjection_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_CameraInvProjection_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_WorldToCamera_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_CameraToWorld_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+};
+
+@binding(5) @group(0) var<uniform> UnityPerCameraRare_0 : SLANG_ParameterGroup_UnityPerCameraRare_std140_0;
+struct _Array_std140_vectorx3Chalfx2C4x3E8_0
+{
+    @align(16) data_1 : array<vec8<f16>, i32(8)>,
+};
+
+struct SLANG_ParameterGroup_UnityLighting_std140_0
+{
+    @align(16) _WorldSpaceLightPos0_0 : vec4<f32>,
+    @align(16) _LightPositionRange_0 : vec4<f32>,
+    @align(16) _LightProjectionParams_0 : vec4<f32>,
+    @align(16) unity_4LightPosX0_0 : vec4<f32>,
+    @align(16) unity_4LightPosY0_0 : vec4<f32>,
+    @align(16) unity_4LightPosZ0_0 : vec4<f32>,
+    @align(16) unity_4LightAtten0_0 : vec4<f16>,
+    @align(16) unity_LightColor_0 : _Array_std140_vectorx3Chalfx2C4x3E8_0,
+    @align(16) unity_LightPosition_0 : array<vec4<f32>, i32(8)>,
+    @align(16) unity_LightAtten_0 : _Array_std140_vectorx3Chalfx2C4x3E8_0,
+    @align(16) unity_SpotDirection_0 : array<vec4<f32>, i32(8)>,
+    @align(16) unity_SHAr_0 : vec4<f16>,
+    @align(8) unity_SHAg_0 : vec4<f16>,
+    @align(16) unity_SHAb_0 : vec4<f16>,
+    @align(8) unity_SHBr_0 : vec4<f16>,
+    @align(16) unity_SHBg_0 : vec4<f16>,
+    @align(8) unity_SHBb_0 : vec4<f16>,
+    @align(16) unity_SHC_0 : vec4<f16>,
+    @align(8) unity_OcclusionMaskSelector_0 : vec4<f16>,
+    @align(16) unity_ProbesOcclusion_0 : vec4<f16>,
+};
+
+@binding(6) @group(0) var<uniform> UnityLighting_0 : SLANG_ParameterGroup_UnityLighting_std140_0;
+struct SLANG_ParameterGroup_UnityLightingOld_std140_0
+{
+    @align(16) unity_LightColor0_0 : vec3<f16>,
+    @align(8) unity_LightColor1_0 : vec3<f16>,
+    @align(16) unity_LightColor2_0 : vec3<f16>,
+    @align(8) unity_LightColor3_0 : vec3<f16>,
+};
+
+@binding(7) @group(0) var<uniform> UnityLightingOld_0 : SLANG_ParameterGroup_UnityLightingOld_std140_0;
+struct _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0
+{
+    @align(16) data_2 : array<_MatrixStorage_float4x4_ColMajorstd140_0, i32(4)>,
+};
+
+struct SLANG_ParameterGroup_UnityShadows_std140_0
+{
+    @align(16) unity_ShadowSplitSpheres_0 : array<vec4<f32>, i32(4)>,
+    @align(16) unity_ShadowSplitSqRadii_0 : vec4<f32>,
+    @align(16) unity_LightShadowBias_0 : vec4<f32>,
+    @align(16) _LightSplitsNear_0 : vec4<f32>,
+    @align(16) _LightSplitsFar_0 : vec4<f32>,
+    @align(16) unity_WorldToShadow_0 : _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0,
+    @align(16) _LightShadowData_0 : vec4<f32>,
+    @align(16) unity_ShadowFadeCenterAndType_0 : vec4<f32>,
+};
+
+@binding(8) @group(0) var<uniform> UnityShadows_0 : SLANG_ParameterGroup_UnityShadows_std140_0;
+struct SLANG_ParameterGroup_UnityPerDrawRare_std140_0
+{
+    @align(16) glstate_matrix_transpose_modelview0_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+};
+
+@binding(10) @group(0) var<uniform> UnityPerDrawRare_0 : SLANG_ParameterGroup_UnityPerDrawRare_std140_0;
+struct SLANG_ParameterGroup_UnityFog_std140_0
+{
+    @align(16) unity_FogColor_0 : vec4<f16>,
+    @align(16) unity_FogParams_0 : vec4<f32>,
+};
+
+@binding(12) @group(0) var<uniform> UnityFog_0 : SLANG_ParameterGroup_UnityFog_std140_0;
+@binding(13) @group(0) var unity_Lightmap_0 : texture_2d<f32>;
+
+@binding(14) @group(0) var samplerunity_Lightmap_0 : sampler;
+
+@binding(15) @group(0) var unity_LightmapInd_0 : texture_2d<f32>;
+
+@binding(16) @group(0) var unity_ShadowMask_0 : texture_2d<f32>;
+
+@binding(17) @group(0) var samplerunity_ShadowMask_0 : sampler;
+
+@binding(18) @group(0) var unity_DynamicLightmap_0 : texture_2d<f32>;
+
+@binding(19) @group(0) var samplerunity_DynamicLightmap_0 : sampler;
+
+@binding(20) @group(0) var unity_DynamicDirectionality_0 : texture_2d<f32>;
+
+@binding(21) @group(0) var unity_DynamicNormal_0 : texture_2d<f32>;
+
+struct SLANG_ParameterGroup_UnityLightmaps_std140_0
+{
+    @align(16) unity_LightmapST_0 : vec4<f32>,
+    @align(16) unity_DynamicLightmapST_0 : vec4<f32>,
+};
+
+@binding(22) @group(0) var<uniform> UnityLightmaps_0 : SLANG_ParameterGroup_UnityLightmaps_std140_0;
+@binding(23) @group(0) var unity_SpecCube0_0 : texture_cube<f32>;
+
+@binding(24) @group(0) var samplerunity_SpecCube0_0 : sampler;
+
+@binding(25) @group(0) var unity_SpecCube1_0 : texture_cube<f32>;
+
+struct SLANG_ParameterGroup_UnityReflectionProbes_std140_0
+{
+    @align(16) unity_SpecCube0_BoxMax_0 : vec4<f32>,
+    @align(16) unity_SpecCube0_BoxMin_0 : vec4<f32>,
+    @align(16) unity_SpecCube0_ProbePosition_0 : vec4<f32>,
+    @align(16) unity_SpecCube0_HDR_0 : vec4<f16>,
+    @align(16) unity_SpecCube1_BoxMax_0 : vec4<f32>,
+    @align(16) unity_SpecCube1_BoxMin_0 : vec4<f32>,
+    @align(16) unity_SpecCube1_ProbePosition_0 : vec4<f32>,
+    @align(16) unity_SpecCube1_HDR_0 : vec4<f16>,
+};
+
+@binding(26) @group(0) var<uniform> UnityReflectionProbes_0 : SLANG_ParameterGroup_UnityReflectionProbes_std140_0;
+@binding(27) @group(0) var unity_NHxRoughness_0 : texture_2d<f32>;
+
+@binding(28) @group(0) var _MainTex_0 : texture_2d<f32>;
+
+@binding(29) @group(0) var _DetailAlbedoMap_0 : texture_2d<f32>;
+
+@binding(30) @group(0) var _BumpMap_0 : texture_2d<f32>;
+
+@binding(31) @group(0) var _DetailMask_0 : texture_2d<f32>;
+
+@binding(32) @group(0) var _DetailNormalMap_0 : texture_2d<f32>;
+
+@binding(33) @group(0) var U_SpecGlossMap_0 : texture_2d<f32>;
+
+@binding(34) @group(0) var _MetallicGlossMap_0 : texture_2d<f32>;
+
+@binding(35) @group(0) var _OcclusionMap_0 : texture_2d<f32>;
+
+@binding(36) @group(0) var _ParallaxMap_0 : texture_2d<f32>;
+
+@binding(37) @group(0) var _EmissionMap_0 : texture_2d<f32>;
+
 struct GlobalParams_std140_0
 {
     @align(16) unity_Lightmap_HDR_0 : vec4<f16>,
@@ -171,6 +323,22 @@ fn vertDeferred( _S5 : vertexInput_0) -> VertexOutputDeferred_0
     return o_0;
 }
 
+@id(0) override USC_ALPHATEST_ON_0 : bool = false;
+
+@id(1) override USC_ALPHABLEND_ON_0 : bool = false;
+
+@id(2) override USC_ALPHAPREMULTIPLY_ON_0 : bool = false;
+
+@id(3) override USC_EMISSION_0 : bool = false;
+
+@id(4) override USC_GLOSSYREFLECTIONS_OFF_0 : bool = false;
+
+@id(5) override USC_NORMALMAP_0 : bool = false;
+
+@id(6) override USC_PARALLAXMAP_0 : bool = false;
+
+@id(7) override USC_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A_0 : bool = false;
+
 
 
 enable f16;
@@ -197,6 +365,180 @@ struct SLANG_ParameterGroup_UnityReflectionProbes_std140_0
 @binding(23) @group(0) var unity_SpecCube0_0 : texture_cube<f32>;
 
 @binding(24) @group(0) var samplerunity_SpecCube0_0 : sampler;
+
+@binding(1) @group(0) var unity_usc_vertexlight_sampler_compat_0 : sampler;
+
+@binding(2) @group(0) var unity_usc_ui_shared_sampler_0 : sampler;
+
+struct SLANG_ParameterGroup_UnityPerCamera_std140_0
+{
+    @align(16) _Time_0 : vec4<f32>,
+    @align(16) U_SinTime_0 : vec4<f32>,
+    @align(16) _CosTime_0 : vec4<f32>,
+    @align(16) unity_DeltaTime_0 : vec4<f32>,
+    @align(16) _WorldSpaceCameraPos_0 : vec3<f32>,
+    @align(16) _ProjectionParams_0 : vec4<f32>,
+    @align(16) U_ScreenParams_0 : vec4<f32>,
+    @align(16) _ZBufferParams_0 : vec4<f32>,
+    @align(16) unity_OrthoParams_0 : vec4<f32>,
+};
+
+@binding(4) @group(0) var<uniform> UnityPerCamera_0 : SLANG_ParameterGroup_UnityPerCamera_std140_0;
+struct _MatrixStorage_float4x4_ColMajorstd140_0
+{
+    @align(16) data_0 : array<vec4<f32>, i32(4)>,
+};
+
+struct SLANG_ParameterGroup_UnityPerCameraRare_std140_0
+{
+    @align(16) unity_CameraWorldClipPlanes_0 : array<vec4<f32>, i32(6)>,
+    @align(16) unity_CameraProjection_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_CameraInvProjection_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_WorldToCamera_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_CameraToWorld_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+};
+
+@binding(5) @group(0) var<uniform> UnityPerCameraRare_0 : SLANG_ParameterGroup_UnityPerCameraRare_std140_0;
+struct _Array_std140_vectorx3Chalfx2C4x3E8_0
+{
+    @align(16) data_1 : array<vec8<f16>, i32(8)>,
+};
+
+struct SLANG_ParameterGroup_UnityLighting_std140_0
+{
+    @align(16) _WorldSpaceLightPos0_0 : vec4<f32>,
+    @align(16) _LightPositionRange_0 : vec4<f32>,
+    @align(16) _LightProjectionParams_0 : vec4<f32>,
+    @align(16) unity_4LightPosX0_0 : vec4<f32>,
+    @align(16) unity_4LightPosY0_0 : vec4<f32>,
+    @align(16) unity_4LightPosZ0_0 : vec4<f32>,
+    @align(16) unity_4LightAtten0_0 : vec4<f16>,
+    @align(16) unity_LightColor_0 : _Array_std140_vectorx3Chalfx2C4x3E8_0,
+    @align(16) unity_LightPosition_0 : array<vec4<f32>, i32(8)>,
+    @align(16) unity_LightAtten_0 : _Array_std140_vectorx3Chalfx2C4x3E8_0,
+    @align(16) unity_SpotDirection_0 : array<vec4<f32>, i32(8)>,
+    @align(16) unity_SHAr_0 : vec4<f16>,
+    @align(8) unity_SHAg_0 : vec4<f16>,
+    @align(16) unity_SHAb_0 : vec4<f16>,
+    @align(8) unity_SHBr_0 : vec4<f16>,
+    @align(16) unity_SHBg_0 : vec4<f16>,
+    @align(8) unity_SHBb_0 : vec4<f16>,
+    @align(16) unity_SHC_0 : vec4<f16>,
+    @align(8) unity_OcclusionMaskSelector_0 : vec4<f16>,
+    @align(16) unity_ProbesOcclusion_0 : vec4<f16>,
+};
+
+@binding(6) @group(0) var<uniform> UnityLighting_0 : SLANG_ParameterGroup_UnityLighting_std140_0;
+struct SLANG_ParameterGroup_UnityLightingOld_std140_0
+{
+    @align(16) unity_LightColor0_0 : vec3<f16>,
+    @align(8) unity_LightColor1_0 : vec3<f16>,
+    @align(16) unity_LightColor2_0 : vec3<f16>,
+    @align(8) unity_LightColor3_0 : vec3<f16>,
+};
+
+@binding(7) @group(0) var<uniform> UnityLightingOld_0 : SLANG_ParameterGroup_UnityLightingOld_std140_0;
+struct _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0
+{
+    @align(16) data_2 : array<_MatrixStorage_float4x4_ColMajorstd140_0, i32(4)>,
+};
+
+struct SLANG_ParameterGroup_UnityShadows_std140_0
+{
+    @align(16) unity_ShadowSplitSpheres_0 : array<vec4<f32>, i32(4)>,
+    @align(16) unity_ShadowSplitSqRadii_0 : vec4<f32>,
+    @align(16) unity_LightShadowBias_0 : vec4<f32>,
+    @align(16) _LightSplitsNear_0 : vec4<f32>,
+    @align(16) _LightSplitsFar_0 : vec4<f32>,
+    @align(16) unity_WorldToShadow_0 : _Array_std140_matrixx3Cfloatx2C4x2C4x3E4_0,
+    @align(16) _LightShadowData_0 : vec4<f32>,
+    @align(16) unity_ShadowFadeCenterAndType_0 : vec4<f32>,
+};
+
+@binding(8) @group(0) var<uniform> UnityShadows_0 : SLANG_ParameterGroup_UnityShadows_std140_0;
+struct SLANG_ParameterGroup_UnityPerDraw_std140_0
+{
+    @align(16) unity_ObjectToWorld_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_WorldToObject_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_LODFade_0 : vec4<f32>,
+    @align(16) unity_WorldTransformParams_0 : vec4<f32>,
+    @align(16) unity_RenderingLayer_0 : vec4<f32>,
+};
+
+@binding(9) @group(0) var<uniform> UnityPerDraw_0 : SLANG_ParameterGroup_UnityPerDraw_std140_0;
+struct SLANG_ParameterGroup_UnityPerDrawRare_std140_0
+{
+    @align(16) glstate_matrix_transpose_modelview0_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+};
+
+@binding(10) @group(0) var<uniform> UnityPerDrawRare_0 : SLANG_ParameterGroup_UnityPerDrawRare_std140_0;
+struct SLANG_ParameterGroup_UnityPerFrame_std140_0
+{
+    @align(16) glstate_lightmodel_ambient_0 : vec4<f16>,
+    @align(8) unity_AmbientSky_0 : vec4<f16>,
+    @align(16) unity_AmbientEquator_0 : vec4<f16>,
+    @align(8) unity_AmbientGround_0 : vec4<f16>,
+    @align(16) unity_IndirectSpecColor_0 : vec4<f16>,
+    @align(16) glstate_matrix_projection_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_MatrixV_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_MatrixInvV_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_MatrixVP_0 : _MatrixStorage_float4x4_ColMajorstd140_0,
+    @align(16) unity_StereoEyeIndex_0 : i32,
+    @align(8) unity_ShadowColor_0 : vec4<f16>,
+};
+
+@binding(11) @group(0) var<uniform> UnityPerFrame_0 : SLANG_ParameterGroup_UnityPerFrame_std140_0;
+struct SLANG_ParameterGroup_UnityFog_std140_0
+{
+    @align(16) unity_FogColor_0 : vec4<f16>,
+    @align(16) unity_FogParams_0 : vec4<f32>,
+};
+
+@binding(12) @group(0) var<uniform> UnityFog_0 : SLANG_ParameterGroup_UnityFog_std140_0;
+@binding(13) @group(0) var unity_Lightmap_0 : texture_2d<f32>;
+
+@binding(14) @group(0) var samplerunity_Lightmap_0 : sampler;
+
+@binding(15) @group(0) var unity_LightmapInd_0 : texture_2d<f32>;
+
+@binding(16) @group(0) var unity_ShadowMask_0 : texture_2d<f32>;
+
+@binding(17) @group(0) var samplerunity_ShadowMask_0 : sampler;
+
+@binding(18) @group(0) var unity_DynamicLightmap_0 : texture_2d<f32>;
+
+@binding(19) @group(0) var samplerunity_DynamicLightmap_0 : sampler;
+
+@binding(20) @group(0) var unity_DynamicDirectionality_0 : texture_2d<f32>;
+
+@binding(21) @group(0) var unity_DynamicNormal_0 : texture_2d<f32>;
+
+struct SLANG_ParameterGroup_UnityLightmaps_std140_0
+{
+    @align(16) unity_LightmapST_0 : vec4<f32>,
+    @align(16) unity_DynamicLightmapST_0 : vec4<f32>,
+};
+
+@binding(22) @group(0) var<uniform> UnityLightmaps_0 : SLANG_ParameterGroup_UnityLightmaps_std140_0;
+@binding(25) @group(0) var unity_SpecCube1_0 : texture_cube<f32>;
+
+@binding(27) @group(0) var unity_NHxRoughness_0 : texture_2d<f32>;
+
+@binding(29) @group(0) var _DetailAlbedoMap_0 : texture_2d<f32>;
+
+@binding(30) @group(0) var _BumpMap_0 : texture_2d<f32>;
+
+@binding(31) @group(0) var _DetailMask_0 : texture_2d<f32>;
+
+@binding(32) @group(0) var _DetailNormalMap_0 : texture_2d<f32>;
+
+@binding(33) @group(0) var U_SpecGlossMap_0 : texture_2d<f32>;
+
+@binding(34) @group(0) var _MetallicGlossMap_0 : texture_2d<f32>;
+
+@binding(36) @group(0) var _ParallaxMap_0 : texture_2d<f32>;
+
+@binding(37) @group(0) var _EmissionMap_0 : texture_2d<f32>;
 
 struct GlobalParams_std140_0
 {
@@ -413,12 +755,12 @@ struct UnityGIInput_0
      probeHDR_0 : array<vec4<f32>, i32(2)>,
 };
 
-fn UnityGI_Base_0( data_0 : UnityGIInput_0,  occlusion_0 : f16,  normalWorld_1 : vec3<f16>) -> UnityGI_0
+fn UnityGI_Base_0( data_3 : UnityGIInput_0,  occlusion_0 : f16,  normalWorld_1 : vec3<f16>) -> UnityGI_0
 {
     var o_gi_0 : UnityGI_0;
     ResetUnityGI_0(&(o_gi_0));
-    o_gi_0.light_0 = data_0.light_1;
-    o_gi_0.light_0.color_0 = o_gi_0.light_0.color_0 * vec3<f16>(data_0.atten_0);
+    o_gi_0.light_0 = data_3.light_1;
+    o_gi_0.light_0.color_0 = o_gi_0.light_0.color_0 * vec3<f16>(data_3.atten_0);
     o_gi_0.indirect_0.diffuse_0 = o_gi_0.indirect_0.diffuse_0 * vec3<f16>(occlusion_0);
     return o_gi_0;
 }
@@ -428,19 +770,19 @@ fn perceptualRoughnessToMipmapLevel_0( perceptualRoughness_0 : f16) -> f16
     return perceptualRoughness_0 * 6.0h;
 }
 
-fn DecodeHDR_0( data_1 : vec4<f16>,  decodeInstructions_0 : vec4<f16>,  colorspaceIsGamma_0 : i32) -> vec3<f16>
+fn DecodeHDR_0( data_4 : vec4<f16>,  decodeInstructions_0 : vec4<f16>,  colorspaceIsGamma_0 : i32) -> vec3<f16>
 {
-    var alpha_3 : f16 = f16(f32(decodeInstructions_0.w) * (f32(data_1.w) - 1.0f) + 1.0f);
+    var alpha_3 : f16 = f16(f32(decodeInstructions_0.w) * (f32(data_4.w) - 1.0f) + 1.0f);
     if(bool(colorspaceIsGamma_0))
     {
-        return vec3<f16>((decodeInstructions_0.x * alpha_3)) * data_1.xyz;
+        return vec3<f16>((decodeInstructions_0.x * alpha_3)) * data_4.xyz;
     }
-    return vec3<f16>((decodeInstructions_0.x * pow(alpha_3, decodeInstructions_0.y))) * data_1.xyz;
+    return vec3<f16>((decodeInstructions_0.x * pow(alpha_3, decodeInstructions_0.y))) * data_4.xyz;
 }
 
-fn DecodeHDR_1( data_2 : vec4<f16>,  decodeInstructions_1 : vec4<f16>) -> vec3<f16>
+fn DecodeHDR_1( data_5 : vec4<f16>,  decodeInstructions_1 : vec4<f16>) -> vec3<f16>
 {
-    return DecodeHDR_0(data_2, decodeInstructions_1, i32(0));
+    return DecodeHDR_0(data_5, decodeInstructions_1, i32(0));
 }
 
 fn Unity_GlossyEnvironment_0( tex_0 : texture_cube<f32>,  samplertex_0 : sampler,  hdr_0 : vec4<f16>,  glossIn_0 : Unity_GlossyEnvironmentData_0) -> vec3<f16>
@@ -449,21 +791,21 @@ fn Unity_GlossyEnvironment_0( tex_0 : texture_cube<f32>,  samplertex_0 : sampler
     return DecodeHDR_1(vec4<f16>((textureSampleLevel((tex_0), (unity_usc_resonite_macro_sampler_0), (vec3<f32>(glossIn_0.reflUVW_0)), (f32(perceptualRoughnessToMipmapLevel_0(f16(_S10 * (1.70000004768371582f - 0.69999998807907104f * _S10)))))))), hdr_0);
 }
 
-fn UnityGI_IndirectSpecular_0( data_3 : UnityGIInput_0,  occlusion_1 : f16,  glossIn_1 : Unity_GlossyEnvironmentData_0) -> vec3<f16>
+fn UnityGI_IndirectSpecular_0( data_6 : UnityGIInput_0,  occlusion_1 : f16,  glossIn_1 : Unity_GlossyEnvironmentData_0) -> vec3<f16>
 {
-    return Unity_GlossyEnvironment_0(unity_SpecCube0_0, samplerunity_SpecCube0_0, vec4<f16>(data_3.probeHDR_0[i32(0)]), glossIn_1) * vec3<f16>(occlusion_1);
+    return Unity_GlossyEnvironment_0(unity_SpecCube0_0, samplerunity_SpecCube0_0, vec4<f16>(data_6.probeHDR_0[i32(0)]), glossIn_1) * vec3<f16>(occlusion_1);
 }
 
-fn UnityGlobalIllumination_0( data_4 : UnityGIInput_0,  occlusion_2 : f16,  normalWorld_2 : vec3<f16>,  glossIn_2 : Unity_GlossyEnvironmentData_0) -> UnityGI_0
+fn UnityGlobalIllumination_0( data_7 : UnityGIInput_0,  occlusion_2 : f16,  normalWorld_2 : vec3<f16>,  glossIn_2 : Unity_GlossyEnvironmentData_0) -> UnityGI_0
 {
-    var o_gi_1 : UnityGI_0 = UnityGI_Base_0(data_4, occlusion_2, normalWorld_2);
-    o_gi_1.indirect_0.specular_1 = UnityGI_IndirectSpecular_0(data_4, occlusion_2, glossIn_2);
+    var o_gi_1 : UnityGI_0 = UnityGI_Base_0(data_7, occlusion_2, normalWorld_2);
+    o_gi_1.indirect_0.specular_1 = UnityGI_IndirectSpecular_0(data_7, occlusion_2, glossIn_2);
     return o_gi_1;
 }
 
-fn UnityGlobalIllumination_1( data_5 : UnityGIInput_0,  occlusion_3 : f16,  normalWorld_3 : vec3<f16>) -> UnityGI_0
+fn UnityGlobalIllumination_1( data_8 : UnityGIInput_0,  occlusion_3 : f16,  normalWorld_3 : vec3<f16>) -> UnityGI_0
 {
-    return UnityGI_Base_0(data_5, occlusion_3, normalWorld_3);
+    return UnityGI_Base_0(data_8, occlusion_3, normalWorld_3);
 }
 
 fn FragmentGI_0( s_0 : FragmentCommonData_0,  occlusion_4 : f16,  i_ambientOrLightmapUV_0 : vec4<f16>,  atten_1 : f16,  light_2 : UnityLight_0,  reflections_0 : bool) -> UnityGI_0
@@ -597,12 +939,12 @@ struct UnityStandardData_0
      normalWorld_4 : vec3<f32>,
 };
 
-fn UnityStandardDataToGbuffer_0( data_6 : UnityStandardData_0,  outGBuffer0_0 : ptr<function, vec4<f16>>,  outGBuffer1_0 : ptr<function, vec4<f16>>,  outGBuffer2_0 : ptr<function, vec4<f16>>)
+fn UnityStandardDataToGbuffer_0( data_9 : UnityStandardData_0,  outGBuffer0_0 : ptr<function, vec4<f16>>,  outGBuffer1_0 : ptr<function, vec4<f16>>,  outGBuffer2_0 : ptr<function, vec4<f16>>)
 {
-    (*outGBuffer0_0) = vec4<f16>(data_6.diffuseColor_0, data_6.occlusion_5);
-    (*outGBuffer1_0) = vec4<f16>(data_6.specularColor_0, data_6.smoothness_4);
+    (*outGBuffer0_0) = vec4<f16>(data_9.diffuseColor_0, data_9.occlusion_5);
+    (*outGBuffer1_0) = vec4<f16>(data_9.specularColor_0, data_9.smoothness_4);
     var _S19 : vec3<f32> = vec3<f32>(0.5f);
-    (*outGBuffer2_0) = vec4<f16>(vec3<f16>(data_6.normalWorld_4 * _S19 + _S19), 1.0h);
+    (*outGBuffer2_0) = vec4<f16>(vec3<f16>(data_9.normalWorld_4 * _S19 + _S19), 1.0h);
     return;
 }
 
@@ -646,14 +988,30 @@ fn fragDeferred( _S20 : pixelInput_0,  outGBuffer0_1 : ptr<function, vec4<f16>>,
     emissiveColor_0.x = _S27.x;
     emissiveColor_0.y = _S27.y;
     emissiveColor_0.z = _S27.z;
-    var data_7 : UnityStandardData_0;
-    data_7.diffuseColor_0 = s_1.diffColor_0;
-    data_7.occlusion_5 = occlusion_6;
-    data_7.specularColor_0 = s_1.specColor_1;
-    data_7.smoothness_4 = s_1.smoothness_0;
-    data_7.normalWorld_4 = s_1.normalWorld_0;
-    UnityStandardDataToGbuffer_0(data_7, &((*outGBuffer0_1)), &((*outGBuffer1_1)), &((*outGBuffer2_1)));
+    var data_10 : UnityStandardData_0;
+    data_10.diffuseColor_0 = s_1.diffColor_0;
+    data_10.occlusion_5 = occlusion_6;
+    data_10.specularColor_0 = s_1.specColor_1;
+    data_10.smoothness_4 = s_1.smoothness_0;
+    data_10.normalWorld_4 = s_1.normalWorld_0;
+    UnityStandardDataToGbuffer_0(data_10, &((*outGBuffer0_1)), &((*outGBuffer1_1)), &((*outGBuffer2_1)));
     (*outEmission_0) = vec4<f16>(emissiveColor_0, 1.0h);
     return;
 }
+
+@id(0) override USC_ALPHATEST_ON_0 : bool = false;
+
+@id(1) override USC_ALPHABLEND_ON_0 : bool = false;
+
+@id(2) override USC_ALPHAPREMULTIPLY_ON_0 : bool = false;
+
+@id(3) override USC_EMISSION_0 : bool = false;
+
+@id(4) override USC_GLOSSYREFLECTIONS_OFF_0 : bool = false;
+
+@id(5) override USC_NORMALMAP_0 : bool = false;
+
+@id(6) override USC_PARALLAXMAP_0 : bool = false;
+
+@id(7) override USC_SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A_0 : bool = false;
 

@@ -18,6 +18,7 @@ use glam::Vec4;
 use crate::scene::types::TextureHandle;
 
 /// Maps to WGSL `override` / `wgpu::PipelineCompilationOptions::constants` (decimal id keys per wgpu docs).
+/// `Default` matches WGSL override initializer defaults from Slang `[vk::constant_id]` (first keyword true on exclusive `multi_compile` lines).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct VariantKey {
     /// ShaderLab keyword `EQUIRECTANGULAR`
@@ -41,13 +42,13 @@ pub struct VariantKey {
 impl Default for VariantKey {
     fn default() -> Self {
         Self {
-            equirectangular: false,
+            equirectangular: true,
             cubemap: false,
             cubemap_lod: false,
-            outside_clip: false,
+            outside_clip: true,
             outside_color: false,
             outside_clamp: false,
-            tint_tex_none: false,
+            tint_tex_none: true,
             tint_tex_direct: false,
         }
     }
