@@ -108,6 +108,8 @@ pub struct GpuState {
     pub native_ui_depth_fallback_bind_group: Option<wgpu::BindGroup>,
     /// GPU textures for host `Texture2D` assets (mip0 RGBA8).
     pub texture2d_gpu: std::collections::HashMap<i32, (wgpu::Texture, wgpu::TextureView)>,
+    /// Last [`crate::assets::TextureAsset::data_version`] copied to each GPU texture; used to skip redundant uploads.
+    pub texture2d_last_uploaded_version: std::collections::HashMap<i32, u64>,
     /// Cached material bind groups for native UI draws.
     pub native_ui_material_bind_cache: NativeUiMaterialBindCache,
     /// Cached bind group 0 entries for [`crate::gpu::PipelineVariant::PbrHostAlbedo`] keyed by Texture2D asset id.
@@ -376,21 +378,32 @@ pub async fn init_gpu(
         native_ui_depth_fallback_texture: None,
         native_ui_depth_fallback_bind_group: None,
         texture2d_gpu: std::collections::HashMap::new(),
+        texture2d_last_uploaded_version: std::collections::HashMap::new(),
         native_ui_material_bind_cache: NativeUiMaterialBindCache::new(),
         pbr_host_albedo_bind_cache: std::collections::HashMap::new(),
         dual_source_blending_available,
     })
 }
 
+/// Returns true when mip0 must be copied to the GPU because the CPU revision is new or unknown.
+fn texture_gpu_needs_upload(last_uploaded: Option<u64>, asset_data_version: u64) -> bool {
+    last_uploaded.is_none_or(|v| v != asset_data_version)
+}
+
 /// Creates or updates the GPU texture for `asset_id` from CPU [`crate::assets::TextureAsset`] mip0.
+///
+/// Skips [`wgpu::Queue::write_texture`] when [`TextureAsset::data_version`](crate::assets::TextureAsset::data_version)
+/// matches `texture2d_last_uploaded_version` for `asset_id` and dimensions are unchanged.
 ///
 /// Used from [`MeshDrawParams`](crate::render::pass::mesh_draw::MeshDrawParams) so mesh recording can
 /// touch [`GpuState::texture2d_gpu`] and [`GpuState::native_ui_material_bind_cache`] without holding
 /// `&mut GpuState` alongside other partial borrows of the same state.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn ensure_texture2d_gpu_view<'a>(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     texture2d_gpu: &'a mut std::collections::HashMap<i32, (wgpu::Texture, wgpu::TextureView)>,
+    texture2d_last_uploaded_version: &mut std::collections::HashMap<i32, u64>,
     native_ui_material_bind_cache: &mut NativeUiMaterialBindCache,
     pbr_host_albedo_bind_cache: &mut std::collections::HashMap<i32, wgpu::BindGroup>,
     asset_id: i32,
@@ -408,24 +421,29 @@ pub(crate) fn ensure_texture2d_gpu_view<'a>(
     if let Some((t, _)) = texture2d_gpu.get(&asset_id) {
         let s = t.size();
         if s.width == asset.width && s.height == asset.height {
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: t,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &asset.rgba8_mip0,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bpr),
-                    rows_per_image: Some(asset.height),
-                },
-                size,
-            );
+            let last = texture2d_last_uploaded_version.get(&asset_id).copied();
+            if texture_gpu_needs_upload(last, asset.data_version) {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: t,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &asset.rgba8_mip0,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(bpr),
+                        rows_per_image: Some(asset.height),
+                    },
+                    size,
+                );
+                texture2d_last_uploaded_version.insert(asset_id, asset.data_version);
+            }
             return texture2d_gpu.get(&asset_id).map(|(_, v)| v);
         }
         texture2d_gpu.remove(&asset_id);
+        texture2d_last_uploaded_version.remove(&asset_id);
         native_ui_material_bind_cache.evict_texture(asset_id);
         pbr_host_albedo_bind_cache.remove(&asset_id);
     }
@@ -456,6 +474,7 @@ pub(crate) fn ensure_texture2d_gpu_view<'a>(
     );
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     texture2d_gpu.insert(asset_id, (tex, view));
+    texture2d_last_uploaded_version.insert(asset_id, asset.data_version);
     texture2d_gpu.get(&asset_id).map(|(_, v)| v)
 }
 
@@ -867,6 +886,7 @@ impl GpuState {
     /// Drops a GPU Texture2D and evicts native UI bind cache entries referencing it.
     pub fn drop_texture2d(&mut self, asset_id: i32) {
         self.texture2d_gpu.remove(&asset_id);
+        self.texture2d_last_uploaded_version.remove(&asset_id);
         self.native_ui_material_bind_cache.evict_texture(asset_id);
         self.pbr_host_albedo_bind_cache.remove(&asset_id);
     }
@@ -881,6 +901,7 @@ impl GpuState {
             &self.device,
             &self.queue,
             &mut self.texture2d_gpu,
+            &mut self.texture2d_last_uploaded_version,
             &mut self.native_ui_material_bind_cache,
             &mut self.pbr_host_albedo_bind_cache,
             asset_id,
@@ -891,8 +912,19 @@ impl GpuState {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_surface_extent, instance_flags_base};
+    use super::{clamp_surface_extent, instance_flags_base, texture_gpu_needs_upload};
     use wgpu::InstanceFlags;
+
+    #[test]
+    fn texture_gpu_needs_upload_false_when_version_matches() {
+        assert!(!texture_gpu_needs_upload(Some(42), 42));
+    }
+
+    #[test]
+    fn texture_gpu_needs_upload_true_when_missing_or_stale() {
+        assert!(texture_gpu_needs_upload(None, 1));
+        assert!(texture_gpu_needs_upload(Some(1), 2));
+    }
 
     #[test]
     fn instance_flags_base_toggles_validation() {

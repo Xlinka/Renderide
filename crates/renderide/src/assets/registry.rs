@@ -19,6 +19,8 @@ pub struct AssetRegistry {
     shaders: AssetManager<ShaderAsset>,
     /// Material property values per block (from MaterialsUpdateBatch).
     pub material_property_store: MaterialPropertyStore,
+    /// Next value assigned to [`TextureAsset::data_version`] on texture format/data updates.
+    texture_data_version_seq: u64,
     upload_count: u64,
     unload_count: u64,
 }
@@ -31,6 +33,7 @@ impl AssetRegistry {
             textures: AssetManager::new(),
             shaders: AssetManager::new(),
             material_property_store: MaterialPropertyStore::new(),
+            texture_data_version_seq: 0,
             upload_count: 0,
             unload_count: 0,
         }
@@ -207,12 +210,14 @@ impl AssetRegistry {
             return (false, false);
         }
         let existed_before = self.textures.contains_key(id);
+        self.texture_data_version_seq = self.texture_data_version_seq.saturating_add(1);
         let asset = TextureAsset {
             id,
             width: fmt.width as u32,
             height: fmt.height as u32,
             format: fmt.format,
             rgba8_mip0: Vec::new(),
+            data_version: self.texture_data_version_seq,
         };
         self.textures.insert(asset);
         self.upload_count += 1;
@@ -256,12 +261,14 @@ impl AssetRegistry {
             );
             return (false, false);
         };
+        self.texture_data_version_seq = self.texture_data_version_seq.saturating_add(1);
         self.textures.insert(TextureAsset {
             id,
             width: mw,
             height: mh,
             format: fmt,
             rgba8_mip0: rgba,
+            data_version: self.texture_data_version_seq,
         });
         self.upload_count += 1;
         (true, was_empty)
@@ -310,5 +317,45 @@ impl AssetRegistry {
 impl Default for AssetRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod texture_version_tests {
+    use super::AssetRegistry;
+    use crate::shared::{ColorProfile, SetTexture2DFormat, TextureFormat};
+
+    fn fmt_cmd(asset_id: i32, w: i32, h: i32) -> SetTexture2DFormat {
+        SetTexture2DFormat {
+            asset_id,
+            width: w,
+            height: h,
+            mipmap_count: 1,
+            format: TextureFormat::rgba32,
+            profile: ColorProfile::default(),
+        }
+    }
+
+    /// Each `SetTexture2DFormat` for the same id bumps [`crate::assets::TextureAsset::data_version`]
+    /// so GPU uploads are not skipped after metadata-only changes.
+    #[test]
+    fn texture_data_version_increments_on_repeated_format() {
+        let mut reg = AssetRegistry::new();
+        reg.set_texture_2d_format(fmt_cmd(7, 64, 64));
+        let v1 = reg.get_texture(7).expect("texture 7").data_version;
+        reg.set_texture_2d_format(fmt_cmd(7, 64, 64));
+        let v2 = reg.get_texture(7).expect("texture 7").data_version;
+        assert!(v2 > v1, "expected data_version to bump on second format");
+    }
+
+    /// Sequential host operations assign monotonically increasing versions across assets.
+    #[test]
+    fn texture_data_version_monotonic_across_assets() {
+        let mut reg = AssetRegistry::new();
+        reg.set_texture_2d_format(fmt_cmd(1, 8, 8));
+        let a = reg.get_texture(1).unwrap().data_version;
+        reg.set_texture_2d_format(fmt_cmd(2, 8, 8));
+        let b = reg.get_texture(2).unwrap().data_version;
+        assert!(b > a);
     }
 }

@@ -148,6 +148,8 @@ pub struct MeshDrawParams<'a> {
     pub(crate) asset_registry: &'a crate::assets::AssetRegistry,
     /// Host Texture2D GPU cache; disjoint from other fields so recording avoids `&mut GpuState`.
     pub(crate) texture2d_gpu: &'a mut HashMap<i32, (wgpu::Texture, wgpu::TextureView)>,
+    /// Last uploaded [`crate::assets::TextureAsset::data_version`] per resident GPU texture.
+    pub(crate) texture2d_last_uploaded_version: &'a mut HashMap<i32, u64>,
     /// Native UI material bind groups keyed by texture/material state.
     pub(crate) native_ui_material_bind_cache: &'a mut crate::gpu::NativeUiMaterialBindCache,
     /// Cached group-0 bind groups for [`PipelineVariant::PbrHostAlbedo`] keyed by Texture2D asset id.

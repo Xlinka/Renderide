@@ -147,6 +147,7 @@ impl RenderPass for OverlayRenderPass {
             native_ui_scene_depth_bind: native_ui_depth_bind,
             asset_registry: ctx.session.asset_registry(),
             texture2d_gpu: &mut ctx.gpu.texture2d_gpu,
+            texture2d_last_uploaded_version: &mut ctx.gpu.texture2d_last_uploaded_version,
             native_ui_material_bind_cache: &mut ctx.gpu.native_ui_material_bind_cache,
             pbr_host_albedo_bind_cache: &mut ctx.gpu.pbr_host_albedo_bind_cache,
         };

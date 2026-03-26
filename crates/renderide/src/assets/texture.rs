@@ -16,6 +16,11 @@ pub struct TextureAsset {
     pub format: TextureFormat,
     /// Decoded mip0: `width * height * 4` bytes, sRGB-ready RGBA8.
     pub rgba8_mip0: Vec<u8>,
+    /// Monotonic content revision for this row; bumps on `SetTexture2DFormat` and successful `SetTexture2DData`.
+    ///
+    /// [`crate::gpu::state::ensure_texture2d_gpu_view`] compares this to the last GPU upload so
+    /// unchanged mip0 is not re-copied every frame.
+    pub data_version: u64,
 }
 
 impl TextureAsset {
