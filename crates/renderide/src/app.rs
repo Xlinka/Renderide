@@ -270,7 +270,10 @@ struct RenderideApp {
     last_redraw: Option<Instant>,
     /// Wall-clock start of the previous `run_frame()` call, used for actual FPS tracking.
     last_frame_wall_start: Option<Instant>,
-    /// Total active work time for the previous frame (for FPS reporting to engine).
+    /// Wall-clock duration of the previous completed `run_frame` (for `PerformanceState.render_time`).
+    ///
+    /// Recorded at the end of each frame so it includes work even when the main GPU path did not
+    /// run (e.g. before the device is ready).
     last_total_us: u64,
     last_log_flush: Option<Instant>,
     frame_diagnostic: FrameDiagnostic,
@@ -369,6 +372,7 @@ impl RenderideApp {
             .set_last_frame_perf(wall_interval_us, self.last_total_us);
         if let Some(code) = self.session.update(&mut self.input) {
             self.exit_code = Some(code);
+            self.last_total_us = frame_start.elapsed().as_micros() as u64;
             return Some(code);
         }
         let session_us = frame_start.elapsed().as_micros() as u64;
@@ -412,6 +416,7 @@ impl RenderideApp {
                 Err(e) => {
                     logger::error!("GPU initialization failed: {}", e);
                     self.exit_code = Some(1);
+                    self.last_total_us = frame_start.elapsed().as_micros() as u64;
                     return Some(1);
                 }
             }
@@ -526,7 +531,6 @@ impl RenderideApp {
             self.session.send_lights_consumed_for_rendered_spaces();
 
             let total_us = frame_start.elapsed().as_micros() as u64;
-            self.last_total_us = total_us;
             self.frame_diagnostic
                 .add_frame(session_us, collect_us, render_us, present_us, total_us);
             if self.frame_diagnostic.frame_count >= DIAGNOSTIC_LOG_INTERVAL {
@@ -647,6 +651,7 @@ impl RenderideApp {
             .process_render_tasks(self.gpu.as_mut(), self.render_loop.as_mut());
 
         self.maybe_flush_logs();
+        self.last_total_us = frame_start.elapsed().as_micros() as u64;
         None
     }
 }

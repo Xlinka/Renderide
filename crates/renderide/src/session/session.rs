@@ -20,11 +20,11 @@ use crate::session::commands::{
 use crate::session::frame_data::{
     apply_clip_and_output_state, select_primary_view, validate_active_non_overlay,
 };
+use crate::session::frame_perf;
 use crate::session::init::{InitError, get_connection_parameters, take_singleton_init};
 use crate::session::state::{InitState, ViewState};
 use crate::shared::{
-    FrameStartData, FrameSubmitData, LightsBufferRendererConsumed, PerformanceState,
-    RendererCommand,
+    FrameStartData, FrameSubmitData, LightsBufferRendererConsumed, RendererCommand,
 };
 
 /// Accumulates phase times inside [`Session::collect_draw_batches_for_task`] when diagnostics are enabled.
@@ -71,8 +71,8 @@ pub struct Session {
     last_wall_interval_us: u64,
     /// Total active work time for the last frame in microseconds (for render_time reporting).
     last_total_us: u64,
-    /// Exponentially smoothed FPS value sent to the engine.
-    smoothed_fps: f32,
+    /// Exponentially smoothed FPS value sent to the engine (`None` until the first valid sample).
+    smoothed_fps: Option<f32>,
     /// Last time a `PerformanceState` was included in `frame_start_data`.
     last_perf_send: Option<Instant>,
 }
@@ -108,7 +108,7 @@ impl Session {
             resolved_lights: HashMap::new(),
             last_wall_interval_us: 0,
             last_total_us: 0,
-            smoothed_fps: 0.0,
+            smoothed_fps: None,
             last_perf_send: None,
         }
     }
@@ -310,35 +310,13 @@ impl Session {
         if let Some(ref mut m) = input.mouse {
             m.is_active = m.is_active || self.lock_cursor;
         }
-        const PERF_SEND_INTERVAL: Duration = Duration::from_secs(1);
-        const FPS_EMA_ALPHA: f32 = 0.1;
-
-        let performance = if self.last_wall_interval_us > 0 {
-            let instant_fps = 1_000_000.0 / self.last_wall_interval_us as f32;
-            if self.smoothed_fps == 0.0 {
-                self.smoothed_fps = instant_fps;
-            } else {
-                self.smoothed_fps =
-                    FPS_EMA_ALPHA * instant_fps + (1.0 - FPS_EMA_ALPHA) * self.smoothed_fps;
-            }
-            let now = Instant::now();
-            let due = self
-                .last_perf_send
-                .map_or(true, |t| now.duration_since(t) >= PERF_SEND_INTERVAL);
-            if due {
-                self.last_perf_send = Some(now);
-                Some(PerformanceState {
-                    fps: self.smoothed_fps,
-                    immediate_fps: instant_fps,
-                    render_time: self.last_total_us as f32 / 1_000_000.0,
-                    ..PerformanceState::default()
-                })
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        let performance = frame_perf::step_frame_performance(
+            self.last_wall_interval_us,
+            self.last_total_us,
+            &mut self.smoothed_fps,
+            &mut self.last_perf_send,
+            Instant::now(),
+        );
         let frame_start = FrameStartData {
             last_frame_index: self.last_frame_index,
             performance,
