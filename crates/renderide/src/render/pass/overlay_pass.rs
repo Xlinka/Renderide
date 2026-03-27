@@ -19,6 +19,15 @@
 //! phases can read/write stencil across draws. Per draw, the pass calls
 //! `set_stencil_reference(stencil_state.reference)` before the draw. See
 //! [`crate::stencil`] for GraphicsChunk RenderType (MaskWrite, Content, MaskClear).
+//!
+//! ## Native UI `OVERLAY` keyword
+//!
+//! When [`crate::config::RenderConfig::use_native_ui_wgsl`] is on, this pass copies the main
+//! depth-stencil buffer into a UI-only texture (`TextureAspect::All` copy per WebGPU rules), exposes
+//! a **depth-only** view for `texture_depth_2d` (group 1 binding 0) plus overlay unproject
+//! uniforms (binding 1), and passes that bind group into
+//! [`super::mesh_draw::MeshDrawParams::native_ui_scene_depth_bind`] so `UI_Unlit` / `UI_TextUnlit`
+//! can match Unity’s `_CameraDepthTexture` sampling for the OVERLAY path.
 
 use super::mesh_draw::{MeshDrawParams, record_non_skinned_draws, record_skinned_draws};
 use super::{PassResources, RenderPass, RenderPassContext, RenderPassError, ResourceSlot};
@@ -61,6 +70,49 @@ impl RenderPass for OverlayRenderPass {
             return Ok(());
         }
 
+        let render_config = ctx.session.render_config();
+        let mut native_ui_depth_bind = None;
+        if render_config.use_native_ui_wgsl {
+            let (vw, vh) = ctx.viewport;
+            if ctx.gpu.depth_size == (vw, vh) && ctx.gpu.depth_texture.is_some() {
+                ctx.gpu.ensure_ui_depth_copy_texture(vw, vh);
+                if let (Some(src_tex), Some(dst_tex)) = (
+                    ctx.gpu.depth_texture.as_ref(),
+                    ctx.gpu.ui_depth_copy_texture.as_ref(),
+                ) {
+                    // Depth24PlusStencil8 copies must use `All` aspects on source (and destination);
+                    // the bindable view for sampling is still depth-only (`ui_depth_copy_view`).
+                    ctx.encoder.copy_texture_to_texture(
+                        wgpu::TexelCopyTextureInfo {
+                            texture: src_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::TexelCopyTextureInfo {
+                            texture: dst_tex,
+                            mip_level: 0,
+                            origin: wgpu::Origin3d::ZERO,
+                            aspect: wgpu::TextureAspect::All,
+                        },
+                        wgpu::Extent3d {
+                            width: vw,
+                            height: vh,
+                            depth_or_array_layers: 1,
+                        },
+                    );
+                }
+                let ui_proj = ctx
+                    .overlay_projection_override
+                    .map(|v| v.to_projection_matrix())
+                    .unwrap_or(ctx.proj);
+                ctx.gpu
+                    .update_native_ui_overlay_unproject(&ctx.proj, &ui_proj);
+                ctx.gpu.ensure_native_ui_scene_depth_bind_group();
+                native_ui_depth_bind = ctx.gpu.native_ui_scene_depth_bind_group.as_ref();
+            }
+        }
+
         let overlay_orthographic = ctx.overlay_projection_override.is_some();
         let light_buffer_version = ctx.gpu.light_buffer_cache.version;
         let cluster_buffer_version = ctx.gpu.cluster_buffer_cache.version;
@@ -90,6 +142,14 @@ impl RenderPass for OverlayRenderPass {
                 .gpu
                 .last_pbr_scene_cache_rt_shadow_atlas_generation,
             rt_shadow_bind: None,
+            material_property_store: &ctx.session.asset_registry().material_property_store,
+            render_config,
+            native_ui_scene_depth_bind: native_ui_depth_bind,
+            asset_registry: ctx.session.asset_registry(),
+            texture2d_gpu: &mut ctx.gpu.texture2d_gpu,
+            texture2d_last_uploaded_version: &mut ctx.gpu.texture2d_last_uploaded_version,
+            native_ui_material_bind_cache: &mut ctx.gpu.native_ui_material_bind_cache,
+            pbr_host_albedo_bind_cache: &mut ctx.gpu.pbr_host_albedo_bind_cache,
         };
 
         let mut pass = ctx.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

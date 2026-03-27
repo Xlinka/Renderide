@@ -6,11 +6,9 @@
 
 use std::mem::size_of;
 
-use nalgebra::Matrix4;
-
 use super::super::mesh::{GpuMeshBuffers, VertexPosNormal};
 use super::builder;
-use super::core::{RenderPipeline, UniformData};
+use super::core::{NonSkinnedUniformUpload, RenderPipeline, UniformData};
 use super::pbr::PbrPipeline;
 use super::ring_buffer::UniformRingBuffer;
 use super::shaders::PBR_MRT_SHADER_SRC;
@@ -124,6 +122,10 @@ impl PbrMRTPipeline {
 }
 
 impl RenderPipeline for PbrMRTPipeline {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
         pass.set_pipeline(&self.pipeline);
     }
@@ -154,7 +156,7 @@ impl RenderPipeline for PbrMRTPipeline {
         _uniforms: &UniformData<'_>,
     ) {
         self.set_mesh_buffers(pass, buffers);
-        self.draw_mesh_indexed(pass, buffers);
+        self.draw_mesh_indexed(pass, buffers, None);
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
@@ -163,8 +165,13 @@ impl RenderPipeline for PbrMRTPipeline {
         pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
-    fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.draw_ranges() {
+    fn draw_mesh_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &GpuMeshBuffers,
+        index_range_override: Option<(u32, u32)>,
+    ) {
+        for &(index_start, index_count) in &buffers.effective_draw_ranges(index_range_override) {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }
@@ -178,8 +185,9 @@ impl RenderPipeline for PbrMRTPipeline {
         pass: &mut wgpu::RenderPass,
         buffers: &GpuMeshBuffers,
         instance_count: u32,
+        index_range_override: Option<(u32, u32)>,
     ) {
-        for &(index_start, index_count) in &buffers.draw_ranges() {
+        for &(index_start, index_count) in &buffers.effective_draw_ranges(index_range_override) {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..instance_count);
         }
     }
@@ -187,10 +195,10 @@ impl RenderPipeline for PbrMRTPipeline {
     fn upload_batch(
         &self,
         queue: &wgpu::Queue,
-        mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        draws: &[NonSkinnedUniformUpload],
         frame_index: u64,
     ) {
-        self.uniform_ring.upload(queue, mvp_models, frame_index);
+        self.uniform_ring.upload(queue, draws, frame_index);
     }
 
     fn write_scene_uniform(&self, queue: &wgpu::Queue, scene: &[u8]) {

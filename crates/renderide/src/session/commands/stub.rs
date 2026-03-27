@@ -50,6 +50,12 @@ impl CommandHandler for StubCommandHandler {
             | RendererCommand::mesh_upload_data(_)
             | RendererCommand::mesh_unload(_)
             | RendererCommand::shader_upload(_)
+            | RendererCommand::shader_unload(_)
+            | RendererCommand::set_texture_2d_format(_)
+            | RendererCommand::set_texture_2d_properties(_)
+            | RendererCommand::set_texture_2d_data(_)
+            | RendererCommand::set_texture_2d_result(_)
+            | RendererCommand::unload_texture_2d(_)
             | RendererCommand::desktop_config(_)
             | RendererCommand::free_shared_memory_view(_)
             | RendererCommand::keep_alive(_)
@@ -58,7 +64,9 @@ impl CommandHandler for StubCommandHandler {
             | RendererCommand::renderer_init_result(_)
             | RendererCommand::frame_start_data(_)
             | RendererCommand::unload_material(_)
-            | RendererCommand::unload_material_property_block(_) => {
+            | RendererCommand::unload_material_property_block(_)
+            | RendererCommand::material_property_id_request(_)
+            | RendererCommand::materials_update_batch(_) => {
                 unreachable!("command handled by earlier handler")
             }
 
@@ -103,42 +111,13 @@ impl CommandHandler for StubCommandHandler {
             RendererCommand::mesh_upload_result(_) => CommandResult::Handled,
 
             // --- Shaders ---
-            RendererCommand::shader_unload(_) => {
-                self.log_once("shader_unload");
-                CommandResult::Handled
-            }
             RendererCommand::shader_upload_result(_) => CommandResult::Handled,
 
             // --- Materials ---
-            RendererCommand::material_property_id_request(_) => {
-                self.log_once("material_property_id_request");
-                CommandResult::Handled
-            }
             RendererCommand::material_property_id_result(_) => CommandResult::Handled,
-            RendererCommand::materials_update_batch(_) => {
-                self.log_once("materials_update_batch");
-                CommandResult::Handled
-            }
             RendererCommand::materials_update_batch_result(_) => CommandResult::Handled,
 
-            // --- Textures 2D ---
-            RendererCommand::set_texture_2d_format(_) => {
-                self.log_once("set_texture_2d_format");
-                CommandResult::Handled
-            }
-            RendererCommand::set_texture_2d_properties(_) => {
-                self.log_once("set_texture_2d_properties");
-                CommandResult::Handled
-            }
-            RendererCommand::set_texture_2d_data(_) => {
-                self.log_once("set_texture_2d_data");
-                CommandResult::Handled
-            }
-            RendererCommand::set_texture_2d_result(_) => CommandResult::Handled,
-            RendererCommand::unload_texture_2d(_) => {
-                self.log_once("unload_texture_2d");
-                CommandResult::Handled
-            }
+            // --- Textures 2D --- (handled by TextureCommandHandler)
 
             // --- Textures 3D ---
             RendererCommand::set_texture_3d_format(_) => {

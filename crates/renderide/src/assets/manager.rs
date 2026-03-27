@@ -26,6 +26,11 @@ impl<T: Asset> AssetManager<T> {
         self.assets.get(&id)
     }
 
+    /// Returns a mutable reference to the asset with the given id, if present.
+    pub fn get_mut(&mut self, id: AssetId) -> Option<&mut T> {
+        self.assets.get_mut(&id)
+    }
+
     /// Inserts an asset, using its `id()` as the key.
     /// Returns the previous asset if one existed.
     pub fn insert(&mut self, asset: T) -> Option<T> {
@@ -41,6 +46,11 @@ impl<T: Asset> AssetManager<T> {
     /// Returns the number of assets in this manager.
     pub fn len(&self) -> usize {
         self.assets.len()
+    }
+
+    /// Iterates over all stored assets (hash map iteration order is undefined).
+    pub fn values(&self) -> impl Iterator<Item = &T> + '_ {
+        self.assets.values()
     }
 
     /// Returns true if no assets are stored.

@@ -435,8 +435,15 @@ impl RenderideApp {
                     crate::gpu::remove_blas(accel, asset_id);
                 }
             }
+            for tex_id in self.session.drain_pending_texture_unloads() {
+                gpu.drop_texture2d(tex_id);
+            }
             for material_id in self.session.drain_pending_material_unloads() {
                 render_loop.evict_material(material_id);
+            }
+            let surface_format = gpu.config.format;
+            for shader_id in self.session.drain_pending_shader_unloads() {
+                render_loop.evict_host_unlit_shader(shader_id, surface_format);
             }
             let t1 = Instant::now();
             let main_view_input = MainViewFrameInput::from_session(&mut self.session);
@@ -596,6 +603,7 @@ impl RenderideApp {
                 })
                 .unwrap_or_default();
             let rc = self.session.render_config();
+            let reg = self.session.asset_registry();
             let live_sample = LiveFrameDiagnostics {
                 frame_index: self.session.last_frame_index(),
                 viewport: (gpu.config.width.max(1), gpu.config.height.max(1)),
@@ -619,6 +627,9 @@ impl RenderideApp {
                 mesh_cache_count: gpu.mesh_buffer_cache.len(),
                 pending_render_tasks: self.session.pending_render_task_count(),
                 pending_camera_task_readbacks: render_loop.pending_camera_task_readback_count(),
+                textures_cpu_registered: reg.texture_2d_count(),
+                textures_cpu_ready_for_gpu: reg.texture_2d_ready_for_gpu_count(),
+                textures_gpu_resident: gpu.texture2d_gpu.len(),
                 // Lights
                 gpu_light_count: gpu.light_count,
                 // RT / RTAO
@@ -639,6 +650,12 @@ impl RenderideApp {
                 adapter_info: gpu.adapter_info.clone(),
                 gpu_allocator,
                 host,
+                native_ui_routing_metrics: rc.native_ui_routing_metrics.then(
+                    crate::session::native_ui_routing_metrics::NativeUiRoutingFrameMetrics::snapshot_and_reset,
+                ),
+                material_batch_wire_metrics: rc.material_batch_wire_metrics.then(
+                    crate::assets::material_batch_wire_metrics::MaterialBatchWireFrameMetrics::snapshot_and_reset,
+                ),
             };
             if let Some(debug_hud) = self.debug_hud.as_mut() {
                 debug_hud.update(live_sample);

@@ -30,6 +30,25 @@ pub type NodeId = i32;
 /// Transform: position, scale, rotation. Alias for host RenderTransform.
 pub type Transform = RenderTransform;
 
+/// One mesh renderer material slot from host shared-memory `mesh_materials_and_property_blocks`.
+///
+/// Matches Renderite consumption order: `materialCount` material asset ids, then when
+/// `materialPropertyBlockCount >= 0`, that many property-block ids; slot `k` uses material `k` and
+/// optional override block `k` when present.
+///
+/// ## `material_count` vs mesh submesh count
+///
+/// The host should align material slots with mesh submeshes. When counts differ, multi-material
+/// collection pairs by submesh index: extra materials are ignored; missing slots reuse the last
+/// material.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MeshMaterialSlot {
+    /// Host material asset id (`MeshRenderer.sharedMaterials[k]`).
+    pub material_asset_id: i32,
+    /// Per-slot `MaterialPropertyBlock` asset id when the host sent a block for this index.
+    pub property_block_id: Option<i32>,
+}
+
 /// Viewport dimensions.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Viewport {
@@ -133,6 +152,11 @@ pub struct Drawable {
     /// Material override block ID for stencil lookup. Set from RenderMaterialOverridesUpdate when
     /// the host sends material override states; used for later stencil/property block binding.
     pub material_override_block_id: Option<i32>,
+    /// First per-slot `MaterialPropertyBlock` asset id from `mesh_materials_and_property_blocks`
+    /// (Renderite `MeshRendererManager`), when `materialPropertyBlockCount >= 0`.
+    pub mesh_renderer_property_block_slot0_id: Option<i32>,
+    /// All material and optional per-slot property-block ids from the mesh update (Unity order).
+    pub material_slots: Vec<MeshMaterialSlot>,
     /// Per-skinned-mesh-renderer transform override (e.g. cloud-spawned avatars). When set,
     /// replaces the node's world matrix when rendering. From RenderTransformOverridesUpdate.
     pub render_transform_override: Option<RenderTransform>,
@@ -155,6 +179,8 @@ impl Default for Drawable {
             blend_shape_weights: None,
             stencil_state: None,
             material_override_block_id: None,
+            mesh_renderer_property_block_slot0_id: None,
+            material_slots: Vec::new(),
             render_transform_override: None,
             shadow_cast_mode: ShadowCastMode::on,
         }

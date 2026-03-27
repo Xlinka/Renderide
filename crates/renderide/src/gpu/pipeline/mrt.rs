@@ -9,7 +9,7 @@ use nalgebra::Matrix4;
 
 use super::super::mesh::{GpuMeshBuffers, VertexPosNormal, VertexSkinned, VertexWithUv};
 use super::builder;
-use super::core::{RenderPipeline, UNIFORM_ALIGNMENT, UniformData};
+use super::core::{NonSkinnedUniformUpload, RenderPipeline, UNIFORM_ALIGNMENT, UniformData};
 use super::ring_buffer::{SkinnedUniformRingBuffer, UniformRingBuffer};
 use super::shaders::{
     NORMAL_DEBUG_MRT_SHADER_SRC, SKINNED_MRT_SHADER_SRC, UV_DEBUG_MRT_SHADER_SRC,
@@ -80,6 +80,10 @@ pub(crate) const MRT_NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R
 macro_rules! impl_non_skinned_mrt_pipeline {
     ($ty:ty, $buf_method:ident) => {
         impl RenderPipeline for $ty {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
             fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
                 pass.set_pipeline(&self.pipeline);
             }
@@ -104,7 +108,7 @@ macro_rules! impl_non_skinned_mrt_pipeline {
                 _uniforms: &UniformData<'_>,
             ) {
                 self.set_mesh_buffers(pass, buffers);
-                self.draw_mesh_indexed(pass, buffers);
+                self.draw_mesh_indexed(pass, buffers, None);
             }
 
             fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
@@ -113,8 +117,15 @@ macro_rules! impl_non_skinned_mrt_pipeline {
                 pass.set_index_buffer(ib.slice(..), buffers.index_format);
             }
 
-            fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-                for &(index_start, index_count) in &buffers.draw_ranges() {
+            fn draw_mesh_indexed(
+                &self,
+                pass: &mut wgpu::RenderPass,
+                buffers: &GpuMeshBuffers,
+                index_range_override: Option<(u32, u32)>,
+            ) {
+                for &(index_start, index_count) in
+                    &buffers.effective_draw_ranges(index_range_override)
+                {
                     pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
                 }
             }
@@ -128,8 +139,11 @@ macro_rules! impl_non_skinned_mrt_pipeline {
                 pass: &mut wgpu::RenderPass,
                 buffers: &GpuMeshBuffers,
                 instance_count: u32,
+                index_range_override: Option<(u32, u32)>,
             ) {
-                for &(index_start, index_count) in &buffers.draw_ranges() {
+                for &(index_start, index_count) in
+                    &buffers.effective_draw_ranges(index_range_override)
+                {
                     pass.draw_indexed(index_start..index_start + index_count, 0, 0..instance_count);
                 }
             }
@@ -137,10 +151,10 @@ macro_rules! impl_non_skinned_mrt_pipeline {
             fn upload_batch(
                 &self,
                 queue: &wgpu::Queue,
-                mvp_models: &[(nalgebra::Matrix4<f32>, nalgebra::Matrix4<f32>)],
+                draws: &[NonSkinnedUniformUpload],
                 frame_index: u64,
             ) {
-                self.uniform_ring.upload(queue, mvp_models, frame_index);
+                self.uniform_ring.upload(queue, draws, frame_index);
             }
         }
     };
@@ -421,6 +435,10 @@ impl SkinnedMRTPipeline {
 }
 
 impl RenderPipeline for SkinnedMRTPipeline {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
         pass.set_pipeline(&self.pipeline);
     }
@@ -454,7 +472,7 @@ impl RenderPipeline for SkinnedMRTPipeline {
         _uniforms: &UniformData<'_>,
     ) {
         self.set_skinned_buffers(pass, buffers);
-        self.draw_skinned_indexed(pass, buffers);
+        self.draw_skinned_indexed(pass, buffers, None);
     }
 
     fn set_skinned_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
@@ -465,8 +483,13 @@ impl RenderPipeline for SkinnedMRTPipeline {
         pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
-    fn draw_skinned_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.draw_ranges() {
+    fn draw_skinned_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &GpuMeshBuffers,
+        index_range_override: Option<(u32, u32)>,
+    ) {
+        for &(index_start, index_count) in &buffers.effective_draw_ranges(index_range_override) {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }

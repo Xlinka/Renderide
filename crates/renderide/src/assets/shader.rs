@@ -1,17 +1,20 @@
-//! Shader asset type. Stub for host-uploaded WGSL shaders.
+//! Shader asset type for host shader uploads and logical name resolution for pipeline routing.
 //!
-//! Extension point for shader_upload command handling.
+//! Filled by [`super::AssetRegistry::handle_shader_upload`].
 
 use super::Asset;
 use super::AssetId;
 
 /// Stored shader data for pipeline creation.
-/// Stub: WGSL source populated when shader_upload is implemented.
 pub struct ShaderAsset {
     /// Unique identifier for this shader.
     pub id: AssetId,
-    /// Optional WGSL source. Populated when shader_upload provides it.
+    /// Raw contents of the host [`crate::shared::ShaderUpload::file`] field: filesystem path, logical stem
+    /// label, or legacy inline ShaderLab / WGSL text — not necessarily WGSL source.
     pub wgsl_source: Option<String>,
+    /// Unity ShaderLab logical name (`Shader "UI/Unlit"`) from parsed ShaderLab/WGSL text, file contents,
+    /// or an optional host hint when your IPC layer supplies one (see [`crate::shared::shader_upload_extras`]).
+    pub unity_shader_name: Option<String>,
 }
 
 impl Asset for ShaderAsset {

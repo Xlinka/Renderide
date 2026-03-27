@@ -7,6 +7,7 @@ pub mod commands;
 pub mod frame_data;
 pub(crate) mod frame_perf;
 pub mod init;
+pub mod native_ui_routing_metrics;
 pub mod session;
 pub mod state;
 

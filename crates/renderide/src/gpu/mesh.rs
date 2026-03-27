@@ -32,6 +32,34 @@ pub struct VertexPosNormal {
     pub normal: [f32; 3],
 }
 
+/// Position, normal, and UV0 for host-albedo forward PBR (`PipelineVariant::PbrHostAlbedo`).
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct VertexPosNormalUv {
+    pub position: [f32; 3],
+    pub normal: [f32; 3],
+    pub uv: [f32; 2],
+}
+
+/// Interleaved vertex for Resonite Canvas / `UI_Unlit` and `UI_TextUnlit` (position, UV, color, aux).
+///
+/// `aux` stores `TANGENT` (lerp color) for image UI when tangents are present, otherwise `NORMAL`
+/// (SDF per-vertex dilate/outline bias in xyz, matching the NORMAL slot used as extra data for UI
+/// text shaders). UI text glyph meshes from the host typically include normals for this data and
+/// omit tangents, so `aux` is taken from the normal stream for text.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+pub struct VertexUiCanvas {
+    /// Object-space position.
+    pub position: [f32; 3],
+    /// UV0.
+    pub uv: [f32; 2],
+    /// Vertex color (tint multiplier), linear or sRGB per host.
+    pub color: [f32; 4],
+    /// `UI_Unlit`: lerp color from tangent; `UI_TextUnlit`: packed extra data from normal.xyz.
+    pub aux: [f32; 4],
+}
+
 /// Skinned vertex: position, normal, tangent, bone indices (4), bone weights (4).
 ///
 /// Tangent is used for blendshape tangent_offset application and normal mapping. Defaults to
@@ -199,6 +227,114 @@ fn read_uv(
     }
 }
 
+/// Reads a linear RGBA color (float32×4) from vertex data.
+fn read_color_float4(
+    data: &[u8],
+    base: usize,
+    offset: usize,
+    format: VertexAttributeFormat,
+) -> Option<[f32; 4]> {
+    match format {
+        VertexAttributeFormat::float32 => {
+            if base + offset + 16 <= data.len() {
+                Some([
+                    f32::from_le_bytes(data[base + offset..base + offset + 4].try_into().ok()?),
+                    f32::from_le_bytes(data[base + offset + 4..base + offset + 8].try_into().ok()?),
+                    f32::from_le_bytes(
+                        data[base + offset + 8..base + offset + 12]
+                            .try_into()
+                            .ok()?,
+                    ),
+                    f32::from_le_bytes(
+                        data[base + offset + 12..base + offset + 16]
+                            .try_into()
+                            .ok()?,
+                    ),
+                ])
+            } else {
+                None
+            }
+        }
+        VertexAttributeFormat::u_norm8 => {
+            if base + offset + 4 <= data.len() {
+                Some([
+                    data[base + offset] as f32 / 255.0,
+                    data[base + offset + 1] as f32 / 255.0,
+                    data[base + offset + 2] as f32 / 255.0,
+                    data[base + offset + 3] as f32 / 255.0,
+                ])
+            } else {
+                None
+            }
+        }
+        VertexAttributeFormat::half16 => {
+            if base + offset + 8 <= data.len() {
+                Some([
+                    half_to_f32(u16::from_le_bytes(
+                        data[base + offset..base + offset + 2].try_into().ok()?,
+                    )),
+                    half_to_f32(u16::from_le_bytes(
+                        data[base + offset + 2..base + offset + 4].try_into().ok()?,
+                    )),
+                    half_to_f32(u16::from_le_bytes(
+                        data[base + offset + 4..base + offset + 6].try_into().ok()?,
+                    )),
+                    half_to_f32(u16::from_le_bytes(
+                        data[base + offset + 6..base + offset + 8].try_into().ok()?,
+                    )),
+                ])
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Reads a vec4 (tangent / packed data) from vertex data.
+fn read_vec4_f32(
+    data: &[u8],
+    base: usize,
+    offset: usize,
+    format: VertexAttributeFormat,
+) -> Option<[f32; 4]> {
+    match format {
+        VertexAttributeFormat::float32 => {
+            if base + offset + 16 <= data.len() {
+                Some([
+                    f32::from_le_bytes(data[base + offset..base + offset + 4].try_into().ok()?),
+                    f32::from_le_bytes(data[base + offset + 4..base + offset + 8].try_into().ok()?),
+                    f32::from_le_bytes(
+                        data[base + offset + 8..base + offset + 12]
+                            .try_into()
+                            .ok()?,
+                    ),
+                    f32::from_le_bytes(
+                        data[base + offset + 12..base + offset + 16]
+                            .try_into()
+                            .ok()?,
+                    ),
+                ])
+            } else {
+                None
+            }
+        }
+        VertexAttributeFormat::u_norm8 => {
+            if base + offset + 4 <= data.len() {
+                Some([
+                    data[base + offset] as f32 / 255.0,
+                    data[base + offset + 1] as f32 / 255.0,
+                    data[base + offset + 2] as f32 / 255.0,
+                    data[base + offset + 3] as f32 / 255.0,
+                ])
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Convert IEEE 754 half-precision (f16) to f32.
 fn half_to_f32(h: u16) -> f32 {
     let sign = (h >> 15) as u32;
@@ -349,11 +485,31 @@ fn fallback_cube_with_uv() -> (Vec<VertexWithUv>, Vec<u16>) {
 
 // MeshPipeline removed — see gpu::pipeline::PipelineManager and concrete pipelines.
 
+/// Merges contiguous `(index_start, index_count)` tuples for fewer draw calls; otherwise returns
+/// a copy of `submeshes`.
+pub(crate) fn merge_contiguous_submesh_ranges(submeshes: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    if submeshes.len() <= 1 {
+        return submeshes.to_vec();
+    }
+    let contiguous = submeshes.windows(2).all(|w| w[0].0 + w[0].1 == w[1].0);
+    if contiguous {
+        let first = submeshes[0].0;
+        let total_count: u32 = submeshes.iter().map(|(_, c)| c).sum();
+        vec![(first, total_count)]
+    } else {
+        submeshes.to_vec()
+    }
+}
+
 /// Cached wgpu buffers for a mesh asset.
 #[derive(Clone)]
 pub struct GpuMeshBuffers {
     pub vertex_buffer: Arc<wgpu::Buffer>,
+    /// Interleaved position + normal + UV0 when the mesh has UV0 (for [`crate::gpu::PipelineVariant::PbrHostAlbedo`]).
+    pub vertex_buffer_pos_normal_uv: Option<Arc<wgpu::Buffer>>,
     pub vertex_buffer_uv: Option<Arc<wgpu::Buffer>>,
+    /// Canvas / UI layout: position, uv0, color, aux (tangent or text normal data).
+    pub vertex_buffer_ui: Option<Arc<wgpu::Buffer>>,
     pub vertex_buffer_skinned: Option<Arc<wgpu::Buffer>>,
     pub index_buffer: Arc<wgpu::Buffer>,
     pub submeshes: Vec<(u32, u32)>,
@@ -373,6 +529,15 @@ impl GpuMeshBuffers {
         (self.vertex_buffer.as_ref(), self.index_buffer.as_ref())
     }
 
+    /// Returns position+normal+UV and index buffers when [`Self::vertex_buffer_pos_normal_uv`] exists.
+    #[inline(always)]
+    pub fn pos_normal_uv_buffers(&self) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        Some((
+            self.vertex_buffer_pos_normal_uv.as_ref()?.as_ref(),
+            self.index_buffer.as_ref(),
+        ))
+    }
+
     /// Returns references to the vertex and index buffers for UV/overlay draws.
     ///
     /// Prefers UV vertex buffer when present. Caches Arc deref to reduce overhead in hot paths.
@@ -385,6 +550,12 @@ impl GpuMeshBuffers {
             .unwrap_or(self.vertex_buffer.as_ref());
         let ib = self.index_buffer.as_ref();
         (vb, ib)
+    }
+
+    /// Returns UI canvas vertex and index buffers when [`Self::vertex_buffer_ui`] was built.
+    pub fn ui_canvas_buffers(&self) -> Option<(&wgpu::Buffer, &wgpu::Buffer)> {
+        let vb = self.vertex_buffer_ui.as_ref()?.as_ref();
+        Some((vb, self.index_buffer.as_ref()))
     }
 
     /// Returns references to the skinned vertex and index buffers.
@@ -402,18 +573,48 @@ impl GpuMeshBuffers {
     /// When submeshes are contiguous in the index buffer, merges them into a single range
     /// to reduce draw calls. Otherwise returns per-submesh ranges.
     pub fn draw_ranges(&self) -> Vec<(u32, u32)> {
-        let sub = &self.submeshes;
-        if sub.len() <= 1 {
-            return sub.to_vec();
-        }
-        let contiguous = sub.windows(2).all(|w| w[0].0 + w[0].1 == w[1].0);
-        if contiguous {
-            let first = sub[0].0;
-            let total_count: u32 = sub.iter().map(|(_, c)| c).sum();
-            vec![(first, total_count)]
+        merge_contiguous_submesh_ranges(&self.submeshes)
+    }
+
+    /// Per-submesh index ranges as uploaded (no contiguous merge). For multi-material draws.
+    pub fn draw_ranges_per_submesh(&self) -> Vec<(u32, u32)> {
+        self.submeshes.clone()
+    }
+
+    /// Indexed draw ranges for this mesh instance.
+    ///
+    /// When `index_range_override` is `Some` and `count > 0`, returns that single range only.
+    /// Otherwise returns [`Self::draw_ranges`].
+    pub fn effective_draw_ranges(
+        &self,
+        index_range_override: Option<(u32, u32)>,
+    ) -> Vec<(u32, u32)> {
+        if let Some((start, count)) = index_range_override {
+            if count > 0 {
+                vec![(start, count)]
+            } else {
+                vec![]
+            }
         } else {
-            sub.to_vec()
+            self.draw_ranges()
         }
+    }
+}
+
+#[cfg(test)]
+mod draw_range_tests {
+    use super::merge_contiguous_submesh_ranges;
+
+    #[test]
+    fn merge_contiguous_submesh_ranges_combines() {
+        let merged = merge_contiguous_submesh_ranges(&[(0, 6), (6, 6)]);
+        assert_eq!(merged, vec![(0, 12)]);
+    }
+
+    #[test]
+    fn merge_contiguous_submesh_ranges_preserves_gap() {
+        let merged = merge_contiguous_submesh_ranges(&[(0, 6), (10, 6)]);
+        assert_eq!(merged, vec![(0, 6), (10, 6)]);
     }
 }
 
@@ -448,6 +649,10 @@ pub fn create_mesh_buffers(
         assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::normal);
     let uv_info =
         assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::uv0);
+    let color_info =
+        assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::color);
+    let tangent_info =
+        assets::attribute_offset_size_format(&mesh.vertex_attributes, VertexAttributeType::tangent);
 
     let (pos_off, _) = pos_info;
     let (normal_off, normal_size, normal_format) =
@@ -460,6 +665,18 @@ pub fn create_mesh_buffers(
 
     let mut vertices = Vec::with_capacity(mesh.vertex_count as usize);
     let mut vertices_uv: Option<Vec<VertexWithUv>> = if has_uvs {
+        Some(Vec::with_capacity(mesh.vertex_count as usize))
+    } else {
+        None
+    };
+    // Native UI canvas buffers when UV0 exists; vertex color defaults to white if absent.
+    let build_ui_vertices = has_uvs;
+    let mut vertices_ui: Option<Vec<VertexUiCanvas>> = if build_ui_vertices {
+        Some(Vec::with_capacity(mesh.vertex_count as usize))
+    } else {
+        None
+    };
+    let mut vertices_pos_normal_uv: Option<Vec<VertexPosNormalUv>> = if has_uvs {
         Some(Vec::with_capacity(mesh.vertex_count as usize))
     } else {
         None
@@ -514,6 +731,61 @@ pub fn create_mesh_buffers(
                 uv,
             });
         }
+
+        if let Some(ref mut v_pnu) = vertices_pos_normal_uv {
+            let uv = if uv_size > 0 {
+                read_uv(&mesh.vertex_data, base, uv_off, uv_format).unwrap_or(default_uv)
+            } else {
+                default_uv
+            };
+            v_pnu.push(VertexPosNormalUv {
+                position: [px, py, pz],
+                normal,
+                uv,
+            });
+        }
+
+        if let Some(v_ui) = &mut vertices_ui {
+            let color = if let Some((c_off, c_size, c_fmt)) = color_info {
+                if c_size > 0 {
+                    read_color_float4(&mesh.vertex_data, base, c_off, c_fmt)
+                        .unwrap_or([1.0, 1.0, 1.0, 1.0])
+                } else {
+                    [1.0, 1.0, 1.0, 1.0]
+                }
+            } else {
+                [1.0, 1.0, 1.0, 1.0]
+            };
+            let uv = if uv_size > 0 {
+                read_uv(&mesh.vertex_data, base, uv_off, uv_format).unwrap_or(default_uv)
+            } else {
+                default_uv
+            };
+            let aux = if let Some((t_off, t_size, t_fmt)) = tangent_info {
+                if t_size >= 16 {
+                    read_vec4_f32(&mesh.vertex_data, base, t_off, t_fmt)
+                        .unwrap_or([0.0, 0.0, 0.0, 1.0])
+                } else if t_size >= 12 {
+                    let t =
+                        read_vec3(&mesh.vertex_data, base, t_off, t_fmt).unwrap_or(default_normal);
+                    [t[0], t[1], t[2], 1.0]
+                } else {
+                    [0.0, 0.0, 0.0, 1.0]
+                }
+            } else if normal_size > 0 {
+                let n = read_vec3(&mesh.vertex_data, base, normal_off, normal_format)
+                    .unwrap_or(default_normal);
+                [n[0], n[1], n[2], 0.0]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            };
+            v_ui.push(VertexUiCanvas {
+                position: [px, py, pz],
+                uv,
+                color,
+                aux,
+            });
+        }
     }
 
     if vertices.len() < 3 {
@@ -536,6 +808,30 @@ pub fn create_mesh_buffers(
                 usage: wgpu::BufferUsages::VERTEX,
             }),
         )
+    });
+
+    let vertex_buffer_pos_normal_uv = vertices_pos_normal_uv.map(|v| {
+        Arc::new(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("mesh vertex buffer (pos+normal+uv)"),
+                contents: bytemuck::cast_slice(&v),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        )
+    });
+
+    let vertex_buffer_ui = vertices_ui.and_then(|v_ui| {
+        if v_ui.len() < 3 {
+            None
+        } else {
+            Some(Arc::new(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("mesh vertex buffer (ui canvas)"),
+                    contents: bytemuck::cast_slice(&v_ui),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            )))
+        }
     });
 
     let (index_data, index_format, index_count) = match mesh.index_format {
@@ -651,7 +947,9 @@ pub fn create_mesh_buffers(
 
     Some(GpuMeshBuffers {
         vertex_buffer,
+        vertex_buffer_pos_normal_uv,
         vertex_buffer_uv,
+        vertex_buffer_ui,
         vertex_buffer_skinned,
         index_buffer,
         submeshes,

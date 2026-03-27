@@ -52,6 +52,53 @@ impl CommandHandler for ConfigCommandHandler {
                     log_collect_draw_batches_timing: ctx
                         .render_config
                         .log_collect_draw_batches_timing,
+                    use_host_unlit_pilot: ctx.render_config.use_host_unlit_pilot,
+                    fullscreen_filter_hook: ctx.render_config.fullscreen_filter_hook,
+                    shader_debug_override: ctx.render_config.shader_debug_override,
+                    use_native_ui_wgsl: ctx.render_config.use_native_ui_wgsl,
+                    native_ui_unlit_shader_id: ctx.render_config.native_ui_unlit_shader_id,
+                    native_ui_text_unlit_shader_id: ctx
+                        .render_config
+                        .native_ui_text_unlit_shader_id,
+                    ui_unlit_property_ids: ctx.render_config.ui_unlit_property_ids.clone(),
+                    ui_text_unlit_property_ids: ctx
+                        .render_config
+                        .ui_text_unlit_property_ids
+                        .clone(),
+                    native_ui_world_space: ctx.render_config.native_ui_world_space,
+                    native_ui_overlay_stencil_pipelines: ctx
+                        .render_config
+                        .native_ui_overlay_stencil_pipelines,
+                    log_native_ui_routing: ctx.render_config.log_native_ui_routing,
+                    log_ui_unlit_material_inventory: ctx
+                        .render_config
+                        .log_ui_unlit_material_inventory,
+                    native_ui_routing_metrics: ctx.render_config.native_ui_routing_metrics,
+                    material_batch_wire_metrics: ctx.render_config.material_batch_wire_metrics,
+                    material_batch_persist_extended_payloads: ctx
+                        .render_config
+                        .material_batch_persist_extended_payloads,
+                    native_ui_uivert_pbr_fallback: ctx.render_config.native_ui_uivert_pbr_fallback,
+                    native_ui_force_shader_hint_registration: ctx
+                        .render_config
+                        .native_ui_force_shader_hint_registration,
+                    native_ui_default_surface_blend: ctx
+                        .render_config
+                        .native_ui_default_surface_blend,
+                    pbr_bind_host_material_properties: ctx
+                        .render_config
+                        .pbr_bind_host_material_properties,
+                    pbr_bind_host_main_texture: ctx.render_config.pbr_bind_host_main_texture,
+                    pbr_host_color_property_id: ctx.render_config.pbr_host_color_property_id,
+                    pbr_host_metallic_property_id: ctx.render_config.pbr_host_metallic_property_id,
+                    pbr_host_smoothness_property_id: ctx
+                        .render_config
+                        .pbr_host_smoothness_property_id,
+                    pbr_host_main_tex_property_id: ctx.render_config.pbr_host_main_tex_property_id,
+                    multi_material_submeshes: ctx.render_config.multi_material_submeshes,
+                    log_multi_material_submesh_mismatch: ctx
+                        .render_config
+                        .log_multi_material_submesh_mismatch,
                 };
                 CommandResult::Handled
             }

@@ -60,6 +60,33 @@ pub(crate) fn depth_stencil_no_depth() -> wgpu::DepthStencilState {
     }
 }
 
+/// Stencil state for GraphicsChunk **Content** draws (compare Equal, no stencil write).
+pub(crate) fn overlay_graphics_chunk_stencil_content() -> wgpu::StencilState {
+    let face = wgpu::StencilFaceState {
+        compare: wgpu::CompareFunction::Equal,
+        fail_op: wgpu::StencilOperation::Keep,
+        depth_fail_op: wgpu::StencilOperation::Keep,
+        pass_op: wgpu::StencilOperation::Keep,
+    };
+    wgpu::StencilState {
+        front: face,
+        back: face,
+        read_mask: 0xFF,
+        write_mask: 0,
+    }
+}
+
+/// Depth-stencil for native UI draws that must respect overlay GraphicsChunk stencil masking.
+pub(crate) fn depth_stencil_native_ui_stencil_content() -> wgpu::DepthStencilState {
+    wgpu::DepthStencilState {
+        format: wgpu::TextureFormat::Depth24PlusStencil8,
+        depth_write_enabled: false,
+        depth_compare: wgpu::CompareFunction::Always,
+        stencil: overlay_graphics_chunk_stencil_content(),
+        bias: wgpu::DepthBiasState::default(),
+    }
+}
+
 /// Depth-stencil that optionally disables depth testing.
 ///
 /// Used by debug pipelines (`NormalDebug`, `UvDebug`) which can be placed in the
@@ -124,7 +151,7 @@ pub(crate) fn uniform_ring_bind_group_layout(
         label: Some(label),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: true,
@@ -159,6 +186,46 @@ pub(crate) fn uniform_ring_bind_group(
     })
 }
 
+/// Bind group layout for forward PBR with host albedo texture: group 0 = uniform ring + 2D texture + sampler.
+pub(crate) fn pbr_host_albedo_bind_group_layout(
+    device: &wgpu::Device,
+    label: &str,
+) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some(label),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: true,
+                    min_binding_size: std::num::NonZeroU64::new(
+                        (MAX_INSTANCE_RUN as u64) * UNIFORM_ALIGNMENT,
+                    ),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
 // ─── Vertex attribute constants ────────────────────────────────────────────────
 
 /// Vertex attributes for `VertexPosNormal` (position: `Float32x3` @ 0, normal: `Float32x3` @ 12).
@@ -172,6 +239,25 @@ pub(crate) const POS_NORMAL_ATTRIBS: [wgpu::VertexAttribute; 2] = [
         offset: 12,
         shader_location: 1,
         format: wgpu::VertexFormat::Float32x3,
+    },
+];
+
+/// Vertex attributes for [`crate::gpu::mesh::VertexPosNormalUv`] (pos, normal, uv0).
+pub(crate) const POS_NORMAL_UV_ATTRIBS: [wgpu::VertexAttribute; 3] = [
+    wgpu::VertexAttribute {
+        offset: 0,
+        shader_location: 0,
+        format: wgpu::VertexFormat::Float32x3,
+    },
+    wgpu::VertexAttribute {
+        offset: 12,
+        shader_location: 1,
+        format: wgpu::VertexFormat::Float32x3,
+    },
+    wgpu::VertexAttribute {
+        offset: 24,
+        shader_location: 2,
+        format: wgpu::VertexFormat::Float32x2,
     },
 ];
 

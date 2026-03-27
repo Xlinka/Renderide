@@ -22,6 +22,10 @@ use super::skinned::SkinnedPipeline;
 macro_rules! impl_overlay_stencil_skinned {
     ($ty:ty) => {
         impl RenderPipeline for $ty {
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+
             fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
                 self.inner.bind_pipeline(pass);
             }
@@ -58,8 +62,14 @@ macro_rules! impl_overlay_stencil_skinned {
                 self.inner.set_skinned_buffers(pass, buffers);
             }
 
-            fn draw_skinned_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-                self.inner.draw_skinned_indexed(pass, buffers);
+            fn draw_skinned_indexed(
+                &self,
+                pass: &mut wgpu::RenderPass,
+                buffers: &GpuMeshBuffers,
+                index_range_override: Option<(u32, u32)>,
+            ) {
+                self.inner
+                    .draw_skinned_indexed(pass, buffers, index_range_override);
             }
 
             #[allow(clippy::type_complexity)]

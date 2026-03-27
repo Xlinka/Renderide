@@ -52,7 +52,9 @@ pub struct Session {
     last_frame_data_processed: bool,
     sent_bootstrap_frame_start: bool,
     pending_mesh_unloads: Vec<i32>,
+    pending_texture_unloads: Vec<i32>,
     pending_material_unloads: Vec<i32>,
+    pending_shader_unloads: Vec<i32>,
     lock_cursor: bool,
     render_config: RenderConfig,
     pending_render_tasks: Vec<crate::shared::CameraRenderTask>,
@@ -95,7 +97,9 @@ impl Session {
             last_frame_data_processed: false,
             sent_bootstrap_frame_start: false,
             pending_mesh_unloads: Vec::new(),
+            pending_texture_unloads: Vec::new(),
             pending_material_unloads: Vec::new(),
+            pending_shader_unloads: Vec::new(),
             lock_cursor: false,
             render_config: RenderConfig::load(),
             pending_render_tasks: Vec::new(),
@@ -220,7 +224,9 @@ impl Session {
             },
             frame: FrameContext {
                 pending_mesh_unloads: &mut self.pending_mesh_unloads,
+                pending_texture_unloads: &mut self.pending_texture_unloads,
                 pending_material_unloads: &mut self.pending_material_unloads,
+                pending_shader_unloads: &mut self.pending_shader_unloads,
                 pending_frame_data: None,
             },
             scene_graph: &mut self.scene_graph,
@@ -354,9 +360,19 @@ impl Session {
         std::mem::take(&mut self.pending_mesh_unloads)
     }
 
+    /// Drains texture2D asset IDs unloaded this frame.
+    pub fn drain_pending_texture_unloads(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.pending_texture_unloads)
+    }
+
     /// Drains material IDs to unload. Caller should evict pipelines for these IDs.
     pub fn drain_pending_material_unloads(&mut self) -> Vec<i32> {
         std::mem::take(&mut self.pending_material_unloads)
+    }
+
+    /// Drains shader asset IDs unloaded this frame. Caller should evict GPU pipeline cache entries.
+    pub fn drain_pending_shader_unloads(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.pending_shader_unloads)
     }
 
     /// Whether cursor lock was requested.
@@ -618,8 +634,9 @@ impl Session {
             &this.scene_graph,
             space_id,
             this.asset_registry(),
-            this.render_config.use_debug_uv,
-            this.render_config.use_pbr,
+            this.render_config(),
+            this.render_config().use_debug_uv,
+            this.render_config().use_pbr,
         );
         let mut draws = super::collect::build_draw_entries(filtered);
         draws.sort_by_key(|d| {
@@ -629,6 +646,7 @@ impl Session {
                 d.pipeline_variant,
                 d.material_id,
                 d.mesh_asset_id,
+                d.submesh_index_range.map(|(start, _)| start).unwrap_or(0),
             )
         });
 

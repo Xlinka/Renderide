@@ -1,5 +1,7 @@
 //! Core pipeline abstractions: RenderPipeline trait, UniformData, and shared constants.
 
+use std::any::Any;
+
 use super::super::mesh::GpuMeshBuffers;
 use super::rt_shadow_uniforms::RtShadowSceneBind;
 use nalgebra::Matrix4;
@@ -19,6 +21,35 @@ pub fn matrix4_to_wgsl_column_major(mat: &Matrix4<f32>) -> [[f32; 4]; 4] {
     out
 }
 
+/// CPU-side payload for one non-skinned draw uploaded into [`super::uniforms::Uniforms`] ring slots.
+///
+/// Most pipelines only use [`Self::mvp`] and [`Self::model`]; PBR family shaders additionally read
+/// [`Self::host_base_color`] and [`Self::host_metallic_roughness`] when the corresponding `.w` / `.z`
+/// markers are set (see WGSL `UniformsSlot` in `uniform_ring.wgsl` and PBR sources).
+#[derive(Clone, Copy, Debug)]
+pub struct NonSkinnedUniformUpload {
+    /// Model-view-projection matrix for the draw.
+    pub mvp: Matrix4<f32>,
+    /// Model-to-world matrix.
+    pub model: Matrix4<f32>,
+    /// Packed base color: RGB used when `w >= 0.5`.
+    pub host_base_color: [f32; 4],
+    /// `.x` metallic, `.y` roughness when `.z >= 0.5`.
+    pub host_metallic_roughness: [f32; 4],
+}
+
+impl NonSkinnedUniformUpload {
+    /// Builds upload data with host PBR channels cleared (default gray / 0.5 in the shader).
+    pub fn new(mvp: Matrix4<f32>, model: Matrix4<f32>) -> Self {
+        Self {
+            mvp,
+            model,
+            host_base_color: [0.0; 4],
+            host_metallic_roughness: [0.0; 4],
+        }
+    }
+}
+
 /// Per-draw uniform data; pipelines extract what they need.
 #[derive(Clone, Copy)]
 pub enum UniformData<'a> {
@@ -35,7 +66,13 @@ pub enum UniformData<'a> {
 }
 
 /// Abstraction for a render pipeline (shader, bind groups, draw logic).
-pub trait RenderPipeline {
+///
+/// [`Self::as_any`] enables [`Any::downcast_ref`] for native UI pipelines in
+/// [`crate::render::pass::mesh_draw::record_non_skinned_draws`].
+pub trait RenderPipeline: Send + Sync {
+    /// Exposes `self` for [`Any::downcast_ref`] on concrete pipeline types.
+    fn as_any(&self) -> &dyn Any;
+
     /// Binds this pipeline to the render pass. Call once per pipeline group.
     fn bind_pipeline(&self, _pass: &mut wgpu::RenderPass) {
         // Default: no-op for placeholder pipelines.
@@ -99,7 +136,13 @@ pub trait RenderPipeline {
     ///
     /// Used by the recording loop after optionally calling [`set_mesh_buffers`](Self::set_mesh_buffers).
     /// No-op for pipelines that only support skinned.
-    fn draw_mesh_indexed(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+    fn draw_mesh_indexed(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _buffers: &GpuMeshBuffers,
+        _index_range_override: Option<(u32, u32)>,
+    ) {
+        let _ = (_pass, _buffers, _index_range_override);
         // Default: no-op for skinned-only pipelines.
     }
 
@@ -119,7 +162,9 @@ pub trait RenderPipeline {
         _pass: &mut wgpu::RenderPass,
         _buffers: &GpuMeshBuffers,
         _instance_count: u32,
+        _index_range_override: Option<(u32, u32)>,
     ) {
+        let _ = (_pass, _buffers, _instance_count, _index_range_override);
         // Default: no-op; recording loop uses per-draw path when not supported.
     }
 
@@ -145,7 +190,13 @@ pub trait RenderPipeline {
     ///
     /// Used by the recording loop after optionally calling [`set_skinned_buffers`](Self::set_skinned_buffers).
     /// No-op for pipelines that only support non-skinned.
-    fn draw_skinned_indexed(&self, _pass: &mut wgpu::RenderPass, _buffers: &GpuMeshBuffers) {
+    fn draw_skinned_indexed(
+        &self,
+        _pass: &mut wgpu::RenderPass,
+        _buffers: &GpuMeshBuffers,
+        _index_range_override: Option<(u32, u32)>,
+    ) {
+        let _ = (_pass, _buffers, _index_range_override);
         // Default: no-op for non-skinned pipelines.
     }
 
@@ -154,13 +205,13 @@ pub trait RenderPipeline {
     fn upload_batch(
         &self,
         _queue: &wgpu::Queue,
-        _mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        _draws: &[NonSkinnedUniformUpload],
         _frame_index: u64,
     ) {
     }
 
     /// Uploads batched uniforms for overlay stencil draws (includes clip_rect).
-    /// Default calls `upload_batch` with mvp_models only.
+    /// Default maps overlay items to [`NonSkinnedUniformUpload`] and calls [`Self::upload_batch`].
     #[allow(clippy::type_complexity)]
     fn upload_batch_overlay(
         &self,
@@ -168,8 +219,11 @@ pub trait RenderPipeline {
         items: &[(Matrix4<f32>, Matrix4<f32>, Option<[f32; 4]>)],
         frame_index: u64,
     ) {
-        let mvp_models: Vec<_> = items.iter().map(|(m, p, _)| (*m, *p)).collect();
-        self.upload_batch(queue, &mvp_models, frame_index);
+        let draws: Vec<_> = items
+            .iter()
+            .map(|(m, p, _)| NonSkinnedUniformUpload::new(*m, *p))
+            .collect();
+        self.upload_batch(queue, &draws, frame_index);
     }
 
     /// Uploads skinned uniforms for a single draw. No-op for non-skinned pipelines.

@@ -1,10 +1,8 @@
 //! UV debug pipeline: colors surfaces by UV coordinates using HSV color mapping.
 
-use nalgebra::Matrix4;
-
 use super::super::mesh::{GpuMeshBuffers, VertexWithUv};
 use super::builder;
-use super::core::{RenderPipeline, UniformData};
+use super::core::{NonSkinnedUniformUpload, RenderPipeline, UniformData};
 use super::ring_buffer::UniformRingBuffer;
 use super::shaders::UV_DEBUG_SHADER_SRC;
 
@@ -70,6 +68,10 @@ impl UvDebugPipeline {
 }
 
 impl RenderPipeline for UvDebugPipeline {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
     fn bind_pipeline(&self, pass: &mut wgpu::RenderPass) {
         pass.set_pipeline(&self.pipeline);
     }
@@ -94,7 +96,7 @@ impl RenderPipeline for UvDebugPipeline {
         _uniforms: &UniformData<'_>,
     ) {
         self.set_mesh_buffers(pass, buffers);
-        self.draw_mesh_indexed(pass, buffers);
+        self.draw_mesh_indexed(pass, buffers, None);
     }
 
     fn set_mesh_buffers(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
@@ -103,8 +105,13 @@ impl RenderPipeline for UvDebugPipeline {
         pass.set_index_buffer(ib.slice(..), buffers.index_format);
     }
 
-    fn draw_mesh_indexed(&self, pass: &mut wgpu::RenderPass, buffers: &GpuMeshBuffers) {
-        for &(index_start, index_count) in &buffers.draw_ranges() {
+    fn draw_mesh_indexed(
+        &self,
+        pass: &mut wgpu::RenderPass,
+        buffers: &GpuMeshBuffers,
+        index_range_override: Option<(u32, u32)>,
+    ) {
+        for &(index_start, index_count) in &buffers.effective_draw_ranges(index_range_override) {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..1);
         }
     }
@@ -118,8 +125,9 @@ impl RenderPipeline for UvDebugPipeline {
         pass: &mut wgpu::RenderPass,
         buffers: &GpuMeshBuffers,
         instance_count: u32,
+        index_range_override: Option<(u32, u32)>,
     ) {
-        for &(index_start, index_count) in &buffers.draw_ranges() {
+        for &(index_start, index_count) in &buffers.effective_draw_ranges(index_range_override) {
             pass.draw_indexed(index_start..index_start + index_count, 0, 0..instance_count);
         }
     }
@@ -127,9 +135,9 @@ impl RenderPipeline for UvDebugPipeline {
     fn upload_batch(
         &self,
         queue: &wgpu::Queue,
-        mvp_models: &[(Matrix4<f32>, Matrix4<f32>)],
+        draws: &[NonSkinnedUniformUpload],
         frame_index: u64,
     ) {
-        self.uniform_ring.upload(queue, mvp_models, frame_index);
+        self.uniform_ring.upload(queue, draws, frame_index);
     }
 }
