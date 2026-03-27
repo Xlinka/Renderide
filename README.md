@@ -18,12 +18,10 @@ Visual bugs and missing features are expected. Not intended for general use yet.
    cd Renderide
    ```
 
-1. Build the renderer and the mod. Ensure you have the [.NET 10 SDK](https://dotnet.microsoft.com/download) and [Rustup](https://rustup.rs/) installed.
+1. Install [Rustup](https://rustup.rs/) and build the renderer:
 
    ```bash
    cargo build --release
-
-   dotnet build RenderidePatches/RenderidePatches.csproj -c Release
    ```
 
 1. Run the bootstrapper:
@@ -35,6 +33,14 @@ Visual bugs and missing features are expected. Not intended for general use yet.
 The bootstrapper will launch the Resonite host and connect Renderide automatically.
 
 Logs appear in the `logs/` folder (see [Debugging](#debugging) for details).
+
+### Building the Mod (optional)
+
+If you need to compile the `RenderidePatches` assembly from source (for example, to match your checkout), install the [.NET 10 SDK](https://dotnet.microsoft.com/download) and run:
+
+```bash
+dotnet build RenderidePatches/RenderidePatches.csproj -c Release
+```
 
 ## Configuration
 
