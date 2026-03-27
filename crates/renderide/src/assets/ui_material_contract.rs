@@ -15,8 +15,11 @@
 //!
 //! **Automatic mapping:** On [`MaterialPropertyIdRequest`](crate::shared::MaterialPropertyIdRequest),
 //! [`crate::assets::material_property_host`] interns each property name to an integer and replies with
-//! [`MaterialPropertyIdResult`](crate::shared::MaterialPropertyIdResult); matching FrooxEngine shader
-//! property names also update [`crate::config::RenderConfig`] when [`RenderConfig::use_native_ui_wgsl`](crate::config::RenderConfig::use_native_ui_wgsl) is true.
+//! [`MaterialPropertyIdResult`](crate::shared::MaterialPropertyIdResult). Those integers are **not**
+//! Unity `Shader.PropertyToID` values; the host must use the renderer’s returned ids in batches (see
+//! module docs on [`material_property_host`](crate::assets::material_property_host)). Matching
+//! FrooxEngine shader property names also update [`crate::config::RenderConfig`] when
+//! [`RenderConfig::use_native_ui_wgsl`](crate::config::RenderConfig::use_native_ui_wgsl) is true.
 //!
 //! **Manual mapping:** INI sections `[native_ui_unlit_properties]` and
 //! `[native_ui_text_unlit_properties]` (see [`crate::config::RenderConfig`]) set the same fields.
@@ -29,8 +32,9 @@
 //! - `_Tint` → `tint`, `_OverlayTint` → `overlay_tint`, `_Cutoff` → `cutoff`, `_Rect` → `rect`
 //! - Keyword floats (when the host assigns property ids): `alphaclip`, `rectclip`, `overlay`,
 //!   `texture_normalmap`, `texture_lerpcolor`, `mask_texture_mul`, `mask_texture_clip`
-//! - `_SrcBlend` / `_DstBlend` → `src_blend` / `dst_blend` (Unity blend factors as floats; see
-//!   [`crate::assets::native_ui_blend::NativeUiSurfaceBlend`])
+//! - `_SrcBlend` / `_DstBlend` → `src_blend` / `dst_blend` (Unity `BlendMode` enum values as floats;
+//!   mapped to [`crate::assets::native_ui_blend::NativeUiSurfaceBlend`] alpha / premultiplied / additive;
+//!   unmapped pairs fall back to [`crate::config::RenderConfig::native_ui_default_surface_blend`] and log)
 //!
 //! **FrooxEngine shader keywords** (from `UpdateKeywords`, not only underscored property names) are
 //! mirrored into the same INI fields when the host requests ids for those names:
@@ -56,8 +60,17 @@
 //!
 //! `UI_Unlit.shader` also exposes `_ZWrite`, `_ZTest`, `_Cull`, `_ColorMask`, stencil comparison/ref/mask,
 //! and depth offset (`_Offset*`). Those drive Unity render state, not the data-driven uniform path: native
-//! pipelines use fixed depth/stencil/rasterizer states from WGSL pipeline construction. Extend the native
-//! UI pipeline descriptors only if a Resonite workflow requires matching those toggles per material.
+//! pipelines use fixed depth/stencil/rasterizer states from WGSL pipeline construction.
+//!
+//! ### Future parity (fixed-function)
+//!
+//! To approach Unity per-material behavior, new work would add either:
+//! - additional [`crate::gpu::PipelineVariant`] branches (e.g. depth write on/off, cull mode) with matching
+//!   [`wgpu::RenderPipelineDescriptor`] entries, or
+//! - dynamic depth bias / stencil reference where the API exposes state compatible with the pass.
+//!
+//! Until then, overlay and world-space native UI use the states encoded in
+//! [`crate::gpu::pipeline::ui_unlit_native::UiUnlitNativePipeline`].
 //!
 //! ## IPC parity: batch opcodes vs [`crate::assets::material_properties::MaterialPropertyStore`]
 //!
@@ -137,8 +150,7 @@ pub fn native_ui_family_from_shader_label(label: &str) -> Option<NativeUiShaderF
 /// Uses [`native_ui_family_from_shader_label`] first, then [`native_ui_family_from_shader_path_hint`]
 /// for legacy bundle paths and other substring matches.
 pub fn native_ui_family_from_unity_shader_name(name: &str) -> Option<NativeUiShaderFamily> {
-    native_ui_family_from_shader_label(name)
-        .or_else(|| native_ui_family_from_shader_path_hint(name))
+    native_ui_family_from_shader_label(name).or_else(|| native_ui_family_from_shader_path_hint(name))
 }
 
 /// Resolves native UI shader family using configured allowlist ids, stored Unity shader name, then path hint.
@@ -511,8 +523,9 @@ mod tests {
     };
 
     use super::{
-        NativeUiShaderFamily, UiUnlitFlags, UiUnlitPropertyIds, native_ui_family_from_shader_label,
-        native_ui_family_from_unity_shader_name, ui_unlit_material_uniform,
+        NativeUiShaderFamily, UiUnlitFlags, UiUnlitPropertyIds,
+        native_ui_family_from_shader_label, native_ui_family_from_unity_shader_name,
+        ui_unlit_material_uniform,
     };
 
     #[test]

@@ -168,22 +168,18 @@ pub fn decode_texture_mip0_to_rgba8(
             }
             Some(out)
         }
-        TextureFormat::bc1 => {
-            decode_bc1_to_rgba8(w, h, raw).map(|mut out| {
-                if flip_y {
-                    flip_rgba_image_rows(&mut out, w, h);
-                }
-                out
-            })
-        }
-        TextureFormat::bc3 => {
-            decode_bc3_to_rgba8(w, h, raw).map(|mut out| {
-                if flip_y {
-                    flip_rgba_image_rows(&mut out, w, h);
-                }
-                out
-            })
-        }
+        TextureFormat::bc1 => decode_bc1_to_rgba8(w, h, raw).map(|mut out| {
+            if flip_y {
+                flip_rgba_image_rows(&mut out, w, h);
+            }
+            out
+        }),
+        TextureFormat::bc3 => decode_bc3_to_rgba8(w, h, raw).map(|mut out| {
+            if flip_y {
+                flip_rgba_image_rows(&mut out, w, h);
+            }
+            out
+        }),
         _ => None,
     }
 }
@@ -437,8 +433,7 @@ mod tests {
     #[test]
     fn bc1_decodes_red_1x1() {
         let raw = vec![0x00u8, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
-        let out =
-            decode_texture_mip0_to_rgba8(TextureFormat::bc1, 1, 1, false, &raw).expect("ok");
+        let out = decode_texture_mip0_to_rgba8(TextureFormat::bc1, 1, 1, false, &raw).expect("ok");
         assert_eq!(out.len(), 4);
         assert!(out[0] >= 250 && out[1] < 5 && out[2] < 5 && out[3] == 255);
     }
@@ -450,8 +445,7 @@ mod tests {
             255, 254, 0, 0, 0, 0, 0, 0, //
             0x00, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
         ];
-        let out =
-            decode_texture_mip0_to_rgba8(TextureFormat::bc3, 1, 1, false, &raw).expect("ok");
+        let out = decode_texture_mip0_to_rgba8(TextureFormat::bc3, 1, 1, false, &raw).expect("ok");
         assert_eq!(out.len(), 4);
         assert!(out[0] >= 250 && out[1] < 5 && out[2] < 5 && out[3] >= 250);
     }

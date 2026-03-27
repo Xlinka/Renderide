@@ -3,8 +3,22 @@
 //! FrooxEngine’s render material manager sends [`MaterialPropertyIdRequest`](crate::shared::MaterialPropertyIdRequest)
 //! with shader property **names** (e.g. `_MainTex`). The renderer must reply with one integer per name;
 //! those integers are stored on host `MaterialProperty` values and used in `MaterialsUpdateBatch` as
-//! `property_id`. Unity’s Renderite driver uses `Shader.PropertyToID` for the same request; this
-//! crate interns names to stable integers for the process lifetime so repeated names share one id.
+//! `property_id`.
+//!
+//! ## Host contract (Renderite vs this renderer)
+//!
+//! Unity’s Renderite driver resolves names with `Shader.PropertyToID` and sends those integers back.
+//! The standalone
+//! renderer **does not** share Unity’s numeric id space: it interns each distinct name to a
+//! process-stable integer via [`intern_host_material_property_id`]. The host **must** treat the
+//! returned [`MaterialPropertyIdResult::property_ids`](crate::shared::MaterialPropertyIdResult)
+//! as opaque handles and use them verbatim in subsequent `MaterialsUpdateBatch` records. Mixing in
+//! Unity/ShaderLab `PropertyToID` values from another process will not match the store lookup keys
+//! used for native UI WGSL (`UI_Unlit`, `UI_TextUnlit`) and PBR host bindings.
+//!
+//! When [`crate::config::RenderConfig::use_native_ui_wgsl`] is enabled, [`apply_froox_material_property_name_to_native_ui_config`]
+//! maps known Froox/Unity property names (`_MainTex`, `_Tint`, …) onto [`crate::config::RenderConfig::ui_unlit_property_ids`]
+//! so batches can drive [`crate::assets::ui_unlit_material_uniform`] without manual INI mapping.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -228,5 +242,25 @@ mod tests {
         let main_tex_id = intern_host_material_property_id("_MainTex");
         apply_froox_material_property_name_to_pbr_host_config(&mut c, "_MainTex", main_tex_id);
         assert_eq!(c.pbr_host_main_tex_property_id, main_tex_id);
+    }
+
+    /// Simulates `MaterialPropertyIdRequest` → intern → `MaterialsUpdateBatch` property_id lookup keys.
+    #[test]
+    fn material_property_ids_are_stable_for_batch_lookup_after_intern() {
+        let _lock = test_lock();
+        reset_material_property_intern_table_for_tests();
+        let main_tex = intern_host_material_property_id("_MainTex");
+        let tint = intern_host_material_property_id("_Tint");
+        assert_ne!(main_tex, tint);
+        let main_tex_again = intern_host_material_property_id("_MainTex");
+        assert_eq!(main_tex, main_tex_again);
+        let mut c = RenderConfig {
+            use_native_ui_wgsl: true,
+            ..Default::default()
+        };
+        apply_froox_material_property_name_to_native_ui_config(&mut c, "_MainTex", main_tex);
+        apply_froox_material_property_name_to_native_ui_config(&mut c, "_Tint", tint);
+        assert_eq!(c.ui_unlit_property_ids.main_tex, main_tex);
+        assert_eq!(c.ui_unlit_property_ids.tint, tint);
     }
 }

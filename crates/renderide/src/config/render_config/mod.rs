@@ -185,7 +185,7 @@ impl RenderConfig {
     ///   `native_ui_world_space`, `native_ui_overlay_stencil_pipelines`, `log_native_ui_routing`,
     ///   `native_ui_routing_metrics` (bools);
     ///   `native_ui_uivert_pbr_fallback`, `native_ui_force_shader_hint_registration` (bools);
-    ///   `native_ui_default_surface_blend` (`alpha` / `additive` / …);
+    ///   `native_ui_default_surface_blend` (`alpha` / `premultiplied` / `additive`);
     ///   `pbr_bind_host_material_properties` (bool);
     ///   `multi_material_submeshes`, `log_multi_material_submesh_mismatch` (bools).
     /// - **`[native_ui_unlit_properties]`** / **`[native_ui_text_unlit_properties]`** — integer material
@@ -538,6 +538,22 @@ native_ui_default_surface_blend = additive
         assert_eq!(
             c.native_ui_default_surface_blend,
             crate::assets::NativeUiSurfaceBlend::Additive
+        );
+    }
+
+    #[test]
+    fn apply_ini_native_ui_default_surface_blend_premultiplied() {
+        let ini = r#"
+[rendering]
+native_ui_default_surface_blend = premultiplied
+"#;
+        let mut c = RenderConfig::default();
+        for (section, key, value) in crate::config::ini::parse_ini(ini) {
+            ini_apply::apply_render_config_ini_entry(&mut c, &section, &key, &value);
+        }
+        assert_eq!(
+            c.native_ui_default_surface_blend,
+            crate::assets::NativeUiSurfaceBlend::Premultiplied
         );
     }
 

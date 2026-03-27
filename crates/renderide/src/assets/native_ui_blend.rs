@@ -2,6 +2,11 @@
 //!
 //! Unity exposes `_SrcBlend` / `_DstBlend` as floats (see Resonite `UI_Unlit.shader`). FrooxEngine
 //! updates these from its `BlendMode` enum via the material writer.
+//!
+//! Mappings follow common Unity `Rendering.BlendMode` numeric values serialized as floats.
+//! Unrecognized pairs log at [`logger::Level::Debug`] and use
+//! [`RenderConfig::native_ui_default_surface_blend`](crate::config::RenderConfig::native_ui_default_surface_blend)
+//! (or the caller-provided default).
 
 use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
 
@@ -16,15 +21,21 @@ pub enum NativeUiSurfaceBlend {
     /// `SrcAlpha` × fragment + `OneMinusSrcAlpha` × destination (standard UI transparency).
     #[default]
     Alpha,
+    /// Premultiplied alpha: `One` × fragment + `OneMinusSrcAlpha` × destination (common for sprites/text).
+    Premultiplied,
     /// `One` × fragment + `One` × destination (additive glow / bright UI).
     Additive,
 }
 
 impl NativeUiSurfaceBlend {
-    /// Parses INI / env tokens: `alpha`, `additive`.
+    /// Every variant that gets its own row in [`crate::gpu::PipelineDescriptorCache`] for native UI.
+    pub const ALL: [Self; 3] = [Self::Alpha, Self::Premultiplied, Self::Additive];
+
+    /// Parses INI / env tokens: `alpha`, `premultiplied`, `additive`.
     pub fn parse_ini(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "alpha" | "premultiplied" => Some(Self::Alpha),
+            "alpha" => Some(Self::Alpha),
+            "premultiplied" | "premul" => Some(Self::Premultiplied),
             "additive" | "add" => Some(Self::Additive),
             _ => None,
         }
@@ -34,6 +45,18 @@ impl NativeUiSurfaceBlend {
     pub fn to_wgpu_blend_state(self) -> BlendState {
         match self {
             Self::Alpha => BlendState::ALPHA_BLENDING,
+            Self::Premultiplied => BlendState {
+                color: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::OneMinusSrcAlpha,
+                    operation: BlendOperation::Add,
+                },
+                alpha: BlendComponent {
+                    src_factor: BlendFactor::One,
+                    dst_factor: BlendFactor::OneMinusSrcAlpha,
+                    operation: BlendOperation::Add,
+                },
+            },
             Self::Additive => BlendState {
                 color: BlendComponent {
                     src_factor: BlendFactor::One,
@@ -50,15 +73,21 @@ impl NativeUiSurfaceBlend {
     }
 }
 
-/// Unity `BlendMode`-style source/destination factors as serialized floats (common values).
-fn blend_from_src_dst(src: f32, dst: f32) -> Option<NativeUiSurfaceBlend> {
+/// Maps Unity `BlendMode` pairs (serialized as floats) to a [`NativeUiSurfaceBlend`].
+///
+/// Exported for unit tests; production uses [`resolve_native_ui_surface_blend_unlit`].
+pub(crate) fn blend_from_src_dst(src: f32, dst: f32) -> Option<NativeUiSurfaceBlend> {
     const EPS: f32 = 0.05;
     let near = |a: f32, b: f32| (a - b).abs() < EPS;
     // SrcAlpha = 5, OneMinusSrcAlpha = 10 (UnityEngine.Rendering.BlendMode).
     if near(src, 5.0) && near(dst, 10.0) {
         return Some(NativeUiSurfaceBlend::Alpha);
     }
-    // One = 1 additive.
+    // One = 1, OneMinusSrcAlpha = 10 — premultiplied alpha.
+    if near(src, 1.0) && near(dst, 10.0) {
+        return Some(NativeUiSurfaceBlend::Premultiplied);
+    }
+    // One = 1 additive (both).
     if near(src, 1.0) && near(dst, 1.0) {
         return Some(NativeUiSurfaceBlend::Additive);
     }
@@ -79,7 +108,18 @@ pub fn resolve_native_ui_surface_blend_unlit(
     let src = read_blend_float(store, lookup, ids.src_blend);
     let dst = read_blend_float(store, lookup, ids.dst_blend);
     match (src, dst) {
-        (Some(s), Some(d)) => blend_from_src_dst(s, d).unwrap_or(default_blend),
+        (Some(s), Some(d)) => match blend_from_src_dst(s, d) {
+            Some(b) => b,
+            None => {
+                logger::debug!(
+                    "native_ui_blend: unmapped _SrcBlend/_DstBlend for UI_Unlit (src={:.2}, dst={:.2}); using {:?}",
+                    s,
+                    d,
+                    default_blend
+                );
+                default_blend
+            }
+        },
         _ => default_blend,
     }
 }
@@ -98,7 +138,18 @@ pub fn resolve_native_ui_surface_blend_text(
     let src = read_blend_float(store, lookup, ids.src_blend);
     let dst = read_blend_float(store, lookup, ids.dst_blend);
     match (src, dst) {
-        (Some(s), Some(d)) => blend_from_src_dst(s, d).unwrap_or(default_blend),
+        (Some(s), Some(d)) => match blend_from_src_dst(s, d) {
+            Some(b) => b,
+            None => {
+                logger::debug!(
+                    "native_ui_blend: unmapped _SrcBlend/_DstBlend for UI_TextUnlit (src={:.2}, dst={:.2}); using {:?}",
+                    s,
+                    d,
+                    default_blend
+                );
+                default_blend
+            }
+        },
         _ => default_blend,
     }
 }
@@ -135,5 +186,18 @@ mod tests {
             blend_from_src_dst(1.0, 1.0),
             Some(NativeUiSurfaceBlend::Additive)
         );
+    }
+
+    #[test]
+    fn maps_premultiplied_one_one_minus_src_alpha() {
+        assert_eq!(
+            blend_from_src_dst(1.0, 10.0),
+            Some(NativeUiSurfaceBlend::Premultiplied)
+        );
+    }
+
+    #[test]
+    fn unmapped_returns_none() {
+        assert_eq!(blend_from_src_dst(5.0, 1.0), None);
     }
 }

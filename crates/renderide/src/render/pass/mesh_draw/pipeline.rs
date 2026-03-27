@@ -4,6 +4,12 @@ use super::types::MeshDrawParams;
 use crate::gpu::PipelineVariant;
 
 /// Resolves the pipeline variant for a draw group, applying MRT/PBR and orthographic overrides.
+///
+/// Native UI variants ([`PipelineVariant::NativeUiUnlit`] / text / stencil) are returned unchanged
+/// even when `params.use_mrt` is true, so `UI_Unlit` / `UI_TextUnlit` WGSL continues to render in
+/// MRT sessions. ([`mesh_pipeline_variant_for_mrt`] still maps those variants to
+/// [`PipelineVariant::NormalDebugMRT`] for callers that invoke it directly—e.g. unit tests—not for
+/// this entry point.)
 pub fn resolve_pipeline_for_group(
     variant: &PipelineVariant,
     params: &MeshDrawParams,
@@ -69,6 +75,11 @@ pub fn overlay_pipeline_variant_for_orthographic(
 /// Maps non-overlay pipeline variant to MRT or PBR variant.
 /// When use_mrt, outputs color/position/normal for RTAO. When use_pbr && !use_mrt, uses PBR.
 /// Falls back to debug variants when cluster buffers are unavailable.
+///
+/// For [`PipelineVariant::Material`] and native UI variants, when `use_mrt` is true this returns
+/// [`PipelineVariant::NormalDebugMRT`] (host-unlit and native UI are not given a dedicated MRT
+/// pipeline here). Screen recording uses [`resolve_pipeline_for_group`] instead, which **does not**
+/// apply this branch to native UI—see its documentation.
 pub fn mesh_pipeline_variant_for_mrt(
     variant: &PipelineVariant,
     use_mrt: bool,

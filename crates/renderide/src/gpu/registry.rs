@@ -566,3 +566,21 @@ impl PipelineManager {
             .evict_host_unlit_shader(shader_asset_id, format);
     }
 }
+
+#[cfg(test)]
+mod eviction_tests {
+    use super::PipelineRegistry;
+    use wgpu::TextureFormat;
+
+    #[test]
+    fn evict_material_on_empty_registry_does_not_panic() {
+        let mut r = PipelineRegistry::new();
+        r.evict_material(999);
+    }
+
+    #[test]
+    fn evict_host_unlit_shader_on_empty_registry_does_not_panic() {
+        let mut r = PipelineRegistry::new();
+        r.evict_host_unlit_shader(1, TextureFormat::Bgra8UnormSrgb);
+    }
+}

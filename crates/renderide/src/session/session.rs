@@ -53,6 +53,7 @@ pub struct Session {
     pending_mesh_unloads: Vec<i32>,
     pending_texture_unloads: Vec<i32>,
     pending_material_unloads: Vec<i32>,
+    pending_shader_unloads: Vec<i32>,
     lock_cursor: bool,
     render_config: RenderConfig,
     pending_render_tasks: Vec<crate::shared::CameraRenderTask>,
@@ -89,6 +90,7 @@ impl Session {
             pending_mesh_unloads: Vec::new(),
             pending_texture_unloads: Vec::new(),
             pending_material_unloads: Vec::new(),
+            pending_shader_unloads: Vec::new(),
             lock_cursor: false,
             render_config: RenderConfig::load(),
             pending_render_tasks: Vec::new(),
@@ -203,6 +205,7 @@ impl Session {
                 pending_mesh_unloads: &mut self.pending_mesh_unloads,
                 pending_texture_unloads: &mut self.pending_texture_unloads,
                 pending_material_unloads: &mut self.pending_material_unloads,
+                pending_shader_unloads: &mut self.pending_shader_unloads,
                 pending_frame_data: None,
             },
             scene_graph: &mut self.scene_graph,
@@ -337,6 +340,11 @@ impl Session {
     /// Drains material IDs to unload. Caller should evict pipelines for these IDs.
     pub fn drain_pending_material_unloads(&mut self) -> Vec<i32> {
         std::mem::take(&mut self.pending_material_unloads)
+    }
+
+    /// Drains shader asset IDs unloaded this frame. Caller should evict GPU pipeline cache entries.
+    pub fn drain_pending_shader_unloads(&mut self) -> Vec<i32> {
+        std::mem::take(&mut self.pending_shader_unloads)
     }
 
     /// Whether cursor lock was requested.

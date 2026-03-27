@@ -72,6 +72,8 @@ pub struct FrameContext<'a> {
     pub pending_texture_unloads: &'a mut Vec<i32>,
     /// Material IDs unloaded this frame (drained by Session for pipeline eviction).
     pub pending_material_unloads: &'a mut Vec<i32>,
+    /// Shader asset IDs unloaded this frame (drained for native UI / host-unlit pipeline cache eviction).
+    pub pending_shader_unloads: &'a mut Vec<i32>,
     /// Frame data to process; set by FrameSubmitCommandHandler, drained by Session.
     pub pending_frame_data: Option<FrameSubmitData>,
 }

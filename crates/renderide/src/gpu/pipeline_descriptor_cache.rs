@@ -116,7 +116,7 @@ impl PipelineDescriptorCache {
 
     /// Drops cached native UI pipelines for `shader_asset_id` (e.g. shader unload).
     pub(crate) fn remove_native_ui(&mut self, shader_asset_id: i32, format: wgpu::TextureFormat) {
-        for b in [NativeUiSurfaceBlend::Alpha, NativeUiSurfaceBlend::Additive] {
+        for b in NativeUiSurfaceBlend::ALL {
             self.entries
                 .remove(&Self::native_ui_unlit_key(shader_asset_id, format, b));
             self.entries
@@ -158,8 +158,15 @@ mod tests {
     fn native_ui_blend_changes_cache_key() {
         let fmt = TextureFormat::Bgra8UnormSrgb;
         let a = PipelineDescriptorCache::native_ui_unlit_key(1, fmt, NativeUiSurfaceBlend::Alpha);
+        let p = PipelineDescriptorCache::native_ui_unlit_key(
+            1,
+            fmt,
+            NativeUiSurfaceBlend::Premultiplied,
+        );
         let m =
             PipelineDescriptorCache::native_ui_unlit_key(1, fmt, NativeUiSurfaceBlend::Additive);
         assert_ne!(a, m);
+        assert_ne!(a, p);
+        assert_ne!(p, m);
     }
 }

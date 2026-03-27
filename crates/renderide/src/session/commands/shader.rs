@@ -3,6 +3,11 @@
 //! Native UI shader ids default to auto-fill from resolved Unity shader names, then path hints, when
 //! INI ids are `-1`. [`crate::config::RenderConfig::native_ui_force_shader_hint_registration`] overwrites
 //! ids on every matching upload (stale positive INI ids otherwise block auto-reg).
+//!
+//! `shader_unload` removes the shader from the asset registry and queues the asset id for
+//! [`crate::render::RenderLoop::evict_host_unlit_shader`] on the next main-view tick (see
+//! [`crate::session::Session::drain_pending_shader_unloads`]), so host-unlit and native UI pipeline
+//! descriptor cache entries for that shader are dropped.
 
 use crate::assets::{NativeUiShaderFamily, native_ui_family_from_unity_shader_name};
 use crate::shared::{RendererCommand, ShaderUploadResult};
@@ -90,7 +95,9 @@ impl CommandHandler for ShaderCommandHandler {
                 CommandResult::Handled
             }
             RendererCommand::shader_unload(cmd) => {
-                ctx.assets.asset_registry.handle_shader_unload(cmd.asset_id);
+                let id = cmd.asset_id;
+                ctx.assets.asset_registry.handle_shader_unload(id);
+                ctx.frame.pending_shader_unloads.push(id);
                 CommandResult::Handled
             }
             _ => CommandResult::Ignored,

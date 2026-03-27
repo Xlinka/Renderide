@@ -4,6 +4,9 @@
 //! include whether each slot uses a **real** GPU view or the **fallback** 1×1 white texture,
 //! so an entry created while a host texture was not yet [`crate::assets::TextureAsset::ready_for_gpu`]
 //! does not block later draws after upload.
+//!
+//! [`GpuState::drop_texture2d`](crate::gpu::state::GpuState::drop_texture2d) calls [`evict_texture`] when
+//! the host unloads a texture so stale bind groups are not retained.
 
 use std::collections::HashMap;
 
