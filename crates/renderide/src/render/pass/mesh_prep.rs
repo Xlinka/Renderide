@@ -22,8 +22,8 @@ use super::material_draw_context::MaterialDrawContext;
 use super::mesh_draw::{CollectMeshDrawsContext, collect_mesh_draws};
 use crate::assets::texture2d_asset_id_from_packed;
 use crate::assets::{
-    MaterialPropertyLookupIds, NativeUiShaderFamily, log_world_unlit_material_inventory_if_enabled,
-    resolve_native_ui_shader_family, ui_text_unlit_material_uniform, ui_unlit_material_uniform,
+    MaterialPropertyLookupIds, NativeUiShaderFamily, resolve_native_ui_shader_family,
+    ui_text_unlit_material_uniform, ui_unlit_material_uniform,
 };
 use crate::gpu::GpuState;
 use crate::gpu::PipelineVariant;
@@ -176,13 +176,6 @@ pub fn prepare_mesh_draws_for_view(
 ) -> PreCollectedFrameData {
     ensure_mesh_buffers(gpu, session, draw_batches);
     prefetch_native_ui_texture2d_gpu(session, gpu, draw_batches);
-    let reg = session.asset_registry();
-    log_world_unlit_material_inventory_if_enabled(
-        &reg.material_property_store,
-        reg,
-        session.render_config(),
-        &gpu.texture2d_gpu,
-    );
     let (width, height) = viewport;
     let aspect = width as f32 / height.max(1) as f32;
     let view_params = ViewParams::perspective_from_session(session, aspect);

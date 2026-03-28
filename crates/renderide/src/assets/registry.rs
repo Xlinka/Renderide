@@ -302,6 +302,7 @@ impl AssetRegistry {
         let asset = ShaderAsset {
             id: data.asset_id,
             wgsl_source: data.file,
+            program: super::resolve_essential_shader_program(unity_shader_name.as_deref()),
             unity_shader_name,
         };
         self.shaders.insert(asset);

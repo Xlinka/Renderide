@@ -11,6 +11,7 @@ pub mod native_ui_blend;
 pub mod registry;
 pub mod shader;
 pub mod shader_logical_name;
+pub mod shader_program;
 pub(crate) mod shader_unity_asset;
 pub mod texture;
 pub mod texture_unpack;
@@ -56,6 +57,7 @@ pub use shader_logical_name::{
     resolve_logical_shader_name_from_upload,
     resolve_logical_shader_name_from_upload_with_host_hint,
 };
+pub use shader_program::{EssentialShaderProgram, resolve_essential_shader_program};
 pub use texture::TextureAsset;
 pub use texture_unpack::{
     HostTextureAssetKind, texture2d_asset_id_from_packed, unpack_host_texture_packed,

@@ -11,7 +11,6 @@
 
 pub(crate) mod builder;
 mod core;
-mod host_unlit;
 pub(crate) mod mrt;
 mod normal_debug;
 mod overlay_stencil;
@@ -37,7 +36,6 @@ pub use core::{
     MAX_BLENDSHAPE_WEIGHTS, MAX_INSTANCE_RUN, NUM_FRAMES_IN_FLIGHT, NonSkinnedUniformUpload,
     RenderPipeline, UniformData, matrix4_to_wgsl_column_major,
 };
-pub use host_unlit::HostUnlitPipeline;
 pub use mrt::{NormalDebugMRTPipeline, SkinnedMRTPipeline, UvDebugMRTPipeline};
 pub use normal_debug::NormalDebugPipeline;
 pub use overlay_stencil::{

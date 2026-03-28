@@ -102,6 +102,9 @@ pub fn resolve_world_unlit_shader_family(
     registry: &super::AssetRegistry,
 ) -> Option<WorldUnlitShaderFamily> {
     if let Some(s) = registry.get_shader(shader_asset_id) {
+        if s.program == super::EssentialShaderProgram::WorldUnlit {
+            return Some(WorldUnlitShaderFamily::StandardUnlit);
+        }
         if let Some(f) = s
             .unity_shader_name
             .as_deref()

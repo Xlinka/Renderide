@@ -4,6 +4,7 @@
 
 use super::Asset;
 use super::AssetId;
+use super::EssentialShaderProgram;
 
 /// Stored shader data for pipeline creation.
 pub struct ShaderAsset {
@@ -18,6 +19,8 @@ pub struct ShaderAsset {
     /// Unity ShaderLab logical name (`Shader "UI/Unlit"`) from parsed ShaderLab/WGSL text, file contents,
     /// or an optional host hint when your IPC layer supplies one (see [`crate::shared::shader_upload_extras`]).
     pub unity_shader_name: Option<String>,
+    /// Explicit essential WGSL program selected from the resolved Unity shader name.
+    pub program: EssentialShaderProgram,
 }
 
 impl ShaderAsset {

@@ -7,10 +7,8 @@
 //! - [`pbr_ray_query`]: same PBR families with `wgpu_ray_query` and TLAS for RT shadows.
 //! - [`overlay`]: overlay stencil shader with optional rect-clip discard.
 //!
-//! # Modular WGSL
-//! Single-target normal and UV debug shaders are built from `wgsl_modules/` with **naga_oil** in the
-//! crate `build.rs` ([`debug::NORMAL_SHADER_SRC`], [`debug::UV_DEBUG_SHADER_SRC`]). The host-unlit pilot
-//! uses `host_unlit.wgsl` from the same build. Other families still use inline strings until migrated.
+//! World/UI native shaders are built from `RENDERIDESHADERS/` with **naga_oil** in `build.rs`.
+//! Debug and overlay variants stay inline until migrated.
 
 mod debug;
 mod overlay;

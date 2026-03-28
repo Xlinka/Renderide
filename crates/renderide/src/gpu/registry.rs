@@ -1,8 +1,8 @@
 //! Pipeline registry: maps (shader_id, [`PipelineVariant`]) to [`RenderPipeline`] instances.
 //!
 //! Built-ins are indexed by [`PipelineKey`] and mirrored in [`super::pipeline_descriptor_cache::PipelineDescriptorCache`]
-//! for stable descriptor hashing. Host-unlit programs share one [`super::pipeline::HostUnlitPipeline`] per
-//! shader asset id (see [`PipelineVariant::Material`]).
+//! for stable descriptor hashing. Material-keyed lazy pipelines are reserved for native world-unlit
+//! WGSL only.
 //!
 //! Startup registration is delegated to [`facades::BuiltinPipelineRegistrar`] so builtin vs lazy shader
 //! families stay in separate namespaces (Strangler Fig).
@@ -19,14 +19,14 @@ use crate::config::RenderConfig;
 
 use super::pipeline::mrt::create_mrt_gbuffer_origin_bind_group_layout;
 use super::pipeline::{
-    HostUnlitPipeline, NormalDebugMRTPipeline, NormalDebugPipeline,
-    OverlayStencilMaskClearPipeline, OverlayStencilMaskClearSkinnedPipeline,
-    OverlayStencilMaskWritePipeline, OverlayStencilMaskWriteSkinnedPipeline,
-    OverlayStencilPipeline, OverlayStencilSkinnedPipeline, PbrHostAlbedoPipeline, PbrMRTPipeline,
-    PbrMrtRayQueryPipeline, PbrPipeline, PbrRayQueryPipeline, RenderPipeline, SkinnedMRTPipeline,
-    SkinnedPbrMRTPipeline, SkinnedPbrMrtRayQueryPipeline, SkinnedPbrPipeline,
-    SkinnedPbrRayQueryPipeline, SkinnedPipeline, UiTextUnlitNativePipeline, UiUnlitNativePipeline,
-    UvDebugMRTPipeline, UvDebugPipeline, WorldUnlitPipeline,
+    NormalDebugMRTPipeline, NormalDebugPipeline, OverlayStencilMaskClearPipeline,
+    OverlayStencilMaskClearSkinnedPipeline, OverlayStencilMaskWritePipeline,
+    OverlayStencilMaskWriteSkinnedPipeline, OverlayStencilPipeline, OverlayStencilSkinnedPipeline,
+    PbrHostAlbedoPipeline, PbrMRTPipeline, PbrMrtRayQueryPipeline, PbrPipeline,
+    PbrRayQueryPipeline, RenderPipeline, SkinnedMRTPipeline, SkinnedPbrMRTPipeline,
+    SkinnedPbrMrtRayQueryPipeline, SkinnedPbrPipeline, SkinnedPbrRayQueryPipeline, SkinnedPipeline,
+    UiTextUnlitNativePipeline, UiUnlitNativePipeline, UvDebugMRTPipeline, UvDebugPipeline,
+    WorldUnlitPipeline,
 };
 use super::pipeline_descriptor_cache::PipelineDescriptorCache;
 
@@ -198,8 +198,7 @@ pub enum PipelineVariant {
     OverlayNoDepthUvDebug,
     /// Skinned with depth test disabled for orthographic screen-space overlay.
     OverlayNoDepthSkinned,
-    /// Host-resolved material: uses [`super::pipeline::WorldUnlitPipeline`] for Resonite `Shader "Unlit"`
-    /// when the shader asset resolves as world unlit; otherwise [`HostUnlitPipeline`].
+    /// Native world `Shader "Unlit"` material path.
     Material { material_id: i32 },
     /// Native WGSL Resonite `UI/Unlit` (orthographic overlay, canvas vertices).
     NativeUiUnlit { material_id: i32 },
@@ -325,33 +324,21 @@ impl PipelineRegistry {
                         )
                         .is_some()
                     });
-                if use_world_unlit {
-                    let dk = PipelineDescriptorCache::world_unlit_key(shader_id, config.format);
-                    let pipeline: Arc<dyn RenderPipeline> =
-                        if let Some(p) = self.descriptor_cache.get(dk) {
-                            p
-                        } else {
-                            let p: Arc<dyn RenderPipeline> =
-                                Arc::new(WorldUnlitPipeline::new(device, config));
-                            self.descriptor_cache.insert(dk, Arc::clone(&p));
-                            p
-                        };
-                    self.pipelines.insert(key, Arc::clone(&pipeline));
-                    Some(pipeline)
-                } else {
-                    let dk = PipelineDescriptorCache::host_unlit_key(shader_id, config.format);
-                    let pipeline: Arc<dyn RenderPipeline> =
-                        if let Some(p) = self.descriptor_cache.get(dk) {
-                            p
-                        } else {
-                            let p: Arc<dyn RenderPipeline> =
-                                Arc::new(HostUnlitPipeline::new(device, config));
-                            self.descriptor_cache.insert(dk, Arc::clone(&p));
-                            p
-                        };
-                    self.pipelines.insert(key, Arc::clone(&pipeline));
-                    Some(pipeline)
+                if !use_world_unlit {
+                    return None;
                 }
+                let dk = PipelineDescriptorCache::world_unlit_key(shader_id, config.format);
+                let pipeline: Arc<dyn RenderPipeline> =
+                    if let Some(p) = self.descriptor_cache.get(dk) {
+                        p
+                    } else {
+                        let p: Arc<dyn RenderPipeline> =
+                            Arc::new(WorldUnlitPipeline::new(device, config));
+                        self.descriptor_cache.insert(dk, Arc::clone(&p));
+                        p
+                    };
+                self.pipelines.insert(key, Arc::clone(&pipeline));
+                Some(pipeline)
             }
             PipelineVariant::NativeUiUnlit { material_id } => {
                 let store = material_store?;

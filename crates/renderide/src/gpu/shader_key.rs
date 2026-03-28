@@ -57,13 +57,12 @@ impl ShaderKey {
             return self.fallback_variant;
         }
         match native_material_family {
-            NativeMaterialPipelineFamily::PbsMetallic | NativeMaterialPipelineFamily::UiUnlit => {
-                self.fallback_variant
-            }
-            NativeMaterialPipelineFamily::WorldUnlit
-            | NativeMaterialPipelineFamily::LegacyFallback => PipelineVariant::Material {
+            NativeMaterialPipelineFamily::WorldUnlit => PipelineVariant::Material {
                 material_id: material_block_id,
             },
+            NativeMaterialPipelineFamily::PbsMetallic
+            | NativeMaterialPipelineFamily::UiUnlit
+            | NativeMaterialPipelineFamily::LegacyFallback => self.fallback_variant,
         }
     }
 }
@@ -75,7 +74,25 @@ mod tests {
     use crate::gpu::PipelineVariant;
 
     #[test]
-    fn effective_variant_uses_material_when_pilot_and_host_shader() {
+    fn effective_variant_uses_material_when_world_unlit() {
+        let k = ShaderKey {
+            host_shader_asset_id: Some(42),
+            fallback_variant: PipelineVariant::Pbr,
+        };
+        let v = k.effective_variant(
+            true,
+            false,
+            7,
+            false,
+            false,
+            false,
+            NativeMaterialPipelineFamily::WorldUnlit,
+        );
+        assert_eq!(v, PipelineVariant::Material { material_id: 7 });
+    }
+
+    #[test]
+    fn effective_variant_unsupported_stays_on_fallback() {
         let k = ShaderKey {
             host_shader_asset_id: Some(42),
             fallback_variant: PipelineVariant::Pbr,
@@ -89,7 +106,7 @@ mod tests {
             false,
             NativeMaterialPipelineFamily::LegacyFallback,
         );
-        assert_eq!(v, PipelineVariant::Material { material_id: 7 });
+        assert_eq!(v, PipelineVariant::Pbr);
     }
 
     #[test]

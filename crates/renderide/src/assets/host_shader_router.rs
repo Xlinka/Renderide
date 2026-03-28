@@ -5,7 +5,7 @@
 //! is only selected for world-unlit and unknown shaders when the host-unlit pilot is enabled — not
 //! for [`NativeMaterialPipelineFamily::PbsMetallic`], which must stay on the global PBR path.
 
-use super::AssetRegistry;
+use super::{AssetRegistry, EssentialShaderProgram};
 
 /// Native host shader families that map to in-tree WGSL implementations (strangler target).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -51,6 +51,9 @@ pub fn resolve_pbs_metallic_shader_family(shader_asset_id: i32, registry: &Asset
     let Some(s) = registry.get_shader(shader_asset_id) else {
         return false;
     };
+    if s.program == EssentialShaderProgram::PbsMetallic {
+        return true;
+    }
     if let Some(name) = s.unity_shader_name.as_deref()
         && pbs_metallic_family_from_unity_shader_name(name)
     {
@@ -83,6 +86,20 @@ pub fn native_material_family_for_shader(
     .is_some()
     {
         return NativeMaterialPipelineFamily::UiUnlit;
+    }
+    if let Some(shader) = registry.get_shader(sid) {
+        match shader.program {
+            EssentialShaderProgram::UiUnlit | EssentialShaderProgram::UiTextUnlit => {
+                return NativeMaterialPipelineFamily::UiUnlit;
+            }
+            EssentialShaderProgram::WorldUnlit => {
+                return NativeMaterialPipelineFamily::WorldUnlit;
+            }
+            EssentialShaderProgram::PbsMetallic => {
+                return NativeMaterialPipelineFamily::PbsMetallic;
+            }
+            EssentialShaderProgram::Unsupported => {}
+        }
     }
     if super::resolve_world_unlit_shader_family(
         sid,

@@ -32,7 +32,10 @@ impl CommandHandler for ShaderCommandHandler {
                         .assets
                         .asset_registry
                         .get_shader(asset_id)
-                        .and_then(|s| s.unity_shader_name.clone());
+                        .map(|s| (s.unity_shader_name.clone(), s.program));
+                    let (unity_name, program) = unity_name
+                        .map(|(name, program)| (name, program))
+                        .unwrap_or((None, crate::assets::EssentialShaderProgram::Unsupported));
                     let family = unity_name
                         .as_deref()
                         .and_then(native_ui_family_from_unity_shader_name)
@@ -50,9 +53,10 @@ impl CommandHandler for ShaderCommandHandler {
                                 .and_then(world_unlit_family_from_unity_shader_name)
                         });
                     logger::info!(
-                        "shader_upload: asset_id={} unity_shader_name={:?} upload_file_label={:?} resolved_native_ui_family={:?} resolved_world_unlit_family={:?}",
+                        "shader_upload: asset_id={} unity_shader_name={:?} native_program={:?} upload_file_label={:?} resolved_native_ui_family={:?} resolved_world_unlit_family={:?}",
                         asset_id,
                         unity_name.as_deref(),
+                        program,
                         data.file.as_deref(),
                         family,
                         world_family

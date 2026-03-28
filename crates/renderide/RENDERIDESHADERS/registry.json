@@ -1,0 +1,6 @@
+{
+  "Unlit": "world/unlit.wgsl",
+  "UI/Unlit": "ui/ui_unlit.wgsl",
+  "UI/Text/Unlit": "ui/ui_text_unlit.wgsl",
+  "PBSMetallic": "pbr/pbs_metallic.wgsl"
+}

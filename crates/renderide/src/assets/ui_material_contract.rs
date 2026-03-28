@@ -166,6 +166,13 @@ pub fn resolve_native_ui_shader_family(
     registry: &super::AssetRegistry,
 ) -> Option<NativeUiShaderFamily> {
     if let Some(s) = registry.get_shader(shader_asset_id) {
+        match s.program {
+            super::EssentialShaderProgram::UiUnlit => return Some(NativeUiShaderFamily::UiUnlit),
+            super::EssentialShaderProgram::UiTextUnlit => {
+                return Some(NativeUiShaderFamily::UiTextUnlit);
+            }
+            _ => {}
+        }
         if let Some(f) = s
             .unity_shader_name
             .as_deref()
