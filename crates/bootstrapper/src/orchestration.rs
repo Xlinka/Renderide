@@ -1,4 +1,7 @@
 //! Full bootstrap sequence: IPC, Host spawn, watchdogs, queue loop, Wine cleanup.
+//!
+//! Shared-memory queue files use [`crate::ipc::interprocess_backing_dir`] unless overridden; see
+//! [`crate::ipc::RENDERIDE_INTERPROCESS_DIR_ENV`].
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,10 +21,8 @@ use crate::BootstrapError;
 pub struct RunContext {
     /// Extra Host CLI args (before `-Invisible` / `-shmprefix` are appended).
     pub host_args: Vec<String>,
-    /// Shared log file timestamp segment (`HostOutput_{timestamp}.log`).
+    /// Shared basename for log files under [`logger::log_dir_for`]: `logs/host/{timestamp}.log`, etc.
     pub log_timestamp: String,
-    /// Root for `bootstrapper/` and `host/` log files.
-    pub logs_base: PathBuf,
 }
 
 /// Runs the bootstrapper main loop after logging is initialized.
@@ -32,6 +33,12 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
 
     logger::info!("Bootstrapper start");
     logger::info!("Shared memory prefix: {}", config.shared_memory_prefix);
+    let backing = crate::ipc::interprocess_backing_dir();
+    logger::info!(
+        "Interprocess queue backing directory: {:?} (set {} to override; Host must match)",
+        backing,
+        crate::ipc::RENDERIDE_INTERPROCESS_DIR_ENV
+    );
 
     let lifetime = ChildLifetimeGroup::new()?;
     let mut queues = BootstrapQueues::open(&config.shared_memory_prefix)?;
@@ -46,7 +53,6 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
     let RunContext {
         host_args,
         log_timestamp,
-        logs_base,
     } = ctx;
 
     let mut args: Vec<String> = host_args;
@@ -60,9 +66,8 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
 
     host::set_host_above_normal_priority(&child);
 
-    let host_log_dir = logs_base.join("host");
-    fs::create_dir_all(&host_log_dir).map_err(BootstrapError::Io)?;
-    let host_log_path = host_log_dir.join(format!("HostOutput_{log_timestamp}.log"));
+    logger::ensure_log_dir(logger::LogComponent::Host).map_err(BootstrapError::Io)?;
+    let host_log_path = logger::log_file_path(logger::LogComponent::Host, &log_timestamp);
 
     if let Some(stdout) = child.stdout.take() {
         host::spawn_output_drainer(host_log_path.clone(), stdout, "[Host stdout]");
@@ -95,7 +100,7 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
     if !config.is_wine {
         logger::info!("Process watcher: cancel when Host process exits");
         let cancel_host = Arc::clone(&cancel);
-        let host_out_name = format!("HostOutput_{}.log", log_timestamp);
+        let host_out_name = format!("{}.log", log_timestamp);
         std::thread::spawn(move || {
             let exit_status = loop {
                 match child.try_wait() {
@@ -138,13 +143,4 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
 
     logger::info!("Bootstrapper end");
     Ok(())
-}
-
-/// Resolves the directory that contains `bootstrapper/` and `host/` log subfolders.
-pub fn logs_base_for_run(current_dir: &Path) -> PathBuf {
-    if let Ok(root) = std::env::var("RENDERIDE_LOGS_ROOT") {
-        PathBuf::from(root)
-    } else {
-        current_dir.join("logs")
-    }
 }
