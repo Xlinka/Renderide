@@ -3,8 +3,6 @@
 //! Shared-memory queue files use [`crate::ipc::interprocess_backing_dir`] unless overridden; see
 //! [`crate::ipc::RENDERIDE_INTERPROCESS_DIR_ENV`].
 
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -21,7 +19,7 @@ use crate::BootstrapError;
 pub struct RunContext {
     /// Extra Host CLI args (before `-Invisible` / `-shmprefix` are appended).
     pub host_args: Vec<String>,
-    /// Shared basename for log files under [`logger::log_dir_for`]: `logs/host/{timestamp}.log`, etc.
+    /// Shared basename (no `.log`) for paths like `logs/host/{timestamp}.log` under [`logger::logs_root`].
     pub log_timestamp: String,
 }
 
