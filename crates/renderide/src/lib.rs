@@ -65,8 +65,8 @@ pub use materials::{
 pub use render_graph::{
     build_default_main_graph, passes::MeshDeformPass, passes::SwapchainClearPass,
     passes::WorldMeshForwardPass, CompileStats, CompiledRenderGraph, FrameRenderParams,
-    GraphBuildError, GraphBuilder, GraphExecuteError, PassId, PassResources, RenderPass,
-    RenderPassContext, RenderPassError, ResourceSlot,
+    GraphBuildError, GraphBuilder, GraphExecuteError, HostCameraFrame, PassId, PassResources,
+    RenderPass, RenderPassContext, RenderPassError, ResourceSlot,
 };
 pub use resources::{
     GpuResource, GpuTexture2d, MeshPool, MeshResidencyMeta, NoopStreamingPolicy, ResidencyTier,

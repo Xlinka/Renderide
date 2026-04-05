@@ -75,6 +75,9 @@ pub struct GpuTexture2d {
 
 impl GpuTexture2d {
     /// Allocates GPU storage for `fmt` (empty mips; data arrives via [`crate::assets::texture::write_texture2d_mips`]).
+    ///
+    /// Returns [`None`] when width or height is zero, or when either edge exceeds
+    /// [`wgpu::Limits::max_texture_dimension_2d`] for this device (avoids wgpu validation panic).
     pub fn new_from_format(
         device: &wgpu::Device,
         fmt: &SetTexture2DFormat,
@@ -83,6 +86,16 @@ impl GpuTexture2d {
         let w = fmt.width.max(0) as u32;
         let h = fmt.height.max(0) as u32;
         if w == 0 || h == 0 {
+            return None;
+        }
+        let max_dim = device.limits().max_texture_dimension_2d;
+        if w > max_dim || h > max_dim {
+            logger::warn!(
+                "texture {}: format size {}×{} exceeds max_texture_dimension_2d ({max_dim}); GPU texture not created",
+                fmt.asset_id,
+                w,
+                h
+            );
             return None;
         }
         let mips = fmt.mipmap_count.max(1) as u32;

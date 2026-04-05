@@ -127,6 +127,17 @@ impl SceneCoordinator {
         shm: &mut SharedMemoryAccessor,
         data: &FrameSubmitData,
     ) -> Result<(), SceneError> {
+        let active_non_overlay = data
+            .render_spaces
+            .iter()
+            .filter(|u| u.is_active && !u.is_overlay)
+            .count();
+        if active_non_overlay > 1 {
+            logger::warn!(
+                "FrameSubmitData: {active_non_overlay} active non-overlay render spaces (expected at most one for main camera parity)"
+            );
+        }
+
         // Unity `RenderSpace.HandleUpdate` order: reflection-probe SH2 tasks before per-space work.
         for update in &data.render_spaces {
             if let Some(ref sh2) = update.reflection_probe_sh2_taks {
@@ -147,6 +158,13 @@ impl SceneCoordinator {
                 });
             space.id = RenderSpaceId(update.id);
             space.apply_update_header(update);
+
+            if update.cameras_update.is_some() {
+                logger::trace!(
+                    "render_space {}: cameras_update present (full CameraManager parity not implemented)",
+                    update.id
+                );
+            }
 
             let cache = self
                 .world_caches

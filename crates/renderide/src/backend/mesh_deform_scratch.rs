@@ -8,7 +8,7 @@ const INITIAL_MAX_BLENDSHAPES: u32 = 256;
 pub struct MeshDeformScratch {
     /// Linear blend skinning bone palette (`mat4` column-major, 64 bytes each).
     pub bone_matrices: wgpu::Buffer,
-    /// 16-byte uniform: `vertex_count`, `shape_count`, `vertices_per_shape`, padding.
+    /// 32-byte uniform for chunked blendshape compute (`mesh_blendshape.wgsl` `Params`).
     pub blendshape_params: wgpu::Buffer,
     /// `f32` weight per blendshape (dense prefix).
     pub blendshape_weights: wgpu::Buffer,
@@ -30,7 +30,7 @@ impl MeshDeformScratch {
             }),
             blendshape_params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("mesh_deform_blendshape_params"),
-                size: 16,
+                size: 32,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),

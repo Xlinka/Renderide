@@ -52,7 +52,7 @@ fn blendshape_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
-                    min_binding_size: std::num::NonZeroU64::new(16),
+                    min_binding_size: std::num::NonZeroU64::new(32),
                 },
                 count: None,
             },
@@ -128,7 +128,7 @@ impl MeshPreprocessPipelines {
     pub fn placeholder_uniform_slice(device: &wgpu::Device) -> wgpu::Buffer {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("mesh_preprocess_placeholder_uniform"),
-            contents: &[0u8; 16],
+            contents: &[0u8; 32],
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     }

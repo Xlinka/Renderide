@@ -17,6 +17,7 @@
 //! - Graph reuse across frames with invalidation keys (resolution, MSAA, toggles).
 
 mod builder;
+mod camera;
 mod compiled;
 mod context;
 mod error;
@@ -34,10 +35,13 @@ pub use world_mesh_draw_prep::{
 };
 
 pub use builder::GraphBuilder;
+pub use camera::{
+    reverse_z_orthographic, reverse_z_perspective, view_matrix_from_render_transform,
+};
 pub use compiled::{CompileStats, CompiledRenderGraph};
 pub use context::RenderPassContext;
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
-pub use frame_params::FrameRenderParams;
+pub use frame_params::{FrameRenderParams, HostCameraFrame};
 pub use ids::PassId;
 pub use pass::RenderPass;
 pub use resources::{PassResources, ResourceSlot};

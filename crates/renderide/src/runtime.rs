@@ -24,16 +24,16 @@ use crate::gpu::GpuContext;
 
 #[cfg(feature = "debug-hud")]
 use crate::diagnostics::DebugHudInput;
-use crate::render_graph::GraphExecuteError;
+use crate::render_graph::{GraphExecuteError, HostCameraFrame};
 
 pub use crate::frontend::InitState;
 use crate::ipc::SharedMemoryAccessor;
 use crate::scene::SceneCoordinator;
 use crate::shared::{
-    FrameSubmitData, HeadOutputDevice, InputState, LightData, LightsBufferRendererConsumed,
-    LightsBufferRendererSubmission, MaterialPropertyIdResult, MaterialsUpdateBatch, OutputState,
-    RendererCommand, RendererInitData, RendererInitResult, ShaderUnload, ShaderUpload,
-    ShaderUploadResult,
+    CameraProjection, FrameSubmitData, HeadOutputDevice, InputState, LightData,
+    LightsBufferRendererConsumed, LightsBufferRendererSubmission, MaterialPropertyIdResult,
+    MaterialsUpdateBatch, OutputState, RendererCommand, RendererInitData, RendererInitResult,
+    ShaderUnload, ShaderUpload, ShaderUploadResult,
 };
 use winit::window::Window;
 
@@ -44,6 +44,8 @@ pub struct RendererRuntime {
     /// Render spaces and dense transform / mesh state from [`FrameSubmitData`](crate::shared::FrameSubmitData).
     pub scene: SceneCoordinator,
     assets: AssetSubsystem,
+    /// Last host clip / FOV / VR / ortho task state for [`crate::render_graph::FrameRenderParams`].
+    pub host_camera: HostCameraFrame,
 }
 
 impl RendererRuntime {
@@ -54,6 +56,7 @@ impl RendererRuntime {
             backend: RenderBackend::new(),
             scene: SceneCoordinator::new(),
             assets: AssetSubsystem::default(),
+            host_camera: HostCameraFrame::default(),
         }
     }
 
@@ -189,7 +192,8 @@ impl RendererRuntime {
             self.backend.set_debug_hud_snapshot(snapshot);
         }
         let scene_ref: &SceneCoordinator = &self.scene;
-        self.backend.execute_frame_graph(gpu, window, scene_ref)
+        self.backend
+            .execute_frame_graph(gpu, window, scene_ref, self.host_camera)
     }
 
     /// Whether the next tick should build [`InputState`] and call [`Self::pre_frame`].
@@ -435,6 +439,21 @@ impl RendererRuntime {
         self.frontend.note_frame_submit_processed(data.frame_index);
         self.frontend
             .apply_frame_submit_output(data.output_state.clone());
+        self.host_camera.frame_index = data.frame_index;
+        self.host_camera.near_clip = data.near_clip;
+        self.host_camera.far_clip = data.far_clip;
+        self.host_camera.desktop_fov_degrees = data.desktop_fov;
+        self.host_camera.vr_active = data.vr_active;
+        self.host_camera.primary_ortho_task = data.render_tasks.iter().find_map(|t| {
+            t.parameters.as_ref().and_then(|p| {
+                if p.projection == CameraProjection::orthographic {
+                    Some((p.orthographic_size, p.near_clip.max(0.01), p.far_clip))
+                } else {
+                    None
+                }
+            })
+        });
+
         let start = Instant::now();
         self.run_asset_integration_stub(Duration::from_millis(2));
 

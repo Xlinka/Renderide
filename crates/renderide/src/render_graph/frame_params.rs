@@ -3,6 +3,37 @@
 use crate::backend::RenderBackend;
 use crate::scene::SceneCoordinator;
 
+/// Latest camera-related fields from host [`crate::shared::FrameSubmitData`], updated each `frame_submit`.
+#[derive(Clone, Copy, Debug)]
+pub struct HostCameraFrame {
+    /// Host lock-step frame index (`-1` before the first submit in standalone).
+    pub frame_index: i32,
+    /// Near clip distance from the host frame submission.
+    pub near_clip: f32,
+    /// Far clip distance from the host frame submission.
+    pub far_clip: f32,
+    /// Vertical field of view in **degrees** (matches host `desktopFOV`).
+    pub desktop_fov_degrees: f32,
+    /// Whether the host reported VR output as active for this frame.
+    pub vr_active: bool,
+    /// `(orthographic_half_height, near, far)` from the first [`crate::shared::CameraRenderTask`] whose
+    /// parameters use orthographic projection (overlay main-camera ortho override).
+    pub primary_ortho_task: Option<(f32, f32, f32)>,
+}
+
+impl Default for HostCameraFrame {
+    fn default() -> Self {
+        Self {
+            frame_index: -1,
+            near_clip: 0.01,
+            far_clip: 10_000.0,
+            desktop_fov_degrees: 60.0,
+            vr_active: false,
+            primary_ortho_task: None,
+        }
+    }
+}
+
 /// Data passes need beyond raw GPU handles: host scene, backend pools, and main-surface formats.
 pub struct FrameRenderParams<'a> {
     /// World caches and mesh renderables after [`SceneCoordinator::flush_world_caches`].
@@ -15,4 +46,6 @@ pub struct FrameRenderParams<'a> {
     pub surface_format: wgpu::TextureFormat,
     /// Main surface extent in pixels (`width`, `height`) for projection.
     pub viewport_px: (u32, u32),
+    /// Clip planes, FOV, and ortho task hint from the last host frame submission.
+    pub host_camera: HostCameraFrame,
 }

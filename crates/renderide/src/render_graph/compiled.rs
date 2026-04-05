@@ -9,7 +9,7 @@ use crate::scene::SceneCoordinator;
 
 use super::context::RenderPassContext;
 use super::error::GraphExecuteError;
-use super::frame_params::FrameRenderParams;
+use super::frame_params::{FrameRenderParams, HostCameraFrame};
 use super::pass::RenderPass;
 
 /// Statistics emitted when building a [`CompiledRenderGraph`].
@@ -58,6 +58,7 @@ impl CompiledRenderGraph {
         window: &Window,
         scene: &SceneCoordinator,
         backend: &mut RenderBackend,
+        host_camera: HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
         let (frame, backbuffer_view_holder): (
             Option<wgpu::SurfaceTexture>,
@@ -96,6 +97,7 @@ impl CompiledRenderGraph {
             depth_view,
             surface_format,
             viewport_px,
+            host_camera,
         };
 
         let mut ctx = RenderPassContext {

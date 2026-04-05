@@ -264,11 +264,12 @@ impl RenderBackend {
         gpu: &mut GpuContext,
         window: &Window,
         scene: &SceneCoordinator,
+        host_camera: crate::render_graph::HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
         let Some(mut graph) = self.frame_graph.take() else {
             return Err(GraphExecuteError::NoFrameGraph);
         };
-        let res = graph.execute(gpu, window, scene, self);
+        let res = graph.execute(gpu, window, scene, self, host_camera);
         self.frame_graph = Some(graph);
         res
     }

@@ -16,6 +16,8 @@ use super::layout::{
     synthetic_bone_data_for_blendshape_only, MeshBufferLayout,
 };
 
+use crate::gpu::plan_blendshape_bind_chunks;
+
 /// Resident mesh on GPU: no CPU geometry retained.
 ///
 /// **Vertex groups** in Renderite are expressed through per-vertex bone influence streams
@@ -255,12 +257,33 @@ impl GpuMesh {
                 data.vertex_count,
             ) {
                 Some((pack, n)) if !pack.is_empty() => {
-                    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} blendshapes", data.asset_id)),
-                        contents: &pack,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    (Some(Arc::new(buf)), n.max(0) as u32)
+                    let vc_u32 = data.vertex_count.max(0) as u32;
+                    let n_u32 = n.max(0) as u32;
+                    let lims = device.limits();
+                    if plan_blendshape_bind_chunks(
+                        n_u32,
+                        vc_u32,
+                        lims.max_storage_buffer_binding_size,
+                        lims.min_storage_buffer_offset_alignment,
+                    )
+                    .is_none()
+                    {
+                        logger::warn!(
+                            "mesh {}: blendshapes dropped ({} shapes × {} verts exceed binding limit {} or offset alignment)",
+                            data.asset_id,
+                            n_u32,
+                            vc_u32,
+                            lims.max_storage_buffer_binding_size
+                        );
+                        (None, 0)
+                    } else {
+                        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some(&format!("mesh {} blendshapes", data.asset_id)),
+                            contents: &pack,
+                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                        });
+                        (Some(Arc::new(buf)), n_u32)
+                    }
                 }
                 _ => (None, 0),
             }

@@ -113,7 +113,7 @@ impl MaterialPipelineFamily for DebugWorldNormalsFamily {
                 .map(|format| wgpu::DepthStencilState {
                     format,
                     depth_write_enabled: Some(true),
-                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
                     stencil: wgpu::StencilState::default(),
                     bias: wgpu::DepthBiasState::default(),
                 }),

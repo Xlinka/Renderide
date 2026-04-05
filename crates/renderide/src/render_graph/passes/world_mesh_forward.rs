@@ -11,6 +11,9 @@ use crate::assets::material::MaterialDictionary;
 use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::ShaderPermutation;
 use crate::present::SWAPCHAIN_CLEAR_COLOR;
+use crate::render_graph::camera::{
+    reverse_z_orthographic, reverse_z_perspective, view_matrix_from_render_transform,
+};
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
 use crate::render_graph::pass::RenderPass;
@@ -18,8 +21,8 @@ use crate::render_graph::resources::{PassResources, ResourceSlot};
 use crate::render_graph::{
     collect_and_sort_world_mesh_draws, MaterialDrawBatchKey, WorldMeshDrawItem,
 };
+use crate::scene::RenderSpaceId;
 use crate::scene::SceneCoordinator;
-use crate::scene::{render_transform_to_matrix, RenderSpaceId};
 
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
 #[derive(Debug, Default)]
@@ -97,7 +100,7 @@ impl RenderPass for WorldMeshForwardPass {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: depth,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
+                    load: wgpu::LoadOp::Clear(0.0),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -114,14 +117,35 @@ impl RenderPass for WorldMeshForwardPass {
 
         let (vw, vh) = frame.viewport_px;
         let aspect = vw as f32 / vh.max(1) as f32;
-        let proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.05, 10_000.0);
+        let hc = frame.host_camera;
+        let near = hc.near_clip.max(0.01);
+        let far = hc.far_clip;
+        let fov_rad = hc.desktop_fov_degrees.to_radians();
+        let world_proj = reverse_z_perspective(aspect, fov_rad, near, far);
 
-        let mut last_space: Option<RenderSpaceId> = None;
+        let has_overlay = draws.iter().any(|d| d.is_overlay);
+        let overlay_proj = if has_overlay {
+            Some(if let Some((half_h, on, of)) = hc.primary_ortho_task {
+                reverse_z_orthographic(half_h * aspect, half_h, on, of)
+            } else {
+                reverse_z_orthographic(1.0 * aspect, 1.0, near, far)
+            })
+        } else {
+            None
+        };
+
+        let mut last_vp_key: Option<(RenderSpaceId, bool)> = None;
         let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
         let mut pipeline_ok = false;
 
         for item in &draws {
-            if last_space != Some(item.space_id) {
+            let vp_key = (item.space_id, item.is_overlay);
+            if last_vp_key != Some(vp_key) {
+                let proj = if item.is_overlay {
+                    overlay_proj.unwrap_or(world_proj)
+                } else {
+                    world_proj
+                };
                 Self::write_view_proj_for_space(
                     frame.scene,
                     item.space_id,
@@ -129,7 +153,7 @@ impl RenderPass for WorldMeshForwardPass {
                     globals_buf,
                     &queue,
                 );
-                last_space = Some(item.space_id);
+                last_vp_key = Some(vp_key);
             }
 
             if last_batch_key.as_ref() != Some(&item.batch_key) {
@@ -176,8 +200,7 @@ impl WorldMeshForwardPass {
         let Some(space) = scene.space(space_id) else {
             return;
         };
-        let cam = render_transform_to_matrix(&space.view_transform);
-        let view = cam.inverse();
+        let view = view_matrix_from_render_transform(&space.view_transform);
         let vp = proj * view;
         let vp_bytes: [f32; 16] = vp.to_cols_array();
         queue.write_buffer(globals_buf, 0, bytemuck::cast_slice(&vp_bytes));

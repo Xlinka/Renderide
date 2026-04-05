@@ -1,8 +1,12 @@
 //! Blendshape and skinning compute dispatches before the main forward pass.
 
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use glam::Mat4;
+
+use crate::assets::mesh::BLENDSHAPE_OFFSET_GPU_STRIDE;
+use crate::gpu::plan_blendshape_bind_chunks;
 
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
@@ -197,43 +201,73 @@ fn record_mesh_deform(
             wbytes[s * 4..s * 4 + 4].copy_from_slice(&w.to_le_bytes());
         }
         queue.write_buffer(&scratch.blendshape_weights, 0, &wbytes);
-        let params: [u8; 16] = build_blend_params(vc, shape_count);
-        queue.write_buffer(&scratch.blendshape_params, 0, &params);
 
-        let blend_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blendshape_bg"),
-            layout: &pre.blendshape_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: scratch.blendshape_params.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: positions.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: deltas.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: scratch.blendshape_weights.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: temp.as_entire_binding(),
-                },
-            ],
-        });
+        let limits = device.limits();
+        let Some(chunks) = plan_blendshape_bind_chunks(
+            shape_count,
+            vc,
+            limits.max_storage_buffer_binding_size,
+            limits.min_storage_buffer_offset_alignment,
+        ) else {
+            logger::warn!(
+                "mesh deform: blendshape bind chunks unavailable (vertex_count={vc} shape_count={shape_count} max_bind={})",
+                limits.max_storage_buffer_binding_size
+            );
+            return;
+        };
+
+        let stride = u64::from(vc) * u64::from(BLENDSHAPE_OFFSET_GPU_STRIDE as u32);
 
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some("blendshape"),
             timestamp_writes: None,
         });
         cpass.set_pipeline(&pre.blendshape_pipeline);
-        cpass.set_bind_group(0, &blend_bg, &[]);
-        cpass.dispatch_workgroups(wg, 1, 1);
+
+        for (chunk_i, (shape_start, chunk_shapes)) in chunks.iter().enumerate() {
+            let params = build_blend_params(vc, *chunk_shapes, *shape_start, chunk_i == 0);
+            queue.write_buffer(&scratch.blendshape_params, 0, &params);
+
+            let offset = u64::from(*shape_start).saturating_mul(stride);
+            let size = u64::from(*chunk_shapes).saturating_mul(stride);
+            let Some(size_nz) = NonZeroU64::new(size) else {
+                continue;
+            };
+
+            let blend_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blendshape_bg"),
+                layout: &pre.blendshape_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: scratch.blendshape_params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: positions.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                            buffer: deltas.as_ref(),
+                            offset,
+                            size: Some(size_nz),
+                        }),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: scratch.blendshape_weights.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: temp.as_entire_binding(),
+                    },
+                ],
+            });
+
+            cpass.set_bind_group(0, &blend_bg, &[]);
+            cpass.dispatch_workgroups(wg, 1, 1);
+        }
         drop(cpass);
     }
 
@@ -313,15 +347,19 @@ fn workgroup_count(vertex_count: u32) -> u32 {
     (vertex_count.saturating_add(63)) / 64
 }
 
-fn build_blend_params(vertex_count: u32, shape_count: u32) -> [u8; 16] {
-    let v = vertex_count.to_le_bytes();
-    let s = shape_count.to_le_bytes();
-    let per_v = vertex_count.to_le_bytes();
-    let pad = 0u32.to_le_bytes();
-    let mut o = [0u8; 16];
-    o[0..4].copy_from_slice(&v);
-    o[4..8].copy_from_slice(&s);
-    o[8..12].copy_from_slice(&per_v);
-    o[12..16].copy_from_slice(&pad);
+/// Encodes `mesh_blendshape.wgsl` `Params` (32 bytes).
+fn build_blend_params(
+    vertex_count: u32,
+    chunk_shape_count: u32,
+    weight_base: u32,
+    first_chunk: bool,
+) -> [u8; 32] {
+    let mut o = [0u8; 32];
+    o[0..4].copy_from_slice(&vertex_count.to_le_bytes());
+    o[4..8].copy_from_slice(&chunk_shape_count.to_le_bytes());
+    o[8..12].copy_from_slice(&vertex_count.to_le_bytes());
+    o[12..16].copy_from_slice(&weight_base.to_le_bytes());
+    let fc = u32::from(first_chunk);
+    o[16..20].copy_from_slice(&fc.to_le_bytes());
     o
 }
