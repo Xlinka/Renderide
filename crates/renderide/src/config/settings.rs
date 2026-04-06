@@ -6,7 +6,8 @@ use std::sync::Arc;
 
 use super::parse::{parse_ini_document, IniDocument, ParseWarning};
 use super::resolve::{
-    read_config_file, resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource,
+    apply_generated_config, is_dir_writable, read_config_file, renderide_config_env_nonempty,
+    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource,
 };
 
 /// Display-related caps (future: frame pacing when unfocused). Persisted as `[display]`.
@@ -226,9 +227,11 @@ pub struct ConfigLoadResult {
 pub type RendererSettingsHandle = Arc<std::sync::RwLock<RendererSettings>>;
 
 /// Resolves `config.ini`, parses it, and builds [`RendererSettings`].
+///
+/// When no file exists and [`super::resolve::renderide_config_env_nonempty`] is false, writes
+/// defaults to the save path (see [`super::resolve::resolve_save_path`]) and loads that file.
 pub fn load_renderer_settings() -> ConfigLoadResult {
-    let resolve = resolve_config_path();
-    let save_path = resolve_save_path(&resolve);
+    let mut resolve = resolve_config_path();
     let mut settings = RendererSettings::from_defaults();
     let mut document = IniDocument::default();
     let mut parse_warnings = Vec::new();
@@ -265,6 +268,58 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
             );
         }
     }
+
+    if resolve.loaded_path.is_none() && !renderide_config_env_nonempty() {
+        let path = resolve_save_path(&resolve);
+        if !path.exists() {
+            if let Some(parent) = path.parent() {
+                if is_dir_writable(parent) {
+                    match save_renderer_settings(&path, &RendererSettings::from_defaults()) {
+                        Ok(()) => {
+                            logger::info!("Created default renderer config at {}", path.display());
+                            apply_generated_config(&mut resolve, path.clone());
+                            match read_config_file(&path) {
+                                Ok(content) => {
+                                    let (doc, warnings) = parse_ini_document(&content);
+                                    parse_warnings = warnings;
+                                    settings.merge_from_ini(&doc);
+                                    document = doc;
+                                    if !parse_warnings.is_empty() {
+                                        for w in &parse_warnings {
+                                            logger::debug!(
+                                                "config.ini parse warning line {}: {}",
+                                                w.line,
+                                                w.message
+                                            );
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    logger::warn!(
+                                        "Failed to read newly created {}: {e}; using defaults",
+                                        path.display()
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            logger::warn!(
+                                "Failed to create default config at {}: {e}",
+                                path.display()
+                            );
+                        }
+                    }
+                } else {
+                    logger::trace!(
+                        "Not creating default config at {} (directory not writable)",
+                        path.display()
+                    );
+                }
+            }
+        }
+    }
+
+    let save_path = resolve_save_path(&resolve);
 
     logger::trace!("Renderer config will persist to {}", save_path.display());
 

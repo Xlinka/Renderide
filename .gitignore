@@ -456,6 +456,8 @@ target
 #.idea/
 
 #### Other .gitignore rules
+# Local renderer settings (auto-generated at workspace root on first run)
+config.ini
 *.log
 profile.json.gz
 !crates/renderide/src/shaders/**
