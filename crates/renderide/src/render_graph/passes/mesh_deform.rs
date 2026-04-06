@@ -37,7 +37,7 @@ struct MeshDeformSnapshot {
     deformed_positions_buffer: Option<Arc<wgpu::Buffer>>,
     bone_indices_buffer: Option<Arc<wgpu::Buffer>>,
     bone_weights_vec4_buffer: Option<Arc<wgpu::Buffer>>,
-    inverse_bind_poses: Vec<Mat4>,
+    skinning_bind_matrices: Vec<Mat4>,
 }
 
 impl MeshDeformSnapshot {
@@ -52,7 +52,7 @@ impl MeshDeformSnapshot {
             deformed_positions_buffer: m.deformed_positions_buffer.clone(),
             bone_indices_buffer: m.bone_indices_buffer.clone(),
             bone_weights_vec4_buffer: m.bone_weights_vec4_buffer.clone(),
-            inverse_bind_poses: m.inverse_bind_poses.clone(),
+            skinning_bind_matrices: m.skinning_bind_matrices.clone(),
         }
     }
 }
@@ -61,6 +61,8 @@ struct DeformWorkItem {
     space_id: RenderSpaceId,
     mesh: MeshDeformSnapshot,
     skinned: Option<Vec<i32>>,
+    /// [`StaticMeshRenderer::node_id`] (SMR) for skinning fallbacks when a bone is unmapped.
+    smr_node_id: i32,
     blend_weights: Vec<f32>,
 }
 
@@ -100,6 +102,7 @@ impl RenderPass for MeshDeformPass {
                     space_id,
                     mesh: MeshDeformSnapshot::from_mesh(m),
                     skinned: None,
+                    smr_node_id: -1,
                     blend_weights: r.blend_shape_weights.clone(),
                 });
             }
@@ -115,6 +118,7 @@ impl RenderPass for MeshDeformPass {
                     space_id,
                     mesh: MeshDeformSnapshot::from_mesh(m),
                     skinned: Some(skinned.bone_transform_indices.clone()),
+                    smr_node_id: r.node_id,
                     blend_weights: r.blend_shape_weights.clone(),
                 });
             }
@@ -143,6 +147,7 @@ impl RenderPass for MeshDeformPass {
                 item.space_id,
                 &item.mesh,
                 item.skinned.as_deref(),
+                item.smr_node_id,
                 &item.blend_weights,
                 &mut bone_cursor,
                 &mut blend_weight_cursor,
@@ -164,6 +169,7 @@ fn record_mesh_deform(
     space_id: RenderSpaceId,
     mesh: &MeshDeformSnapshot,
     bone_transform_indices: Option<&[i32]>,
+    smr_node_id: i32,
     blend_weights: &[f32],
     bone_cursor: &mut u64,
     blend_weight_cursor: &mut u64,
@@ -185,7 +191,7 @@ fn record_mesh_deform(
         && mesh.deformed_positions_buffer.is_some()
         && mesh.bone_indices_buffer.is_some()
         && mesh.bone_weights_vec4_buffer.is_some()
-        && !mesh.inverse_bind_poses.is_empty();
+        && !mesh.skinning_bind_matrices.is_empty();
 
     if !needs_blend && !needs_skin {
         return;
@@ -321,13 +327,25 @@ fn record_mesh_deform(
             return;
         };
 
-        let bone_count_u = mesh.inverse_bind_poses.len() as u32;
+        let bone_count_u = mesh.skinning_bind_matrices.len() as u32;
         scratch.ensure_bone_capacity(device, bone_count_u);
+        let smr_world = (smr_node_id >= 0)
+            .then(|| scene.world_matrix(space_id, smr_node_id as usize))
+            .flatten()
+            .unwrap_or(Mat4::IDENTITY);
+
         let mut palette: Vec<u8> = vec![0u8; (bone_count_u as usize) * 64];
         for bi in 0..bone_count_u as usize {
-            let widx = indices.get(bi).copied().unwrap_or(0).max(0) as usize;
-            let world = scene.world_matrix(space_id, widx).unwrap_or(Mat4::IDENTITY);
-            let pal = world * mesh.inverse_bind_poses[bi];
+            let bind_mat = mesh.skinning_bind_matrices[bi];
+            let tid = indices.get(bi).copied().unwrap_or(-1);
+            let pal = if tid < 0 {
+                smr_world
+            } else {
+                match scene.world_matrix(space_id, tid as usize) {
+                    Some(world) => world * bind_mat,
+                    None => smr_world,
+                }
+            };
             let cols = pal.to_cols_array();
             palette[bi * 64..bi * 64 + 64].copy_from_slice(bytemuck::cast_slice(&cols));
         }
@@ -409,4 +427,18 @@ fn build_blend_params(
     let fc = u32::from(first_chunk);
     o[16..20].copy_from_slice(&fc.to_le_bytes());
     o
+}
+
+#[cfg(test)]
+mod palette_tests {
+    use glam::{Mat4, Vec3};
+
+    #[test]
+    fn palette_is_world_times_bind() {
+        let world = Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0));
+        let bind = Mat4::from_scale(Vec3::splat(2.0));
+        let pal = world * bind;
+        let expected = world * bind;
+        assert!(pal.abs_diff_eq(expected, 1e-5));
+    }
 }

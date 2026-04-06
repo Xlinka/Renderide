@@ -378,9 +378,14 @@ pub fn split_bone_weights_tail_for_gpu(
                 if off + 8 > bone_weights_tail.len() {
                     return None;
                 }
-                let w = f32::from_le_bytes(bone_weights_tail[off..off + 4].try_into().ok()?);
+                let w_raw = f32::from_le_bytes(bone_weights_tail[off..off + 4].try_into().ok()?);
                 let j = i32::from_le_bytes(bone_weights_tail[off + 4..off + 8].try_into().ok()?);
-                (w, j.max(0) as u32)
+                // Match legacy skinned VB build: unmapped bones must not contribute (index 0 only if weight > 0).
+                if j < 0 {
+                    (0.0f32, 0u32)
+                } else {
+                    (w_raw, j as u32)
+                }
             } else {
                 (0.0f32, 0u32)
             };
@@ -396,6 +401,7 @@ pub fn split_bone_weights_tail_for_gpu(
 mod tests {
     use super::*;
     use crate::shared::{SubmeshBufferDescriptor, SubmeshTopology};
+    use glam::Mat4;
 
     #[test]
     fn layout_no_bones_no_blend_matches_stride() {
@@ -456,5 +462,40 @@ mod tests {
         let i1_0 = u32::from_le_bytes(idx[16..20].try_into().unwrap());
         assert!((w1_0 - 0.1).abs() < 1e-5);
         assert_eq!(i1_0, 10);
+    }
+
+    #[test]
+    fn split_bone_weights_negative_index_zeroes_weight() {
+        let mut tail = Vec::new();
+        tail.extend_from_slice(&0.5f32.to_le_bytes());
+        tail.extend_from_slice(&(-1i32).to_le_bytes());
+        tail.extend_from_slice(&0f32.to_le_bytes());
+        tail.extend_from_slice(&0i32.to_le_bytes());
+        tail.extend_from_slice(&0f32.to_le_bytes());
+        tail.extend_from_slice(&0i32.to_le_bytes());
+        tail.extend_from_slice(&0f32.to_le_bytes());
+        tail.extend_from_slice(&0i32.to_le_bytes());
+        let (idx, wt) = split_bone_weights_tail_for_gpu(&tail, 1).expect("split");
+        let w0 = f32::from_le_bytes(wt[0..4].try_into().unwrap());
+        let i0 = u32::from_le_bytes(idx[0..4].try_into().unwrap());
+        assert!((w0 - 0.0).abs() < 1e-5);
+        assert_eq!(i0, 0u32);
+    }
+
+    /// Unity uploads inverse bind matrices; the renderer stores them as [`Mat4::from_cols_array_2d`]
+    /// without an extra `.inverse()` (see [`crate::assets::mesh::GpuMesh::skinning_bind_matrices`]).
+    #[test]
+    fn unity_bindpose_raw_matches_glam_columns_not_inverse() {
+        let expected = Mat4::from_translation(glam::Vec3::new(1.0, 2.0, 3.0));
+        let a = expected.to_cols_array();
+        let raw: [[f32; 4]; 4] = [
+            [a[0], a[1], a[2], a[3]],
+            [a[4], a[5], a[6], a[7]],
+            [a[8], a[9], a[10], a[11]],
+            [a[12], a[13], a[14], a[15]],
+        ];
+        let stored = Mat4::from_cols_array_2d(&raw);
+        assert!(stored.abs_diff_eq(expected, 1e-5));
+        assert!(!stored.abs_diff_eq(expected.inverse(), 1e-2));
     }
 }

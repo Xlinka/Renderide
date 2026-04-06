@@ -48,7 +48,8 @@ pub struct GpuMesh {
     pub num_blendshapes: u32,
     /// Decomposed position stream (`vec4<f32>` per vertex) for compute + debug raster.
     pub positions_buffer: Option<Arc<wgpu::Buffer>>,
-    /// Decomposed world-space normal source (`vec4<f32>` per vertex; xyz used).
+    /// Bind-pose normal stream (`vec4<f32>` per vertex; xyz used). Not yet deformed by the skinning
+    /// compute pass; debug shading uses this as a static hint until a normals/tangents skinning path exists.
     pub normals_buffer: Option<Arc<wgpu::Buffer>>,
     /// Blendshape output and/or skinning input ping buffer (`vec4<f32>` per vertex).
     pub deform_temp_buffer: Option<Arc<wgpu::Buffer>>,
@@ -56,8 +57,10 @@ pub struct GpuMesh {
     pub deformed_positions_buffer: Option<Arc<wgpu::Buffer>>,
     /// True when the host uploaded a real skeleton (`bone_count > 0`).
     pub has_skeleton: bool,
-    /// `inverse(bind_pose[i])` per bone (CPU); multiplied with world bone matrices per frame.
-    pub inverse_bind_poses: Vec<Mat4>,
+    /// Unity [`Mesh.bindposes`](https://docs.unity3d.com/ScriptReference/Mesh-bindposes.html):
+    /// inverse bind matrices (mesh space → bone bind space). Per-frame palette is
+    /// `world_bone * skinning_bind_matrices[i]`.
+    pub skinning_bind_matrices: Vec<Mat4>,
     /// Approximate VRAM (bytes), used by [`crate::resources::VramAccounting`].
     pub resident_bytes: u64,
 }
@@ -144,7 +147,7 @@ impl GpuMesh {
             bone_indices_buffer,
             bone_weights_vec4_buffer,
             bind_poses_buffer,
-            inverse_bind_poses,
+            skinning_bind_matrices,
         ) = if data.bone_count > 0 {
             let bp_raw =
                 &raw[layout.bind_poses_start..layout.bind_poses_start + layout.bind_poses_length];
@@ -153,9 +156,9 @@ impl GpuMesh {
                 .iter()
                 .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
                 .collect();
-            let inv: Vec<Mat4> = bind_poses_arr
+            let skinning: Vec<Mat4> = bind_poses_arr
                 .iter()
-                .map(|m| Mat4::from_cols_array_2d(m).inverse())
+                .map(Mat4::from_cols_array_2d)
                 .collect();
 
             let bc = &raw
@@ -200,7 +203,7 @@ impl GpuMesh {
                 bi_buf,
                 bw_buf,
                 Some(Arc::new(bp_buf)),
-                inv,
+                skinning,
             )
         } else if use_blendshapes && data.vertex_count > 0 {
             let (bind_poses_arr, bone_counts, bone_weights) =
@@ -209,9 +212,9 @@ impl GpuMesh {
                 .iter()
                 .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
                 .collect();
-            let inv: Vec<Mat4> = bind_poses_arr
+            let skinning: Vec<Mat4> = bind_poses_arr
                 .iter()
-                .map(|m| Mat4::from_cols_array_2d(m).inverse())
+                .map(Mat4::from_cols_array_2d)
                 .collect();
             let (bi_buf, bw_buf) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize)
                 .map(|(ib, wb)| {
@@ -243,7 +246,7 @@ impl GpuMesh {
                 bi_buf,
                 bw_buf,
                 Some(Arc::new(bp_buf)),
-                inv,
+                skinning,
             )
         } else {
             (None, None, None, None, Vec::new())
@@ -373,7 +376,7 @@ impl GpuMesh {
             deform_temp_buffer,
             deformed_positions_buffer,
             has_skeleton,
-            inverse_bind_poses,
+            skinning_bind_matrices,
             resident_bytes,
         })
     }

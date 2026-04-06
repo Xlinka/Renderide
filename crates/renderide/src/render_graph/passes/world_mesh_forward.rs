@@ -114,12 +114,18 @@ impl RenderPass for WorldMeshForwardPass {
             };
             let (vp, model) = if let Some(space) = scene.space(item.space_id) {
                 let view = view_matrix_from_render_transform(&space.view_transform);
-                let vp = proj * view;
-                let node_u = item.node_id as usize;
-                let model = scene
-                    .world_matrix(item.space_id, node_u)
-                    .unwrap_or(Mat4::IDENTITY);
-                (vp, model)
+                let base_vp = proj * view;
+                if item.skinned {
+                    // Skinned positions are already in world space from compute skinning (parity with
+                    // legacy skinned shader: `clip = view_proj * world_pos`, no SMR model matrix).
+                    (base_vp, Mat4::IDENTITY)
+                } else {
+                    let node_u = item.node_id as usize;
+                    let model = scene
+                        .world_matrix(item.space_id, node_u)
+                        .unwrap_or(Mat4::IDENTITY);
+                    (base_vp, model)
+                }
             } else {
                 (Mat4::IDENTITY, Mat4::IDENTITY)
             };

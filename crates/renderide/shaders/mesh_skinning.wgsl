@@ -1,5 +1,5 @@
 // Linear blend skinning (compute). Bind buffers expected to match layout produced by mesh preprocess.
-// Production use will supply bone palette = world_matrix * inverse_bind_pose per bone.
+// Bone palette entries are world_bone * unity_bindpose (inverse bind matrix per bone), built on CPU each frame.
 
 @group(0) @binding(0) var<storage, read> bone_matrices: array<mat4x4<f32>>;
 @group(0) @binding(1) var<storage, read> src_pos: array<vec4<f32>>;
