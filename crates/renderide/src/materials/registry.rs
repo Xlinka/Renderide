@@ -39,9 +39,20 @@ impl MaterialRegistry {
         self.families.insert(family.family_id(), family);
     }
 
-    /// Inserts a host shader id → family mapping (for when shader names are known).
+    /// Inserts a host shader id → family mapping and optional HUD display name (Unity-style logical name or upload field).
+    pub fn map_shader_route(
+        &mut self,
+        shader_asset_id: i32,
+        family: MaterialFamilyId,
+        display_name: Option<String>,
+    ) {
+        self.router
+            .set_shader_route(shader_asset_id, family, display_name);
+    }
+
+    /// Inserts a host shader id → family mapping without a HUD display name.
     pub fn map_shader_to_family(&mut self, shader_asset_id: i32, family: MaterialFamilyId) {
-        self.router.set_shader_family(shader_asset_id, family);
+        self.map_shader_route(shader_asset_id, family, None);
     }
 
     /// Removes routing for a host shader id [`crate::shared::ShaderUnload`].
@@ -86,8 +97,8 @@ impl MaterialRegistry {
         &self.device
     }
 
-    /// Shader routes for the debug HUD (`shader_asset_id` → [`MaterialFamilyId`], sorted).
-    pub fn shader_routes_for_hud(&self) -> Vec<(i32, MaterialFamilyId)> {
+    /// Shader routes for the debug HUD (`shader_asset_id`, [`MaterialFamilyId`], optional display name), sorted.
+    pub fn shader_routes_for_hud(&self) -> Vec<(i32, MaterialFamilyId, Option<String>)> {
         self.router.routes_sorted_for_hud()
     }
 }

@@ -513,8 +513,12 @@ impl RendererRuntime {
             resolved.unity_shader_name.as_deref(),
             resolved.family,
         );
+        let display_name = resolved
+            .unity_shader_name
+            .clone()
+            .or_else(|| upload.file.clone().filter(|s| !s.is_empty()));
         self.backend
-            .register_shader_route(asset_id, resolved.family);
+            .register_shader_route(asset_id, resolved.family, display_name);
         if let Some(ref mut ipc) = self.frontend.ipc_mut() {
             ipc.send_background(RendererCommand::shader_upload_result(ShaderUploadResult {
                 asset_id,

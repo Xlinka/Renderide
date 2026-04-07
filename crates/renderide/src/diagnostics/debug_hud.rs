@@ -412,7 +412,7 @@ impl DebugHud {
         }
     }
 
-    /// Host shader asset id → material family lines only (see **Shader routes** tab).
+    /// Host shader asset id, logical name (or `<none>`), and material family per line (see **Shader routes** tab).
     fn shader_mappings_tab(ui: &imgui::Ui, frame: Option<&FrameDiagnosticsSnapshot>) {
         let Some(d) = frame else {
             ui.text("Waiting for frame diagnostics…");

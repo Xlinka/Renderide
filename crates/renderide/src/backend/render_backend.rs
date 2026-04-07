@@ -61,8 +61,8 @@ pub struct RenderBackend {
     pending_texture_uploads: VecDeque<SetTexture2DData>,
     /// GPU material families, router, and pipeline cache (after [`Self::attach`]).
     pub(crate) material_registry: Option<crate::materials::MaterialRegistry>,
-    /// Shader asset id → family when uploads arrive before GPU attach.
-    pending_shader_routes: HashMap<i32, MaterialFamilyId>,
+    /// Shader asset id → family and optional HUD label when uploads arrive before GPU attach.
+    pending_shader_routes: HashMap<i32, (MaterialFamilyId, Option<String>)>,
     /// Optional mesh skinning / blendshape compute pipelines (after [`Self::attach`]).
     mesh_preprocess: Option<MeshPreprocessPipelines>,
     /// Compiled DAG of render passes (after [`Self::attach`]); see [`crate::render_graph`].
@@ -260,8 +260,8 @@ impl RenderBackend {
             device.clone(),
         ));
         if let Some(reg) = self.material_registry.as_mut() {
-            for (asset_id, family) in self.pending_shader_routes.drain() {
-                reg.map_shader_to_family(asset_id, family);
+            for (asset_id, (family, display_name)) in self.pending_shader_routes.drain() {
+                reg.map_shader_route(asset_id, family, display_name);
             }
         }
         self.flush_pending_texture_allocations(&device);
@@ -442,12 +442,18 @@ impl RenderBackend {
         self.debug_draw.as_ref()
     }
 
-    /// Maps shader asset to material family, or defers until [`Self::attach`].
-    pub fn register_shader_route(&mut self, asset_id: i32, family: MaterialFamilyId) {
+    /// Maps shader asset to material family and optional HUD display name, or defers until [`Self::attach`].
+    pub fn register_shader_route(
+        &mut self,
+        asset_id: i32,
+        family: MaterialFamilyId,
+        display_name: Option<String>,
+    ) {
         if let Some(reg) = self.material_registry.as_mut() {
-            reg.map_shader_to_family(asset_id, family);
+            reg.map_shader_route(asset_id, family, display_name);
         } else {
-            self.pending_shader_routes.insert(asset_id, family);
+            self.pending_shader_routes
+                .insert(asset_id, (family, display_name));
         }
     }
 

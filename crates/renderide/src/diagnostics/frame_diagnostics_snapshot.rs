@@ -50,7 +50,7 @@ pub struct FrameDiagnosticsSnapshot {
     pub textures_gpu_resident: usize,
     /// Rows in [`crate::resources::MeshPool`] (resident GPU mesh entries).
     pub mesh_pool_entry_count: usize,
-    /// Lines describing host shader → material family routes (sorted by shader id).
+    /// Lines describing host shader asset id, optional logical shader name (or `<none>`), and material family (sorted by id).
     pub shader_route_lines: Vec<String>,
 }
 
@@ -81,7 +81,10 @@ impl FrameDiagnosticsSnapshot {
             .map(|reg| {
                 reg.shader_routes_for_hud()
                     .into_iter()
-                    .map(|(id, fam)| format!("shader_asset_id={id}  →  family {:?}", fam))
+                    .map(|(id, fam, name)| {
+                        let label = name.as_deref().unwrap_or("<none>");
+                        format!("shader_asset_id={id}  {label}  family {:?}", fam)
+                    })
                     .collect()
             })
             .unwrap_or_default();

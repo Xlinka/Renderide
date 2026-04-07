@@ -18,7 +18,7 @@ use crate::assets::util::compact_alnum_lower;
 pub struct ResolvedShaderUpload {
     /// `Shader "…"` string, container stem, or label when resolution succeeded.
     pub unity_shader_name: Option<String>,
-    /// Family passed to [`crate::materials::MaterialRegistry::map_shader_to_family`].
+    /// Family passed to [`crate::materials::MaterialRegistry::map_shader_route`].
     pub family: MaterialFamilyId,
 }
 
