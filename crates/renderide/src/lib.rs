@@ -40,8 +40,6 @@ pub mod materials;
 pub mod output_device;
 pub mod pipelines;
 pub mod present;
-/// Desktop vs OpenXR presentation (see plan).
-pub mod presentation;
 pub mod render_graph;
 pub mod resources;
 pub mod runtime;

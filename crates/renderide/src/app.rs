@@ -482,55 +482,66 @@ impl RenderideApp {
             Vec::new()
         };
         if views.len() >= 2 {
-            let (near, far) = effective_head_output_clip_planes(
-                self.runtime.host_camera.near_clip,
-                self.runtime.host_camera.far_clip,
-                self.runtime.host_camera.output_device,
-                self.runtime
+            if self.runtime.host_camera.vr_active {
+                let (near, far) = effective_head_output_clip_planes(
+                    self.runtime.host_camera.near_clip,
+                    self.runtime.host_camera.far_clip,
+                    self.runtime.host_camera.output_device,
+                    self.runtime
+                        .scene
+                        .active_main_space()
+                        .map(|space| space.root_transform.scale),
+                );
+                let center_pose = crate::xr::headset_center_pose_from_stereo_views(&views);
+                let world_from_tracking = self
+                    .runtime
                     .scene
                     .active_main_space()
-                    .map(|space| space.root_transform.scale),
-            );
-            let center_pose = crate::xr::headset_center_pose_from_stereo_views(&views);
-            let world_from_tracking = self
-                .runtime
-                .scene
-                .active_main_space()
-                .map(|space| {
-                    crate::xr::tracking_space_to_world_matrix(
-                        &space.root_transform,
-                        &space.view_transform,
-                        space.override_view_position,
-                        center_pose,
-                    )
-                })
-                .unwrap_or(glam::Mat4::IDENTITY);
-            self.runtime.set_head_output_transform(world_from_tracking);
-            let l = crate::xr::view_projection_from_xr_view_aligned(
-                &views[0],
-                near,
-                far,
-                world_from_tracking,
-            );
-            let r = crate::xr::view_projection_from_xr_view_aligned(
-                &views[1],
-                near,
-                far,
-                world_from_tracking,
-            );
-            self.runtime.set_stereo_view_proj(Some((l, r)));
-            let desktop_mirror_view_proj =
-                crate::xr::center_view_projection_from_stereo_views_aligned(
-                    &views,
+                    .map(|space| {
+                        crate::xr::tracking_space_to_world_matrix(
+                            &space.root_transform,
+                            &space.view_transform,
+                            space.override_view_position,
+                            center_pose,
+                        )
+                    })
+                    .unwrap_or(glam::Mat4::IDENTITY);
+                self.runtime.set_head_output_transform(world_from_tracking);
+                let l = crate::xr::view_projection_from_xr_view_aligned(
+                    &views[0],
                     near,
                     far,
                     world_from_tracking,
                 );
+                let r = crate::xr::view_projection_from_xr_view_aligned(
+                    &views[1],
+                    near,
+                    far,
+                    world_from_tracking,
+                );
+                self.runtime.set_stereo_view_proj(Some((l, r)));
+                let desktop_mirror_view_proj =
+                    crate::xr::center_view_projection_from_stereo_views_aligned(
+                        &views,
+                        near,
+                        far,
+                        world_from_tracking,
+                    );
+                return Some(OpenxrFrameTick {
+                    predicted_display_time: fs.predicted_display_time,
+                    should_render: fs.should_render,
+                    views,
+                    desktop_mirror_view_proj,
+                });
+            }
+            // Desktop (`!vr_active`): keep [`HostCameraFrame::head_output_transform`] from
+            // [`RendererRuntime::on_frame_submit`] (host `root_transform`), matching Unity
+            // `HeadOutput.UpdatePositioning`. OpenXR still supplies views for IPC pose.
             return Some(OpenxrFrameTick {
                 predicted_display_time: fs.predicted_display_time,
                 should_render: fs.should_render,
                 views,
-                desktop_mirror_view_proj,
+                desktop_mirror_view_proj: None,
             });
         }
         Some(OpenxrFrameTick {
