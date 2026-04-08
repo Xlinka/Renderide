@@ -1,5 +1,5 @@
 //! Parse composed WGSL with naga and derive [`wgpu::BindGroupLayoutEntry`] lists for `@group(1)` and
-//! `@group(2)`, and a [`ReflectedRasterLayout::layout_fingerprint`] for pipeline cache keys.
+//! `@group(2)`, and a [`ReflectedRasterLayout::layout_fingerprint`] for tests and diagnostics.
 //!
 //! Validates `@group(0)` against [`crate::backend::frame_gpu::FrameGpuResources`] buffer sizes.
 
@@ -22,7 +22,7 @@ use crate::gpu::PER_DRAW_UNIFORM_STRIDE;
 /// Result of [`reflect_raster_material_wgsl`].
 #[derive(Debug)]
 pub struct ReflectedRasterLayout {
-    /// Stable hash of material + per-draw bind group layout shapes (for [`super::MaterialPipelineCacheKey`]).
+    /// Stable hash of material + per-draw bind group layout shapes (tests, diagnostics, future cache versioning).
     pub layout_fingerprint: u64,
     /// `@group(1)` entries sorted by binding index.
     pub material_entries: Vec<wgpu::BindGroupLayoutEntry>,

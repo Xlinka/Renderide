@@ -231,19 +231,21 @@ impl RenderPass for WorldMeshForwardPass {
         let mut slab_bytes = vec![0u8; draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE)];
         write_per_draw_uniform_slab(&slots, &mut slab_bytes);
 
+        let queue_guard = ctx
+            .queue
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queue = &*queue_guard;
+
         {
-            let queue = match ctx.queue.lock() {
-                Ok(q) => q,
-                Err(poisoned) => poisoned.into_inner(),
-            };
             let Some(dbg) = backend.debug_draw.as_mut() else {
                 return Ok(());
             };
             queue.write_buffer(&dbg.per_draw_uniforms, 0, &slab_bytes);
-            let camera_world = hc.head_output_transform.col(3).truncate();
-            if let Some(fgpu) = backend.frame_gpu() {
-                fgpu.write_frame(&queue, camera_world, &lights_for_frame);
-            }
+        }
+        let camera_world = hc.head_output_transform.col(3).truncate();
+        if let Some(fgpu) = backend.frame_gpu() {
+            fgpu.write_frame(queue, camera_world, &lights_for_frame);
         }
 
         let Some((frame_bg_arc, empty_bg_arc)) = backend.mesh_forward_frame_bind_groups() else {
@@ -320,10 +322,9 @@ impl RenderPass for WorldMeshForwardPass {
             let dynamic_offset = (draw_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
             rpass.set_bind_group(0, frame_bg_arc.as_ref(), &[]);
             if item.batch_key.family_id == MANIFEST_RASTER_FAMILY_ID {
-                let q = ctx.queue.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(mb) = backend.manifest_material_bind() {
                     let bg = mb.world_unlit_bind_group(
-                        &q,
+                        queue,
                         backend.material_property_store(),
                         backend.texture_pool(),
                         item.lookup_ids,

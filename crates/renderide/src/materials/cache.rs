@@ -1,4 +1,9 @@
 //! Cache of [`wgpu::RenderPipeline`] per material family + permutation + attachment formats.
+//!
+//! Lookup keys intentionally **do not** include a WGSL layout fingerprint: reflecting the full
+//! shader on every cache probe would dominate CPU cost. Embedded targets are stable per
+//! `(family_id, manifest stem, permutation, [`MaterialPipelineDesc`])`. If hot-reload or dynamic
+//! WGSL is introduced, extend the key with a content hash or version.
 
 use std::collections::HashMap;
 use std::num::NonZeroU32;
@@ -7,17 +12,14 @@ use std::sync::Arc;
 use crate::pipelines::ShaderPermutation;
 
 use super::family::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
-use super::wgsl_reflect::reflect_raster_material_wgsl;
 
-/// Key for [`MaterialPipelineCache`].
+/// Key for [`MaterialPipelineCache`] lookups (no WGSL parse — see module docs).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct MaterialPipelineCacheKey {
     pub family_id: MaterialFamilyId,
     /// Present for [`super::MANIFEST_RASTER_FAMILY_ID`] so distinct manifest stems do not share a pipeline.
     pub manifest_stem: Option<Arc<str>>,
     pub permutation: ShaderPermutation,
-    /// From [`super::reflect_raster_material_wgsl`] when the shader matches the frame-globals contract; `0` if reflection failed (e.g. no `@group(0)`).
-    pub layout_fingerprint: u64,
     pub surface_format: wgpu::TextureFormat,
     pub depth_stencil_format: Option<wgpu::TextureFormat>,
     pub sample_count: u32,
@@ -46,27 +48,26 @@ impl MaterialPipelineCache {
     }
 
     /// Returns or builds a pipeline for `family`, `desc`, and `permutation`.
+    ///
+    /// On a cache hit, does not call [`MaterialPipelineFamily::build_wgsl`] or run reflection;
+    /// those run only when inserting a new entry.
     pub fn get_or_create(
         &mut self,
         family: &dyn MaterialPipelineFamily,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
     ) -> &wgpu::RenderPipeline {
-        let wgsl = family.build_wgsl(permutation);
-        let layout_fingerprint = reflect_raster_material_wgsl(&wgsl)
-            .map(|r| r.layout_fingerprint)
-            .unwrap_or(0);
         let key = MaterialPipelineCacheKey {
             family_id: family.family_id(),
             manifest_stem: family.manifest_stem(),
             permutation,
-            layout_fingerprint,
             surface_format: desc.surface_format,
             depth_stencil_format: desc.depth_stencil_format,
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
         };
         self.pipelines.entry(key).or_insert_with(|| {
+            let wgsl = family.build_wgsl(permutation);
             let module = self
                 .device
                 .create_shader_module(wgpu::ShaderModuleDescriptor {
