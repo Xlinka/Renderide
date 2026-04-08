@@ -6,7 +6,9 @@ pub mod shader;
 pub mod texture;
 pub mod util;
 
-pub use shader::{resolve_shader_upload, ResolvedShaderUpload};
+pub use shader::{
+    resolve_shader_routing_name_from_upload, resolve_shader_upload, ResolvedShaderUpload,
+};
 
 use std::collections::VecDeque;
 

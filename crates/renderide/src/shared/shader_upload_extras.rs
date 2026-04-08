@@ -6,6 +6,8 @@
 //! after those fields; use [`unpack_appended_shader_logical_name`] on the trailing bytes when you decode
 //! messages outside the generated decode path, then pass the result to
 //! [`crate::assets::shader::logical_name::resolve_logical_shader_name_from_upload_with_host_hint`].
+//! For routing and embedded stem matching, prefer [`crate::assets::shader::resolve_shader_routing_name_from_upload`]
+//! with the unpacked string as `host_hint`.
 
 use crate::shared::packing::default_entity_pool::DefaultEntityPool;
 use crate::shared::packing::memory_unpacker::MemoryUnpacker;

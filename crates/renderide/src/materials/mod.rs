@@ -4,19 +4,17 @@
 //! batches). **Shader program choice** (which WGSL family to use) is routed via [`MaterialRouter`]
 //! from host shader asset ids updated by [`crate::assets::shader::resolve_shader_upload`].
 
-mod builtin_solid;
 mod cache;
 mod family;
 mod manifest_stem;
 mod material_property_binding;
+pub(crate) mod raster_pipeline;
 mod registry;
 mod resolve_raster;
 mod router;
 mod stem_manifest;
 mod wgsl;
 mod wgsl_reflect;
-
-pub use builtin_solid::{SolidColorFamily, SOLID_COLOR_FAMILY_ID};
 pub use cache::{MaterialPipelineCache, MaterialPipelineCacheKey};
 pub use family::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
 pub use manifest_stem::{
@@ -30,8 +28,8 @@ pub use router::{MaterialRouter, ShaderRouteEntry};
 pub use stem_manifest::{embedded_default_stem_for_unity_name, manifest_stem_for_unity_name};
 pub use wgsl::{compose_wgsl, WgslPatch};
 pub use wgsl_reflect::{
-    reflect_raster_material_wgsl, validate_per_draw_group2, ReflectError,
-    ReflectedMaterialUniformBlock, ReflectedRasterLayout, ReflectedUniformField,
+    reflect_raster_material_wgsl, reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2,
+    ReflectError, ReflectedMaterialUniformBlock, ReflectedRasterLayout, ReflectedUniformField,
     ReflectedUniformScalarKind,
 };
 

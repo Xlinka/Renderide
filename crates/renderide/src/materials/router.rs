@@ -106,13 +106,16 @@ impl MaterialRouter {
 #[cfg(test)]
 mod tests {
     use super::MaterialRouter;
-    use crate::materials::{MaterialFamilyId, SOLID_COLOR_FAMILY_ID};
+    use crate::materials::MaterialFamilyId;
+
+    /// Arbitrary family id for router tests (not a builtin pipeline id).
+    const TEST_ROUTE_FAMILY: MaterialFamilyId = MaterialFamilyId(100);
 
     #[test]
     fn remove_shader_family_clears_entry() {
         let mut r = MaterialRouter::new(MaterialFamilyId(99));
-        r.set_shader_family(7, SOLID_COLOR_FAMILY_ID);
-        assert_eq!(r.get_shader_family(7), Some(SOLID_COLOR_FAMILY_ID));
+        r.set_shader_family(7, TEST_ROUTE_FAMILY);
+        assert_eq!(r.get_shader_family(7), Some(TEST_ROUTE_FAMILY));
         r.remove_shader_family(7);
         assert_eq!(r.get_shader_family(7), None);
         assert_eq!(r.family_for_shader_asset(7), MaterialFamilyId(99));
@@ -121,7 +124,7 @@ mod tests {
     #[test]
     fn remove_shader_family_clears_stem() {
         let mut r = MaterialRouter::new(MaterialFamilyId(99));
-        r.set_shader_route(1, SOLID_COLOR_FAMILY_ID, Some("x".to_string()));
+        r.set_shader_route(1, TEST_ROUTE_FAMILY, Some("x".to_string()));
         r.set_shader_stem(1, "debug_world_normals_default".to_string());
         assert_eq!(
             r.stem_for_shader_asset(1),
@@ -136,25 +139,25 @@ mod tests {
         let mut r = MaterialRouter::new(MaterialFamilyId(99));
         r.set_shader_route(
             3,
-            SOLID_COLOR_FAMILY_ID,
+            TEST_ROUTE_FAMILY,
             Some("Custom/ExampleShader".to_string()),
         );
         assert_eq!(
             r.routes_sorted_for_hud(),
             vec![(
                 3,
-                SOLID_COLOR_FAMILY_ID,
+                TEST_ROUTE_FAMILY,
                 Some("Custom/ExampleShader".to_string())
             )]
         );
-        assert_eq!(r.get_shader_family(3), Some(SOLID_COLOR_FAMILY_ID));
+        assert_eq!(r.get_shader_family(3), Some(TEST_ROUTE_FAMILY));
     }
 
     #[test]
     fn routes_sorted_for_hud_sorted_by_id() {
         let mut r = MaterialRouter::new(MaterialFamilyId(99));
-        r.set_shader_route(10, SOLID_COLOR_FAMILY_ID, None);
-        r.set_shader_route(2, SOLID_COLOR_FAMILY_ID, Some("a".to_string()));
+        r.set_shader_route(10, TEST_ROUTE_FAMILY, None);
+        r.set_shader_route(2, TEST_ROUTE_FAMILY, Some("a".to_string()));
         assert_eq!(
             r.routes_sorted_for_hud()
                 .into_iter()

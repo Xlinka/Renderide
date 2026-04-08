@@ -1,9 +1,14 @@
 //! Resolves [`ShaderUpload`](crate::shared::ShaderUpload) to a [`MaterialFamilyId`] for [`MaterialRegistry`](crate::materials::MaterialRegistry).
 //!
 //! Extraction of Unity logical names lives in [`super::logical_name`] and [`super::unity_asset`].
+//! [`resolve_shader_upload`] uses
+//! [`super::logical_name::resolve_shader_routing_name_from_upload`] so filesystem paths prefer raw
+//! AssetBundle / container stems before ShaderLab first-token canonicalization.
+//!
 //! Names with an embedded `{logical}_default` WGSL target (see [`crate::materials::stem_manifest`]) resolve to
-//! [`MANIFEST_RASTER_FAMILY_ID`](crate::materials::MANIFEST_RASTER_FAMILY_ID); otherwise
-//! [`DEBUG_WORLD_NORMALS_FAMILY_ID`](crate::materials::DEBUG_WORLD_NORMALS_FAMILY_ID).
+//! [`MANIFEST_RASTER_FAMILY_ID`](crate::materials::MANIFEST_RASTER_FAMILY_ID); unknown or non-embedded shaders use
+//! [`DEBUG_WORLD_NORMALS_FAMILY_ID`](crate::materials::DEBUG_WORLD_NORMALS_FAMILY_ID) as the **only** mesh fallback
+//! (there is no separate solid-color pipeline family).
 
 use crate::materials::DEBUG_WORLD_NORMALS_FAMILY_ID;
 use crate::materials::{manifest_stem_for_unity_name, MaterialFamilyId, MANIFEST_RASTER_FAMILY_ID};
@@ -22,7 +27,7 @@ pub struct ResolvedShaderUpload {
 
 /// Full resolution pipeline for a host [`ShaderUpload`].
 pub fn resolve_shader_upload(data: &ShaderUpload) -> ResolvedShaderUpload {
-    let unity_shader_name = logical_name::resolve_logical_shader_name_from_upload(data);
+    let unity_shader_name = logical_name::resolve_shader_routing_name_from_upload(data, None);
     let family = match unity_shader_name.as_deref() {
         Some(name) if manifest_stem_for_unity_name(name).is_some() => MANIFEST_RASTER_FAMILY_ID,
         _ => DEBUG_WORLD_NORMALS_FAMILY_ID,

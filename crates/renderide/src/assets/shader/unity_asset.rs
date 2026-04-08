@@ -53,21 +53,30 @@ enum ResolutionSource {
     Container,
 }
 
+/// Raw shader identifier from a filesystem path (AssetBundle container stem, YAML, ShaderLab, etc.)
+/// **before** [`canonical_shader_lab_logical_name`] (first-token) normalization.
+///
+/// Prefer this for **routing** and embedded stem matching so names stay aligned with Unity asset
+/// / bundle identity rather than a renderer-only canonical form.
+pub(crate) fn try_resolve_shader_name_from_path_hint_raw(path: &Path) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.is_file() {
+        try_from_file(path)
+    } else if meta.is_dir() {
+        try_from_directory(path)
+    } else {
+        None
+    }
+}
+
 /// Attempts to extract a ShaderLab logical name when `file_field` is a path to a file or directory
 /// containing Unity-serialized shader data.
 ///
 /// Logs [`logger::info!`] on success (`resolved … from path`). Failures use one concise [`logger::warn!`]
 /// per file or directory; detailed probe output is [`logger::debug!`].
 pub(crate) fn try_resolve_shader_name_from_path_hint(path: &Path) -> Option<String> {
-    let meta = std::fs::metadata(path).ok()?;
-    let name = if meta.is_file() {
-        try_from_file(path)
-    } else if meta.is_dir() {
-        try_from_directory(path)
-    } else {
-        None
-    };
-    let name = name.map(|n| canonical_shader_lab_logical_name(&n));
+    let name = try_resolve_shader_name_from_path_hint_raw(path)
+        .map(|n| canonical_shader_lab_logical_name(&n));
     if let Some(parsed) = &name {
         logger::info!(
             "shader_unity_asset: resolved {:?} from path {}",

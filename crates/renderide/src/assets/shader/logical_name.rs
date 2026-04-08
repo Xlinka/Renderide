@@ -120,8 +120,45 @@ pub fn try_resolve_plain_shader_label(file_field: &str) -> Option<String> {
 const UPLOAD_SOURCE_READ_CAP_BYTES: usize = 262_144;
 
 /// Resolves the logical Unity shader name from [`ShaderUpload::file`](ShaderUpload::file): path, inline text, or disk read.
+///
+/// For **material routing** and embedded stem matching, prefer [`resolve_shader_routing_name_from_upload`],
+/// which favors raw AssetBundle / container stems from filesystem paths before ShaderLab first-token
+/// canonicalization.
 pub fn resolve_logical_shader_name_from_upload(data: &ShaderUpload) -> Option<String> {
     resolve_logical_shader_name_from_upload_with_host_hint(data, None)
+}
+
+/// Shader identifier for **routing**, embedded `{key}_default` stem probes, and registry display when
+/// no separate label is needed.
+///
+/// Resolution order:
+/// 1. Non-empty `host_hint` (trimmed).
+/// 2. Raw name from [`super::unity_asset::try_resolve_shader_name_from_path_hint_raw`] when `file` is an
+///    existing filesystem path to a Unity asset, bundle, or directory (AssetBundle container stem, etc.).
+/// 3. Otherwise same sources as [`resolve_logical_shader_name_from_upload_inner`], then
+///    [`canonical_shader_lab_logical_name`] on the result.
+pub fn resolve_shader_routing_name_from_upload(
+    data: &ShaderUpload,
+    host_hint: Option<&str>,
+) -> Option<String> {
+    if let Some(h) = host_hint {
+        let t = h.trim();
+        if !t.is_empty() {
+            return Some(t.to_string());
+        }
+    }
+    let file_field = data.file.as_deref()?;
+    let path = std::path::Path::new(file_field);
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.is_file() || meta.is_dir() {
+            if let Some(name) = super::unity_asset::try_resolve_shader_name_from_path_hint_raw(path)
+            {
+                return Some(name);
+            }
+        }
+    }
+    let raw = resolve_logical_shader_name_from_upload_inner(data, None)?;
+    Some(canonical_shader_lab_logical_name(&raw))
 }
 
 /// Like [`resolve_logical_shader_name_from_upload`], but uses `host_hint` first when set (e.g. from

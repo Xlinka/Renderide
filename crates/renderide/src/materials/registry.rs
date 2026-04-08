@@ -6,7 +6,6 @@ use std::sync::Arc;
 use crate::pipelines::raster::{DebugWorldNormalsFamily, DEBUG_WORLD_NORMALS_FAMILY_ID};
 use crate::pipelines::ShaderPermutation;
 
-use super::builtin_solid::SolidColorFamily;
 use super::cache::MaterialPipelineCache;
 use super::family::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
 use super::manifest_stem::{ManifestStemMaterialFamily, MANIFEST_RASTER_FAMILY_ID};
@@ -24,6 +23,7 @@ pub struct MaterialRegistry {
 
 impl MaterialRegistry {
     /// Registers builtin families and routes unknown shader assets to [`DEBUG_WORLD_NORMALS_FAMILY_ID`].
+    /// The former solid-color builtin has been removed; manifest shaders and debug normals cover mesh draws.
     pub fn with_default_families(device: Arc<wgpu::Device>) -> Self {
         let mut registry = Self {
             device: device.clone(),
@@ -31,7 +31,6 @@ impl MaterialRegistry {
             router: MaterialRouter::new(DEBUG_WORLD_NORMALS_FAMILY_ID),
             cache: MaterialPipelineCache::new(device),
         };
-        registry.register_family(Arc::new(SolidColorFamily));
         registry.register_family(Arc::new(DebugWorldNormalsFamily));
         registry
     }
@@ -144,7 +143,7 @@ mod wgpu_cache_tests {
 
     use super::MaterialRegistry;
     use crate::materials::family::MaterialPipelineDesc;
-    use crate::materials::SOLID_COLOR_FAMILY_ID;
+    use crate::materials::DEBUG_WORLD_NORMALS_FAMILY_ID;
     use crate::pipelines::ShaderPermutation;
 
     async fn device_with_adapter() -> Option<Arc<wgpu::Device>> {
@@ -169,9 +168,9 @@ mod wgpu_cache_tests {
     /// Real device; run `cargo test -p renderide wgpu_cache -- --ignored` locally.
     #[test]
     #[ignore = "wgpu/GPU stack (may SIGSEGV in sandbox CI); run with --ignored"]
-    fn solid_color_pipeline_cache_hits() {
+    fn debug_world_normals_pipeline_cache_hits() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            eprintln!("skipping solid_color_pipeline_cache_hits: no wgpu adapter");
+            eprintln!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
             return;
         };
         let mut reg = MaterialRegistry::with_default_families(device);
@@ -183,13 +182,13 @@ mod wgpu_cache_tests {
         };
         let addr = {
             let p = reg
-                .pipeline_for_family(SOLID_COLOR_FAMILY_ID, &desc, ShaderPermutation(0))
+                .pipeline_for_family(DEBUG_WORLD_NORMALS_FAMILY_ID, &desc, ShaderPermutation(0))
                 .expect("builtin family");
             std::ptr::from_ref(p)
         };
         let addr2 = {
             let p = reg
-                .pipeline_for_family(SOLID_COLOR_FAMILY_ID, &desc, ShaderPermutation(0))
+                .pipeline_for_family(DEBUG_WORLD_NORMALS_FAMILY_ID, &desc, ShaderPermutation(0))
                 .expect("cache hit");
             std::ptr::from_ref(p)
         };
@@ -212,13 +211,13 @@ mod wgpu_cache_tests {
         };
         let addr0 = {
             let p = reg
-                .pipeline_for_family(SOLID_COLOR_FAMILY_ID, &desc, ShaderPermutation(0))
+                .pipeline_for_family(DEBUG_WORLD_NORMALS_FAMILY_ID, &desc, ShaderPermutation(0))
                 .expect("perm 0");
             std::ptr::from_ref(p)
         };
         let addr1 = {
             let p = reg
-                .pipeline_for_family(SOLID_COLOR_FAMILY_ID, &desc, ShaderPermutation(1))
+                .pipeline_for_family(DEBUG_WORLD_NORMALS_FAMILY_ID, &desc, ShaderPermutation(1))
                 .expect("perm 1");
             std::ptr::from_ref(p)
         };

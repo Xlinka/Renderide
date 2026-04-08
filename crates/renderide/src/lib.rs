@@ -57,6 +57,7 @@ pub use assets::material::{
     MaterialPropertyLookupIds, MaterialPropertySemanticHook, MaterialPropertyStore,
     MaterialPropertyValue, ParseMaterialBatchOptions, PropertyIdRegistry,
 };
+pub use assets::resolve_shader_routing_name_from_upload;
 pub use backend::{order_lights_for_clustered_shading, GpuLight, RenderBackend, MAX_LIGHTS};
 pub use config::{
     load_renderer_settings, log_config_resolve_trace, resolve_save_path, save_renderer_settings,
@@ -74,12 +75,12 @@ pub use ipc::DualQueueIpc;
 pub use materials::{
     compose_wgsl, embedded_default_stem_for_unity_name, manifest_stem_for_unity_name,
     manifest_stem_needs_uv0_stream, manifest_wgsl_needs_uv0_stream, reflect_raster_material_wgsl,
-    resolve_raster_family, DebugWorldNormalsFamily, ManifestStemMaterialFamily, MaterialFamilyId,
-    MaterialPipelineCache, MaterialPipelineCacheKey, MaterialPipelineDesc, MaterialPipelineFamily,
-    MaterialPropertyGpuLayout, MaterialRegistry, MaterialRouter, ReflectError,
-    ReflectedMaterialUniformBlock, ReflectedRasterLayout, ReflectedUniformField,
-    ReflectedUniformScalarKind, SolidColorFamily, WgslPatch, DEBUG_WORLD_NORMALS_FAMILY_ID,
-    MANIFEST_RASTER_FAMILY_ID, SOLID_COLOR_FAMILY_ID,
+    reflect_vertex_shader_needs_uv0_stream, resolve_raster_family, DebugWorldNormalsFamily,
+    ManifestStemMaterialFamily, MaterialFamilyId, MaterialPipelineCache, MaterialPipelineCacheKey,
+    MaterialPipelineDesc, MaterialPipelineFamily, MaterialPropertyGpuLayout, MaterialRegistry,
+    MaterialRouter, ReflectError, ReflectedMaterialUniformBlock, ReflectedRasterLayout,
+    ReflectedUniformField, ReflectedUniformScalarKind, WgslPatch, DEBUG_WORLD_NORMALS_FAMILY_ID,
+    MANIFEST_RASTER_FAMILY_ID,
 };
 pub use render_graph::{
     build_default_main_graph, passes::MeshDeformPass, passes::SwapchainClearPass,

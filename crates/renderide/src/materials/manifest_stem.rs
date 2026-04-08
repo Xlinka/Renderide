@@ -5,13 +5,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
 use crate::embedded_shaders;
-use crate::materials::{reflect_raster_material_wgsl, validate_per_draw_group2};
+use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipeline;
 use crate::materials::{MaterialFamilyId, MaterialPipelineDesc, MaterialPipelineFamily};
 use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::pipelines::ShaderPermutation;
-use crate::render_graph::MAIN_FORWARD_DEPTH_COMPARE;
 
 /// Stable id for shaders whose normalized Unity name has an embedded `{key}_default` WGSL target.
 pub const MANIFEST_RASTER_FAMILY_ID: MaterialFamilyId = MaterialFamilyId(3);
@@ -46,11 +44,7 @@ pub fn manifest_stem_needs_uv0_stream(base_stem: &str, permutation: ShaderPermut
 
 /// `true` when `vs_main` reflection reports a highest vertex `@location` index ≥ 2 (UV at `location(2)`).
 pub fn manifest_wgsl_needs_uv0_stream(wgsl_source: &str) -> bool {
-    reflect_raster_material_wgsl(wgsl_source)
-        .ok()
-        .and_then(|r| r.vs_max_vertex_location)
-        .map(|m| m >= 2)
-        .unwrap_or(false)
+    crate::materials::wgsl_reflect::reflect_vertex_shader_needs_uv0_stream(wgsl_source)
 }
 
 /// Composed target stem for a manifest base stem (e.g. `unlit_default` → `unlit_multiview`).
@@ -113,107 +107,14 @@ impl MaterialPipelineFamily for ManifestStemMaterialFamily {
         desc: &MaterialPipelineDesc,
         wgsl_source: &str,
     ) -> wgpu::RenderPipeline {
-        let reflected = reflect_raster_material_wgsl(wgsl_source).expect(
-            "reflect manifest stem material (must match frame globals + per-draw contract)",
-        );
-        validate_per_draw_group2(&reflected.per_draw_entries).expect("per_draw group2");
-
-        let frame_bgl = FrameGpuResources::bind_group_layout(device);
-        let material_bgl = if reflected.material_entries.is_empty() {
-            empty_material_bind_group_layout(device)
-        } else {
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("manifest_stem_material"),
-                entries: &reflected.material_entries,
-            })
-        };
-        let per_draw_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("manifest_stem_per_draw"),
-            entries: &reflected.per_draw_entries,
-        });
-
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("manifest_stem_material"),
-            bind_group_layouts: &[Some(&frame_bgl), Some(&material_bgl), Some(&per_draw_bgl)],
-            immediate_size: 0,
-        });
-
-        let pos_layout = wgpu::VertexBufferLayout {
-            array_stride: 16,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x4,
-            }],
-        };
-        let nrm_layout = wgpu::VertexBufferLayout {
-            array_stride: 16,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 1,
-                format: wgpu::VertexFormat::Float32x4,
-            }],
-        };
-        let uv_layout = wgpu::VertexBufferLayout {
-            array_stride: 8,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 2,
-                format: wgpu::VertexFormat::Float32x2,
-            }],
-        };
-
-        let use_uv = manifest_wgsl_needs_uv0_stream(wgsl_source);
-
-        let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if use_uv {
-            &[pos_layout, nrm_layout, uv_layout]
-        } else {
-            &[pos_layout, nrm_layout]
-        };
-
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("manifest_stem_material"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: vertex_buffers,
-            },
-            fragment: Some(wgpu::FragmentState {
-                module,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: desc.surface_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: desc
-                .depth_stencil_format
-                .map(|format| wgpu::DepthStencilState {
-                    format,
-                    depth_write_enabled: Some(true),
-                    depth_compare: Some(MAIN_FORWARD_DEPTH_COMPARE),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-            multisample: wgpu::MultisampleState {
-                count: desc.sample_count,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: desc.multiview_mask,
-            cache: None,
-        })
+        create_reflective_raster_mesh_forward_pipeline(
+            device,
+            module,
+            desc,
+            wgsl_source,
+            "manifest_stem_material",
+            true,
+        )
     }
 }
 

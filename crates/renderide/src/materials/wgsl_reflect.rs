@@ -165,6 +165,15 @@ pub fn reflect_raster_material_wgsl(source: &str) -> Result<ReflectedRasterLayou
     })
 }
 
+/// Returns true when `vs_main` uses vertex `@location` 2 or higher (UV0 stream).
+pub fn reflect_vertex_shader_needs_uv0_stream(wgsl_source: &str) -> bool {
+    reflect_raster_material_wgsl(wgsl_source)
+        .ok()
+        .and_then(|r| r.vs_max_vertex_location)
+        .map(|m| m >= 2)
+        .unwrap_or(false)
+}
+
 fn reflect_group1_global_binding_names(module: &naga::Module) -> HashMap<u32, String> {
     let mut out = HashMap::new();
     for (_, gv) in module.global_variables.iter() {
