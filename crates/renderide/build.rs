@@ -4,9 +4,16 @@
 //! Optional per-material metadata: `shaders/source/materials/<stem>.meta.json`:
 //! `{ "unity_names": ["MyGame/CustomUnlit"] }` (normalized keys are applied at resolve time).
 //!
-//! `debug_world_normals.wgsl` is special-cased: two targets (`debug_world_normals_default`,
-//! `debug_world_normals_multiview`) are emitted from one source using naga-oil `shader_defs`
-//! (`MULTIVIEW` true/false).
+//! ## Multiview variants (`*_default` / `*_multiview`)
+//!
+//! Sources use `#ifdef MULTIVIEW` … `#else` … `#endif`. In naga-oil, `#ifdef NAME` is true when
+//! `NAME` exists in the compose [`ShaderDefValue`] map **regardless of value** — so
+//! `MULTIVIEW` → `ShaderDefValue::Bool(false)` still
+//! enables the `#ifdef` branch. For the non-multiview target, **omit** `MULTIVIEW` from `shader_defs`
+//! entirely; for the multiview target, set `MULTIVIEW` to [`ShaderDefValue::Bool(true)`].
+//!
+//! Alternatively, WGSL could use `#if MULTIVIEW == true` with both `Bool(true)` and `Bool(false)`
+//! in the map; the omit-key approach matches existing `#ifdef` in source materials without edits.
 
 use std::collections::HashMap;
 use std::fs;
@@ -19,7 +26,24 @@ use naga_oil::compose::{
     ShaderType,
 };
 
-fn validate_and_write_wgsl(module: &naga::Module, label: &str, out_path: &std::path::Path) {
+/// Shader defs for material sources that use `#ifdef MULTIVIEW`.
+///
+/// When `enable` is false, returns an empty map so `#ifdef MULTIVIEW` is not taken. When true,
+/// inserts `MULTIVIEW` as [`ShaderDefValue::Bool(true)`].
+fn multiview_shader_defs(enable: bool) -> HashMap<String, ShaderDefValue> {
+    let mut defs = HashMap::new();
+    if enable {
+        defs.insert("MULTIVIEW".to_string(), ShaderDefValue::Bool(true));
+    }
+    defs
+}
+
+fn validate_and_write_wgsl(
+    module: &naga::Module,
+    label: &str,
+    out_path: &std::path::Path,
+    expect_view_index: Option<bool>,
+) {
     let has_vs = module
         .entry_points
         .iter()
@@ -40,6 +64,15 @@ fn validate_and_write_wgsl(module: &naga::Module, label: &str, out_path: &std::p
         .unwrap_or_else(|e| panic!("validate {label}: {e}"));
     let wgsl = naga::back::wgsl::write_string(module, &info, WriterFlags::EXPLICIT_TYPES)
         .unwrap_or_else(|e| panic!("wgsl out {label}: {e}"));
+    if let Some(want) = expect_view_index {
+        let has = wgsl.contains("@builtin(view_index)");
+        if want != has {
+            panic!(
+                "{label}: expected @builtin(view_index) {} in output (multiview shader_defs contract)",
+                if want { "present" } else { "absent" }
+            );
+        }
+    }
     fs::write(out_path, &wgsl).unwrap_or_else(|e| panic!("write {}: {e}", out_path.display()));
 }
 
@@ -135,8 +168,7 @@ fn main() {
                 ("debug_world_normals_multiview", true),
             ];
             for (target_stem, multiview) in variants {
-                let mut defs = HashMap::new();
-                defs.insert("MULTIVIEW".to_string(), ShaderDefValue::Bool(multiview));
+                let defs = multiview_shader_defs(multiview);
                 let module = compose_material(
                     &globals_source,
                     &material_source,
@@ -145,7 +177,7 @@ fn main() {
                 );
                 let label = format!("{target_stem} (MULTIVIEW={multiview})");
                 let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-                validate_and_write_wgsl(&module, &label, &out_path);
+                validate_and_write_wgsl(&module, &label, &out_path, Some(multiview));
 
                 manifest_entries.push(serde_json::json!({
                     "stem": target_stem,
@@ -188,8 +220,7 @@ fn main() {
                 ("world_unlit_multiview", true),
             ];
             for (target_stem, multiview) in variants {
-                let mut defs = HashMap::new();
-                defs.insert("MULTIVIEW".to_string(), ShaderDefValue::Bool(multiview));
+                let defs = multiview_shader_defs(multiview);
                 let module = compose_material(
                     &globals_source,
                     &material_source,
@@ -198,7 +229,7 @@ fn main() {
                 );
                 let label = format!("{target_stem} (MULTIVIEW={multiview})");
                 let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-                validate_and_write_wgsl(&module, &label, &out_path);
+                validate_and_write_wgsl(&module, &label, &out_path, Some(multiview));
 
                 let entry_names = if multiview {
                     Vec::new()
@@ -247,7 +278,7 @@ fn main() {
             HashMap::new(),
         );
         let out_path = target_dir.join(format!("{stem}.wgsl"));
-        validate_and_write_wgsl(&module, stem, &out_path);
+        validate_and_write_wgsl(&module, stem, &out_path, None);
 
         manifest_entries.push(serde_json::json!({
             "stem": stem,

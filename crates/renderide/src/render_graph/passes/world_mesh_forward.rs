@@ -250,7 +250,8 @@ impl RenderPass for WorldMeshForwardPass {
             return Ok(());
         };
 
-        let Some(debug_bind_group) = backend.debug_draw.as_ref().map(|d| d.bind_group.clone()) else {
+        let Some(debug_bind_group) = backend.debug_draw.as_ref().map(|d| d.bind_group.clone())
+        else {
             return Ok(());
         };
 
@@ -291,8 +292,11 @@ impl RenderPass for WorldMeshForwardPass {
                 let shader_asset_id = item.batch_key.shader_asset_id;
                 pipeline_ok = match backend.material_registry.as_mut() {
                     None => false,
-                    Some(reg) => match reg.pipeline_for_shader_asset(shader_asset_id, &pass_desc, shader_perm)
-                    {
+                    Some(reg) => match reg.pipeline_for_shader_asset(
+                        shader_asset_id,
+                        &pass_desc,
+                        shader_perm,
+                    ) {
                         Some(pipeline) => {
                             rpass.set_pipeline(pipeline);
                             true
@@ -316,10 +320,7 @@ impl RenderPass for WorldMeshForwardPass {
             let dynamic_offset = (draw_idx * PER_DRAW_UNIFORM_STRIDE) as u32;
             rpass.set_bind_group(0, frame_bg_arc.as_ref(), &[]);
             if item.batch_key.family_id == MANIFEST_RASTER_FAMILY_ID {
-                let q = ctx
-                    .queue
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let q = ctx.queue.lock().unwrap_or_else(|e| e.into_inner());
                 if let Some(mb) = backend.manifest_material_bind() {
                     let bg = mb.world_unlit_bind_group(
                         &q,
