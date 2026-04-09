@@ -61,7 +61,7 @@ pub use frustum::{
 pub use hi_z_cpu::{
     hi_z_pyramid_dimensions, hi_z_snapshot_from_linear_linear, mip_dimensions,
     mip_levels_for_extent, unpack_linear_rows_to_mips, HiZCpuSnapshot, HiZCullData,
-    HiZStereoCpuSnapshot,
+    HiZStereoCpuSnapshot, HI_Z_PYRAMID_MAX_LONG_EDGE,
 };
 pub use hi_z_occlusion::{
     hi_z_view_proj_matrices, mesh_fully_occluded_in_hiz, stereo_hiz_keeps_draw,

@@ -93,13 +93,19 @@ pub fn mip_byte_offset_floats(base_width: u32, base_height: u32, mip: u32) -> us
     off
 }
 
+/// Maximum length of the **longer** side of Hi-Z mip0 (downscaled from the depth attachment).
+///
+/// Previously 256; halved to **128** to cut pyramid area (~4× fewer mip0 texels), reducing GPU
+/// compute, readback size, and CPU unpacking at the cost of coarser occlusion tests.
+pub const HI_Z_PYRAMID_MAX_LONG_EDGE: u32 = 128;
+
 /// Hi-Z mip0 dimensions derived from full depth attachment size (long edge capped for cost).
 ///
 /// Matches the GPU pyramid base used for occlusion readback: scales down so the longest side is at
-/// most 256 texels (same factor on both axes).
+/// most [`HI_Z_PYRAMID_MAX_LONG_EDGE`] texels (same factor on both axes).
 pub fn hi_z_pyramid_dimensions(depth_w: u32, depth_h: u32) -> (u32, u32) {
     let max_dim = depth_w.max(depth_h).max(1);
-    let scale = max_dim.div_ceil(256).max(1);
+    let scale = max_dim.div_ceil(HI_Z_PYRAMID_MAX_LONG_EDGE).max(1);
     let bw = depth_w.div_ceil(scale).max(1);
     let bh = depth_h.div_ceil(scale).max(1);
     (bw, bh)
@@ -191,7 +197,7 @@ mod tests {
     #[test]
     fn hi_z_pyramid_dimensions_caps_long_edge() {
         let (w, h) = hi_z_pyramid_dimensions(1920, 1080);
-        assert!(w <= 256 && h <= 256);
+        assert!(w <= HI_Z_PYRAMID_MAX_LONG_EDGE && h <= HI_Z_PYRAMID_MAX_LONG_EDGE);
         assert!(w >= 1 && h >= 1);
     }
 
