@@ -41,8 +41,8 @@ use crate::render_graph::resources::{PassResources, ResourceSlot};
 use crate::render_graph::world_mesh_draw_stats_from_sorted;
 use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
 use crate::render_graph::{
-    collect_and_sort_world_mesh_draws, resort_world_mesh_draws_for_camera, MaterialDrawBatchKey,
-    WorldMeshDrawItem,
+    build_world_mesh_cull_proj_params, collect_and_sort_world_mesh_draws, MaterialDrawBatchKey,
+    WorldMeshCullInput, WorldMeshDrawItem,
 };
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
 #[derive(Debug, Default)]
@@ -113,7 +113,12 @@ impl RenderPass for WorldMeshForwardPass {
             .as_ref()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
-        let mut draws = {
+        let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
+        let culling = WorldMeshCullInput {
+            proj: cull_proj,
+            host_camera: &hc,
+        };
+        let collection = {
             let dict = MaterialDictionary::new(backend.material_property_store());
             collect_and_sort_world_mesh_draws(
                 frame.scene,
@@ -122,19 +127,16 @@ impl RenderPass for WorldMeshForwardPass {
                 router_ref,
                 shader_perm,
                 render_context,
+                Some(&culling),
             )
         };
-        let camera_world = hc.head_output_transform.col(3).truncate();
-        resort_world_mesh_draws_for_camera(
-            &mut draws,
-            frame.scene,
-            render_context,
-            hc.head_output_transform,
-            camera_world,
-        );
+        let draws = collection.items;
         #[cfg(feature = "debug-hud")]
         {
-            let stats = world_mesh_draw_stats_from_sorted(&draws);
+            let stats = world_mesh_draw_stats_from_sorted(
+                &draws,
+                Some((collection.draws_pre_cull, collection.draws_culled)),
+            );
             backend.set_last_world_mesh_draw_stats(stats);
         }
         if draws.is_empty() {
@@ -266,6 +268,7 @@ impl RenderPass for WorldMeshForwardPass {
         let cluster_count_x = vw.div_ceil(TILE_SIZE);
         let cluster_count_y = vh.div_ceil(TILE_SIZE);
         let light_count_u = lights_for_frame.len().min(crate::backend::MAX_LIGHTS) as u32;
+        let camera_world = hc.head_output_transform.col(3).truncate();
         let uniforms = FrameGpuUniforms::new_clustered(
             camera_world,
             z_coeffs,
@@ -287,6 +290,19 @@ impl RenderPass for WorldMeshForwardPass {
         else {
             return Ok(());
         };
+
+        let timestamp_writes =
+            backend
+                .gpu_mesh_pass_timestamps
+                .as_ref()
+                .map(|ts| wgpu::RenderPassTimestampWrites {
+                    query_set: ts.query_set(),
+                    beginning_of_pass_write_index: Some(0),
+                    end_of_pass_write_index: Some(1),
+                });
+        if timestamp_writes.is_some() {
+            backend.mark_mesh_pass_timestamps_recorded();
+        }
 
         let mut regular_indices = Vec::with_capacity(draws.len());
         let mut intersect_indices = Vec::new();
@@ -324,7 +340,7 @@ impl RenderPass for WorldMeshForwardPass {
                     stencil_ops: None,
                 }),
                 occlusion_query_set: None,
-                timestamp_writes: None,
+                timestamp_writes,
                 multiview_mask: if use_multiview {
                     NonZeroU32::new(3)
                 } else {

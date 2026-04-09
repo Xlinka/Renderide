@@ -547,8 +547,8 @@ impl DebugHud {
             ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
         }
 
-        // Wall time for `execute_frame_graph` (encode + submit). GPU mesh pass timing is omitted until
-        // timestamp queries exist (`gpu_mesh_pass_ms`).
+        // Wall time for `execute_frame_graph` (encode + submit). GPU mesh pass ms appears when the
+        // device supports timestamp queries and a readback has completed (throttled).
         if let Some(f) = frame {
             ui.text(format!(
                 "CPU render graph: {} ms",
@@ -652,8 +652,8 @@ impl DebugHud {
                 m.draws_total, m.draws_main, m.draws_overlay
             ));
             ui.text(format!(
-                "Submitted (same as draws until frustum/discard prep exists): {:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.draws_total, m.draws_main, m.draws_overlay
+                "Frustum cull: {:>5} considered  |  {:>5} culled  |  {:>5} submitted after cull",
+                m.draws_pre_cull, m.draws_culled, m.draws_total
             ));
             ui.text(format!(
                 "Prep rigid {:>5}  skinned {:>5}",
