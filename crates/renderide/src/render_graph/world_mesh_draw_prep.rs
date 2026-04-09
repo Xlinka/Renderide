@@ -24,7 +24,7 @@ use crate::shared::RenderingContext;
 use super::camera::view_matrix_from_render_transform;
 use super::frustum::{
     mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
-    world_aabb_from_skinned_bone_origins, Frustum,
+    world_aabb_from_skinned_bone_origins, world_aabb_visible_in_homogeneous_clip,
 };
 use super::skinning_palette::build_skinning_palette;
 use super::world_mesh_cull::WorldMeshCullInput;
@@ -183,12 +183,10 @@ fn mesh_draw_passes_frustum_cull(
     if let Some((sl, sr)) = proj.vr_stereo {
         if is_overlay {
             let vp = proj.overlay_proj * view;
-            let f = Frustum::from_view_proj(vp);
-            return f.intersects_aabb(wmin, wmax);
+            return world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax);
         }
-        let fl = Frustum::from_view_proj(sl);
-        let fr = Frustum::from_view_proj(sr);
-        return fl.intersects_aabb(wmin, wmax) || fr.intersects_aabb(wmin, wmax);
+        return world_aabb_visible_in_homogeneous_clip(sl, wmin, wmax)
+            || world_aabb_visible_in_homogeneous_clip(sr, wmin, wmax);
     }
 
     let base_proj = if is_overlay {
@@ -197,8 +195,7 @@ fn mesh_draw_passes_frustum_cull(
         proj.world_proj
     };
     let vp = base_proj * view;
-    let f = Frustum::from_view_proj(vp);
-    f.intersects_aabb(wmin, wmax)
+    world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax)
 }
 
 /// Expands one static mesh renderer into draw items (material slots × submeshes).

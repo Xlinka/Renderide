@@ -1,11 +1,16 @@
 //! Six-plane view frustum and world AABB tests for CPU mesh culling.
 //!
-//! Plane equations use unit normals `n` with signed distance `n · p + d` (inside the frustum is
-//! non-negative for all planes when extracted from the same column-major `view_proj` as the GPU).
+//! **Production culling** uses [`world_aabb_visible_in_homogeneous_clip`], which matches
+//! `clip = view_proj * vec4(world, 1)` exactly (same as WGSL `mat4x4` × `vec4`).
+//!
+//! [`Frustum`] / six-plane tests remain for debugging and optional comparisons.
 
 use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
 
 use crate::shared::RenderBoundingBox;
+
+/// Epsilon for homogeneous clip half-space tests (aligned with legacy visibility checks).
+pub const HOMOGENEOUS_CLIP_EPS: f32 = 1e-5;
 
 /// Maximum absolute half-extent below which uploaded mesh bounds are treated as **untrusted** for culling.
 pub(crate) const DEGENERATE_MESH_BOUNDS_EXTENT_EPS: f32 = 1e-8;
@@ -227,6 +232,72 @@ pub fn world_aabb_from_local_bounds(
     }
 }
 
+/// Returns `true` if the axis-aligned world box may intersect the clip volume.
+///
+/// Transforms all eight corners with the same **`view_proj`** used for [`crate::gpu::PaddedPerDrawUniforms`]
+/// (`projection * view`, no model matrix). For each clip-space half-space, if **all** corners lie
+/// outside, the box is culled. Matches reverse-Z clip (`z` vs `w`) used by the renderer.
+pub fn world_aabb_visible_in_homogeneous_clip(
+    view_proj: Mat4,
+    world_min: Vec3,
+    world_max: Vec3,
+) -> bool {
+    let xs = [world_min.x, world_max.x];
+    let ys = [world_min.y, world_max.y];
+    let zs = [world_min.z, world_max.z];
+
+    let mut clip_corners = [Vec4::ZERO; 8];
+    let mut i = 0usize;
+    for &x in &xs {
+        for &y in &ys {
+            for &z in &zs {
+                clip_corners[i] = view_proj * Vec4::new(x, y, z, 1.0);
+                i += 1;
+            }
+        }
+    }
+
+    if clip_corners.iter().all(|p| p.w <= HOMOGENEOUS_CLIP_EPS) {
+        return false;
+    }
+
+    if clip_corners
+        .iter()
+        .all(|p| p.x + p.w < -HOMOGENEOUS_CLIP_EPS)
+    {
+        return false;
+    }
+    if clip_corners
+        .iter()
+        .all(|p| p.w - p.x < -HOMOGENEOUS_CLIP_EPS)
+    {
+        return false;
+    }
+    if clip_corners
+        .iter()
+        .all(|p| p.y + p.w < -HOMOGENEOUS_CLIP_EPS)
+    {
+        return false;
+    }
+    if clip_corners
+        .iter()
+        .all(|p| p.w - p.y < -HOMOGENEOUS_CLIP_EPS)
+    {
+        return false;
+    }
+    if clip_corners.iter().all(|p| p.z < -HOMOGENEOUS_CLIP_EPS) {
+        return false;
+    }
+    if clip_corners
+        .iter()
+        .all(|p| p.z - p.w > HOMOGENEOUS_CLIP_EPS)
+    {
+        return false;
+    }
+
+    true
+}
+
 /// Conservative world AABB for skinning: union of bone palette origins expanded by max half-extent.
 pub fn world_aabb_from_skinned_bone_origins(
     bounds: &RenderBoundingBox,
@@ -261,63 +332,16 @@ pub fn world_aabb_from_skinned_bone_origins(
 mod tests {
     use super::*;
 
-    const CLIP_EPS: f32 = 1e-5;
-
-    fn world_aabb_visible_in_homogeneous_clip(
-        view_proj: Mat4,
-        world_min: Vec3,
-        world_max: Vec3,
-    ) -> bool {
-        let xs = [world_min.x, world_max.x];
-        let ys = [world_min.y, world_max.y];
-        let zs = [world_min.z, world_max.z];
-
-        let mut clip_corners = [Vec4::ZERO; 8];
-        let mut i = 0usize;
-        for &x in &xs {
-            for &y in &ys {
-                for &z in &zs {
-                    clip_corners[i] = view_proj * Vec4::new(x, y, z, 1.0);
-                    i += 1;
-                }
-            }
-        }
-
-        if clip_corners.iter().all(|p| p.w <= CLIP_EPS) {
-            return false;
-        }
-
-        if clip_corners.iter().all(|p| p.x + p.w < -CLIP_EPS) {
-            return false;
-        }
-        if clip_corners.iter().all(|p| p.w - p.x < -CLIP_EPS) {
-            return false;
-        }
-        if clip_corners.iter().all(|p| p.y + p.w < -CLIP_EPS) {
-            return false;
-        }
-        if clip_corners.iter().all(|p| p.w - p.y < -CLIP_EPS) {
-            return false;
-        }
-        if clip_corners.iter().all(|p| p.z < -CLIP_EPS) {
-            return false;
-        }
-        if clip_corners.iter().all(|p| p.z - p.w > CLIP_EPS) {
-            return false;
-        }
-
-        true
-    }
-
     #[test]
     fn frustum_plane_cross_check_matches_homogeneous_clip_random_boxes() {
-        let view_proj = Mat4::look_at_rh(Vec3::new(0.0, 1.5, 4.0), Vec3::ZERO, Vec3::Y)
-            * crate::render_graph::camera::reverse_z_perspective(
-                16.0 / 9.0,
-                60f32.to_radians(),
-                0.1,
-                100.0,
-            );
+        let proj = crate::render_graph::camera::reverse_z_perspective(
+            16.0 / 9.0,
+            60f32.to_radians(),
+            0.1,
+            100.0,
+        );
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 1.5, 4.0), Vec3::ZERO, Vec3::Y);
+        let view_proj = proj * view;
 
         let frustum = Frustum::from_view_proj(view_proj);
 
@@ -339,13 +363,10 @@ mod tests {
 
     #[test]
     fn frustum_rejects_box_fully_outside_left() {
-        let view_proj = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y)
-            * crate::render_graph::camera::reverse_z_perspective(
-                1.0,
-                60f32.to_radians(),
-                0.1,
-                100.0,
-            );
+        let proj =
+            crate::render_graph::camera::reverse_z_perspective(1.0, 60f32.to_radians(), 0.1, 100.0);
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let view_proj = proj * view;
 
         let frustum = Frustum::from_view_proj(view_proj);
         // Far to the right of the frustum in world space (rough heuristic; box should be outside)

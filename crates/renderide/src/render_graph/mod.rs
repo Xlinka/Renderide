@@ -52,7 +52,8 @@ pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
 pub use frame_params::{FrameRenderParams, HostCameraFrame};
 pub use frustum::{
     mesh_bounds_degenerate_for_cull, mesh_bounds_max_half_extent, world_aabb_from_local_bounds,
-    world_aabb_from_skinned_bone_origins, Frustum, Plane,
+    world_aabb_from_skinned_bone_origins, world_aabb_visible_in_homogeneous_clip, Frustum, Plane,
+    HOMOGENEOUS_CLIP_EPS,
 };
 pub use ids::PassId;
 pub use pass::RenderPass;
