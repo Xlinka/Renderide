@@ -19,7 +19,7 @@ pub mod app;
 pub mod assets;
 /// GPU resource pools, material tables, mesh/texture uploads, preprocess pipelines — **backend** layer.
 pub mod backend;
-/// Optional `config.ini` loading and [`config::RendererSettings`] (process-wide defaults).
+/// `config.toml` loading and [`config::RendererSettings`] (process-wide defaults).
 pub mod config;
 pub mod connection;
 /// Developer overlay: Dear ImGui frame snapshot + HUD ([`diagnostics::DebugHud`], feature `debug-hud`).
@@ -63,8 +63,8 @@ pub use backend::{
 pub use config::{
     load_renderer_settings, log_config_resolve_trace, resolve_save_path, save_renderer_settings,
     save_renderer_settings_from_load, settings_handle_from, ConfigLoadResult, ConfigResolveOutcome,
-    ConfigSource, DebugSettings, DisplaySettings, IniDocument, ParseWarning,
-    PowerPreferenceSetting, RendererSettings, RendererSettingsHandle, RenderingSettings,
+    ConfigSource, DebugSettings, DisplaySettings, PowerPreferenceSetting, RendererSettings,
+    RendererSettingsHandle, RenderingSettings,
 };
 pub use connection::{
     get_connection_parameters, try_claim_renderer_singleton, ConnectionParams, InitError,

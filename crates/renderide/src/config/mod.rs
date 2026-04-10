@@ -1,47 +1,45 @@
-//! Renderer configuration from `config.ini`.
+//! Renderer configuration from `config.toml`.
 //!
 //! ## Precedence
 //!
-//! 1. **`RENDERIDE_CONFIG`** — path to an INI file. If set and the path is missing, a warning is
-//!    logged and resolution continues.
-//! 2. **Search** (first existing `config.ini`):
-//!    - `config.ini` under a discovered workspace root (directory containing `Cargo.toml` and
-//!      `crates/renderide/Cargo.toml`, found from the current working directory and the executable
-//!      path),
-//!    - next to the current executable,
-//!    - parent of the executable directory,
-//!    - current working directory,
-//!    - two levels up from cwd (e.g. repo root when running from `crates/renderide`).
-//! 3. **Defaults** — when no file is found or read fails, [`RendererSettings`] stays at
-//!    [`Default::default`].
+//! 1. **Struct defaults** — [`RendererSettings::default`].
+//! 2. **File** — first match from resolution (see below).
+//! 3. **Environment** — variables prefixed with `RENDERIDE_`, nested keys use `__` (for example
+//!    `RENDERIDE_DEBUG__GPU_VALIDATION_LAYERS=true`). Applied via the figment crate.
 //! 4. **`RENDERIDE_GPU_VALIDATION`** — if set, overrides [`DebugSettings::gpu_validation_layers`]
-//!    after INI merge (see [`apply_renderide_gpu_validation_env`]).
+//!    after the above (see [`apply_renderide_gpu_validation_env`]).
+//!
+//! ## Resolution order
+//!
+//! 1. **`RENDERIDE_CONFIG`** — path to `config.toml`. If set and the path is missing, a warning is
+//!    logged and resolution continues.
+//! 2. **Search** — `config.toml` under:
+//!    - a discovered workspace root (directory containing `Cargo.toml` and
+//!      `crates/renderide/Cargo.toml`, from cwd and the executable path),
+//!    - next to the current executable and its parent,
+//!    - current working directory and two levels up (e.g. repo root when running from `crates/renderide`).
 //!
 //! ## Auto-creation
 //!
 //! If no file is found and **`RENDERIDE_CONFIG` is not set to a non-empty value**, the renderer
-//! writes default settings to the preferred save path (workspace root `config.ini` when the
-//! workspace is discovered and writable, otherwise the same rules as [`resolve_save_path`]) and loads
-//! that file. If creation fails, built-in defaults are used.
-//!
-//! Comment lines (`#` or `;`) and omitted keys retain defaults. Inline `#` / `;` strip the rest of
-//! the value (legacy parity).
+//! writes default settings to the preferred save path (workspace root `config.toml` when writable,
+//! otherwise [`resolve_save_path`]) and loads that file. If creation fails, built-in defaults are used.
 //!
 //! ## Persistence
 //!
 //! The renderer owns the on-disk file when using the **Renderer config** (ImGui) window: values are
-//! saved immediately on change. Avoid hand-editing `config.ini` while the process is running; the
-//! next save from the UI will overwrite the file. Manual edits are best done with the renderer
-//! stopped, or use [`save_renderer_settings`] to apply programmatically.
+//! saved immediately on change. Avoid hand-editing the config file while the process is running; the
+//! next save from the UI will overwrite it. Manual edits are best done with the renderer stopped, or
+//! use [`save_renderer_settings`] to apply programmatically.
 
-mod parse;
+mod reload;
 mod resolve;
 mod settings;
 
-pub use parse::{parse_ini_document, IniDocument, ParseWarning};
+pub use reload::{renderer_settings_changed, ConfigFileWatcher};
 pub use resolve::{
     apply_generated_config, find_renderide_workspace_root, renderide_config_env_nonempty,
-    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource,
+    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML,
 };
 pub use settings::{
     apply_renderide_gpu_validation_env, load_renderer_settings, log_config_resolve_trace,

@@ -1,8 +1,8 @@
-//! Locate `config.ini`: `RENDERIDE_CONFIG`, then standard search paths.
+//! Locate `config.toml`: `RENDERIDE_CONFIG`, then search paths.
 
 use std::path::{Path, PathBuf};
 
-/// How the INI path was chosen.
+/// How the config file path was chosen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConfigSource {
     /// `RENDERIDE_CONFIG` pointed at an existing file.
@@ -20,13 +20,18 @@ pub enum ConfigSource {
 pub struct ConfigResolveOutcome {
     /// Every path checked, in order (`RENDERIDE_CONFIG` first when set, then search candidates).
     pub attempted_paths: Vec<PathBuf>,
-    /// First existing regular file used for INI content.
+    /// First existing regular file used for config content (`config.toml`).
     pub loaded_path: Option<PathBuf>,
     pub source: ConfigSource,
 }
 
-const FILE_NAME: &str = "config.ini";
+/// Canonical on-disk config file (TOML).
+pub const FILE_NAME_TOML: &str = "config.toml";
 const ENV_OVERRIDE: &str = "RENDERIDE_CONFIG";
+
+fn push_toml_candidate(out: &mut Vec<PathBuf>, dir: &Path) {
+    push_unique(out, dir.join(FILE_NAME_TOML));
+}
 
 /// Walks `start` and its ancestors looking for a directory that contains both `Cargo.toml` and
 /// `crates/renderide/Cargo.toml`, identifying the Renderide workspace root.
@@ -96,7 +101,7 @@ fn push_unique(out: &mut Vec<PathBuf>, p: PathBuf) {
     }
 }
 
-/// Records that `config.ini` was created at `path` on first load (see [`super::settings::load_renderer_settings`]).
+/// Records that `config.toml` was created at `path` on first load (see [`super::settings::load_renderer_settings`]).
 pub fn apply_generated_config(outcome: &mut ConfigResolveOutcome, path: PathBuf) {
     push_unique(&mut outcome.attempted_paths, path.clone());
     outcome.loaded_path = Some(path);
@@ -107,7 +112,7 @@ fn search_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
 
     for root in discover_workspace_roots() {
-        v.push(root.join(FILE_NAME));
+        push_toml_candidate(&mut v, root.as_path());
     }
 
     #[cfg(test)]
@@ -121,18 +126,18 @@ fn search_candidates() -> Vec<PathBuf> {
 
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            v.push(dir.join(FILE_NAME));
+            push_toml_candidate(&mut v, dir);
             if let Some(parent) = dir.parent() {
-                v.push(parent.join(FILE_NAME));
+                push_toml_candidate(&mut v, parent);
             }
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        v.push(cwd.join(FILE_NAME));
+        push_toml_candidate(&mut v, cwd.as_path());
         if let Some(p1) = cwd.parent() {
             if let Some(p2) = p1.parent() {
-                v.push(p2.join(FILE_NAME));
+                push_toml_candidate(&mut v, p2);
             }
         }
     }
@@ -190,9 +195,9 @@ pub fn read_config_file(path: &Path) -> std::io::Result<String> {
 /// Picks the path used when persisting settings from the UI or [`crate::config::save_renderer_settings`].
 ///
 /// - If a file was loaded ([`ConfigResolveOutcome::loaded_path`]), that path is used.
-/// - Otherwise: prefer a discovered workspace root `config.ini` when that directory is writable;
-///   then `current_dir()/config.ini` when the directory exists and is writable; else the first
-///   path in the same search order as [`resolve_config_path`] whose parent exists and is writable.
+/// - Otherwise: prefer a discovered workspace root [`FILE_NAME_TOML`] when that directory is writable;
+///   then `current_dir()/config.toml` when the directory exists and is writable; else the first
+///   candidate in the same search order as [`resolve_config_path`] whose parent exists and is writable.
 pub fn resolve_save_path(resolve: &ConfigResolveOutcome) -> PathBuf {
     if let Some(p) = resolve.loaded_path.clone() {
         return p;
@@ -200,12 +205,12 @@ pub fn resolve_save_path(resolve: &ConfigResolveOutcome) -> PathBuf {
 
     for root in discover_workspace_roots() {
         if is_dir_writable(root.as_path()) {
-            return root.join(FILE_NAME);
+            return root.join(FILE_NAME_TOML);
         }
     }
 
     if let Ok(cwd) = std::env::current_dir() {
-        let p = cwd.join(FILE_NAME);
+        let p = cwd.join(FILE_NAME_TOML);
         if is_dir_writable(cwd.as_path()) {
             return p;
         }
@@ -225,10 +230,10 @@ pub fn resolve_save_path(resolve: &ConfigResolveOutcome) -> PathBuf {
     // Last resort: cwd join even if we could not verify writability (save may fail at runtime).
     std::env::current_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
-        .join(FILE_NAME)
+        .join(FILE_NAME_TOML)
 }
 
-/// Best-effort writable check for choosing where to create `config.ini`.
+/// Best-effort writable check for choosing where to create `config.toml`.
 pub(crate) fn is_dir_writable(dir: &Path) -> bool {
     if !dir.is_dir() {
         return false;
@@ -312,7 +317,7 @@ mod tests {
             loaded_path: None,
             source: ConfigSource::None,
         };
-        let p = PathBuf::from("/tmp/renderide_test_apply_generated/config.ini");
+        let p = PathBuf::from("/tmp/renderide_test_apply_generated/config.toml");
         apply_generated_config(&mut outcome, p.clone());
         assert_eq!(outcome.loaded_path, Some(p));
         assert_eq!(outcome.source, ConfigSource::Generated);
@@ -337,7 +342,7 @@ mod tests {
         std::env::set_current_dir(&root).expect("set cwd");
 
         let load = crate::config::load_renderer_settings();
-        let path = root.join(FILE_NAME);
+        let path = root.join(FILE_NAME_TOML);
         assert!(
             path.is_file(),
             "expected generated config at {}",

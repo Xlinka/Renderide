@@ -545,7 +545,7 @@ impl DebugHud {
             .bg_alpha(0.88)
             .build(|| {
                 ui.text_wrapped(
-                    "This file is owned by the renderer. Do not edit config.ini manually while \
+                    "This file is owned by the renderer. Do not edit config.toml manually while \
                      the process is running — your changes may be overwritten or lost. Use these \
                      controls instead.",
                 );

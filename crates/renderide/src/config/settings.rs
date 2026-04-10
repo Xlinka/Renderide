@@ -1,21 +1,27 @@
-//! Process-wide renderer settings merged from defaults and optional `config.ini`.
+//! Process-wide renderer settings merged from defaults, optional `config.toml`, and environment.
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::parse::{parse_ini_document, IniDocument, ParseWarning};
+use figment::providers::{Env, Format, Serialized, Toml};
+use figment::Figment;
+use serde::{Deserialize, Serialize};
+
 use super::resolve::{
     apply_generated_config, is_dir_writable, read_config_file, renderide_config_env_nonempty,
-    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource,
+    resolve_config_path, resolve_save_path, ConfigResolveOutcome, ConfigSource, FILE_NAME_TOML,
 };
 
 /// Display-related caps (future: frame pacing when unfocused). Persisted as `[display]`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DisplaySettings {
     /// Target max FPS when the window is focused (0 = uncapped / engine default).
+    #[serde(rename = "focused_fps")]
     pub focused_fps_cap: u32,
     /// Target max FPS when unfocused (0 = uncapped / engine default).
+    #[serde(rename = "unfocused_fps")]
     pub unfocused_fps_cap: u32,
 }
 
@@ -29,7 +35,8 @@ impl Default for DisplaySettings {
 }
 
 /// Rendering toggles and scalars. Persisted as `[rendering]`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RenderingSettings {
     /// Vertical sync via swapchain present mode ([`wgpu::PresentMode::AutoVsync`]).
     pub vsync: bool,
@@ -48,7 +55,8 @@ impl Default for RenderingSettings {
 
 /// Preferred GPU power mode for future adapter selection (stored; changing at runtime may require
 /// re-initialization).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum PowerPreferenceSetting {
     /// Maps to [`wgpu::PowerPreference::LowPower`].
     LowPower,
@@ -61,16 +69,16 @@ impl PowerPreferenceSetting {
     /// All variants for ImGui combo / persistence.
     pub const ALL: [Self; 2] = [Self::LowPower, Self::HighPerformance];
 
-    /// INI token (lowercase).
-    pub fn as_ini_str(self) -> &'static str {
+    /// Stable string for TOML / UI (`low_power` / `high_performance`).
+    pub fn as_persist_str(self) -> &'static str {
         match self {
             Self::LowPower => "low_power",
             Self::HighPerformance => "high_performance",
         }
     }
 
-    /// Parses case-insensitive INI value.
-    pub fn from_ini_str(s: &str) -> Option<Self> {
+    /// Parses case-insensitive persisted or UI token.
+    pub fn from_persist_str(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "low_power" | "low" => Some(Self::LowPower),
             "high_performance" | "high" | "performance" => Some(Self::HighPerformance),
@@ -88,7 +96,8 @@ impl PowerPreferenceSetting {
 }
 
 /// Debug and diagnostics flags. Persisted as `[debug]`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DebugSettings {
     /// Request verbose logging (future hook into logger; stored for now).
     pub log_verbose: bool,
@@ -101,9 +110,10 @@ pub struct DebugSettings {
     pub gpu_validation_layers: bool,
     /// When true, show the **Frame timing** ImGui window (FPS and CPU/GPU submit-interval metrics). Cheap snapshot;
     /// independent of [`Self::debug_hud_enabled`]. Default true.
+    #[serde(default = "default_debug_hud_frame_timing")]
     pub debug_hud_frame_timing: bool,
     /// When true, show **Renderide debug** (Stats / Shader routes) and run mesh-draw stats, frame diagnostics, and
-    /// renderer info capture. Default false (performance-first; **Renderer config** or `debug_hud_enabled` in INI).
+    /// renderer info capture. Default false (performance-first; **Renderer config** or `debug_hud_enabled` in config).
     pub debug_hud_enabled: bool,
     /// When true, capture [`crate::diagnostics::SceneTransformsSnapshot`] each frame and show the **Scene transforms**
     /// ImGui window (can be expensive on large scenes). Independent of [`Self::debug_hud_enabled`] so you can enable
@@ -124,8 +134,13 @@ impl Default for DebugSettings {
     }
 }
 
-/// Runtime settings for the renderer process: defaults, merged from INI, and edited via the debug UI.
-#[derive(Clone, Debug, Default, PartialEq)]
+fn default_debug_hud_frame_timing() -> bool {
+    true
+}
+
+/// Runtime settings for the renderer process: defaults, merged from file, and edited via the debug UI.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct RendererSettings {
     /// Display caps and related options.
     pub display: DisplaySettings,
@@ -140,146 +155,36 @@ impl RendererSettings {
     pub fn from_defaults() -> Self {
         Self::default()
     }
+}
 
-    /// Applies recognized INI keys over current values.
-    pub fn merge_from_ini(&mut self, document: &IniDocument) {
-        if let Some(s) = document.get("display", "focused_fps") {
-            if let Some(v) = parse_u32(s) {
-                self.display.focused_fps_cap = v;
-            }
-        }
-        if let Some(s) = document.get("display", "unfocused_fps") {
-            if let Some(v) = parse_u32(s) {
-                self.display.unfocused_fps_cap = v;
-            }
-        }
-        if let Some(s) = document.get("rendering", "vsync") {
-            if let Some(v) = parse_bool(s) {
-                self.rendering.vsync = v;
-            }
-        }
-        if let Some(s) = document.get("rendering", "exposure") {
-            if let Some(v) = parse_f32(s) {
-                self.rendering.exposure = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "log_verbose") {
-            if let Some(v) = parse_bool(s) {
-                self.debug.log_verbose = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "power_preference") {
-            if let Some(v) = PowerPreferenceSetting::from_ini_str(s) {
-                self.debug.power_preference = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "gpu_validation_layers") {
-            if let Some(v) = parse_bool(s) {
-                self.debug.gpu_validation_layers = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "debug_hud_frame_timing") {
-            if let Some(v) = parse_bool(s) {
-                self.debug.debug_hud_frame_timing = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "debug_hud_enabled") {
-            if let Some(v) = parse_bool(s) {
-                self.debug.debug_hud_enabled = v;
-            }
-        }
-        if let Some(s) = document.get("debug", "debug_hud_transforms") {
-            if let Some(v) = parse_bool(s) {
-                self.debug.debug_hud_transforms = v;
-            }
-        }
-    }
+fn renderer_settings_figment() -> Figment {
+    Figment::new()
+        .merge(Serialized::defaults(RendererSettings::default()))
+        .merge(Env::prefixed("RENDERIDE_").split("__"))
+}
 
-    /// Builds an [`IniDocument`] representing the full current settings (for save / round-trip).
-    pub fn to_ini_document(&self) -> IniDocument {
-        let mut doc = IniDocument::default();
-        doc.set(
-            "display",
-            "focused_fps",
-            self.display.focused_fps_cap.to_string(),
-        );
-        doc.set(
-            "display",
-            "unfocused_fps",
-            self.display.unfocused_fps_cap.to_string(),
-        );
-        doc.set("rendering", "vsync", bool_ini(self.rendering.vsync));
-        doc.set(
-            "rendering",
-            "exposure",
-            format_float_trim(self.rendering.exposure),
-        );
-        doc.set("debug", "log_verbose", bool_ini(self.debug.log_verbose));
-        doc.set(
-            "debug",
-            "power_preference",
-            self.debug.power_preference.as_ini_str(),
-        );
-        doc.set(
-            "debug",
-            "gpu_validation_layers",
-            bool_ini(self.debug.gpu_validation_layers),
-        );
-        doc.set(
-            "debug",
-            "debug_hud_frame_timing",
-            bool_ini(self.debug.debug_hud_frame_timing),
-        );
-        doc.set(
-            "debug",
-            "debug_hud_enabled",
-            bool_ini(self.debug.debug_hud_enabled),
-        );
-        doc.set(
-            "debug",
-            "debug_hud_transforms",
-            bool_ini(self.debug.debug_hud_transforms),
-        );
-        doc
+fn extract_settings(figment: Figment) -> RendererSettings {
+    match figment.extract::<RendererSettings>() {
+        Ok(s) => s,
+        Err(e) => {
+            logger::warn!("Renderer config extract failed: {e}; using built-in defaults");
+            RendererSettings::default()
+        }
     }
 }
 
-fn bool_ini(b: bool) -> String {
-    if b {
-        "true".to_string()
-    } else {
-        "false".to_string()
-    }
-}
-
-fn format_float_trim(x: f32) -> String {
-    if x.fract() == 0.0 {
-        format!("{}", x as i64)
-    } else {
-        format!("{x:.6}")
-    }
-}
-
-fn parse_bool(s: &str) -> Option<bool> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Some(true),
-        "0" | "false" | "no" | "off" => Some(false),
-        _ => None,
-    }
-}
-
-fn parse_u32(s: &str) -> Option<u32> {
-    s.trim().parse().ok()
-}
-
-fn parse_f32(s: &str) -> Option<f32> {
-    s.trim().parse().ok()
+fn load_settings_from_toml_str(content: &str) -> RendererSettings {
+    let figment = Figment::new()
+        .merge(Serialized::defaults(RendererSettings::default()))
+        .merge(Toml::string(content))
+        .merge(Env::prefixed("RENDERIDE_").split("__"));
+    extract_settings(figment)
 }
 
 /// Overrides [`DebugSettings::gpu_validation_layers`] when `RENDERIDE_GPU_VALIDATION` is set.
 ///
 /// Truthy values (`1`, `true`, `yes`) force validation on; falsey (`0`, `false`, `no`) force off.
-/// If unset, the value from INI or defaults is unchanged.
+/// If unset, the value from config or defaults is unchanged.
 pub fn apply_renderide_gpu_validation_env(settings: &mut RendererSettings) {
     match std::env::var("RENDERIDE_GPU_VALIDATION").as_deref() {
         Ok("1") | Ok("true") | Ok("yes") => settings.debug.gpu_validation_layers = true,
@@ -288,17 +193,13 @@ pub fn apply_renderide_gpu_validation_env(settings: &mut RendererSettings) {
     }
 }
 
-/// Full load result: resolved path, parsed document, parse warnings, and save path for persistence.
+/// Full load result: resolved path and save path for persistence.
 #[derive(Clone, Debug)]
 pub struct ConfigLoadResult {
     /// Effective settings after merge.
     pub settings: RendererSettings,
     /// Path resolution diagnostics.
     pub resolve: ConfigResolveOutcome,
-    /// Parsed document from disk when a file was read (may be empty).
-    pub document: IniDocument,
-    /// Non-fatal parse issues.
-    pub parse_warnings: Vec<ParseWarning>,
     /// Target file for [`save_renderer_settings`] and the ImGui config window.
     pub save_path: PathBuf,
 }
@@ -306,48 +207,35 @@ pub struct ConfigLoadResult {
 /// Shared handle for the process-wide settings store (read by the frame loop, written by the HUD).
 pub type RendererSettingsHandle = Arc<std::sync::RwLock<RendererSettings>>;
 
-/// Resolves `config.ini`, parses it, and builds [`RendererSettings`].
+/// Resolves `config.toml`, merges with figment layers, and builds [`RendererSettings`].
+///
+/// Precedence: struct defaults, then TOML file, then `RENDERIDE_*` environment variables (see module
+/// docs in `config/mod.rs`). [`apply_renderide_gpu_validation_env`] runs after extraction.
 ///
 /// When no file exists and [`super::resolve::renderide_config_env_nonempty`] is false, writes
 /// defaults to the save path (see [`super::resolve::resolve_save_path`]) and loads that file.
 pub fn load_renderer_settings() -> ConfigLoadResult {
     let mut resolve = resolve_config_path();
-    let mut settings = RendererSettings::from_defaults();
-    let mut document = IniDocument::default();
-    let mut parse_warnings = Vec::new();
-
-    match resolve.loaded_path.as_ref() {
+    let mut settings = match resolve.loaded_path.as_ref() {
         Some(path) => {
             logger::info!("Loading renderer config from {}", path.display());
             match read_config_file(path) {
-                Ok(content) => {
-                    let (doc, warnings) = parse_ini_document(&content);
-                    parse_warnings = warnings;
-                    settings.merge_from_ini(&doc);
-                    document = doc;
-                    if !parse_warnings.is_empty() {
-                        for w in &parse_warnings {
-                            logger::debug!(
-                                "config.ini parse warning line {}: {}",
-                                w.line,
-                                w.message
-                            );
-                        }
-                    }
-                }
+                Ok(content) => load_settings_from_toml_str(&content),
                 Err(e) => {
                     logger::warn!("Failed to read {}: {e}; using defaults", path.display());
+                    extract_settings(renderer_settings_figment())
                 }
             }
         }
         None => {
-            logger::info!("config.ini not found; using built-in defaults");
+            logger::info!("Renderer config file not found; using built-in defaults");
             logger::trace!(
                 "config search tried {} path(s)",
                 resolve.attempted_paths.len()
             );
+            extract_settings(renderer_settings_figment())
         }
-    }
+    };
 
     if resolve.loaded_path.is_none() && !renderide_config_env_nonempty() {
         let path = resolve_save_path(&resolve);
@@ -360,19 +248,7 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
                             apply_generated_config(&mut resolve, path.clone());
                             match read_config_file(&path) {
                                 Ok(content) => {
-                                    let (doc, warnings) = parse_ini_document(&content);
-                                    parse_warnings = warnings;
-                                    settings.merge_from_ini(&doc);
-                                    document = doc;
-                                    if !parse_warnings.is_empty() {
-                                        for w in &parse_warnings {
-                                            logger::debug!(
-                                                "config.ini parse warning line {}: {}",
-                                                w.line,
-                                                w.message
-                                            );
-                                        }
-                                    }
+                                    settings = load_settings_from_toml_str(&content);
                                 }
                                 Err(e) => {
                                     logger::warn!(
@@ -408,15 +284,18 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
     ConfigLoadResult {
         settings,
         resolve,
-        document,
-        parse_warnings,
         save_path,
     }
 }
 
-/// Writes `settings` to `path` atomically (temp file in the same directory, then rename).
+/// Writes `settings` to `path` as TOML atomically (temp file in the same directory, then rename).
 pub fn save_renderer_settings(path: &Path, settings: &RendererSettings) -> io::Result<()> {
-    let contents = settings.to_ini_document().serialize();
+    let contents = toml::to_string_pretty(settings).map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("TOML serialization failed: {e}"),
+        )
+    })?;
 
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -425,7 +304,7 @@ pub fn save_renderer_settings(path: &Path, settings: &RendererSettings) -> io::R
     let file_name = path
         .file_name()
         .and_then(|s| s.to_str())
-        .unwrap_or("config.ini");
+        .unwrap_or(FILE_NAME_TOML);
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp = parent.join(format!(".{file_name}.tmp"));
     std::fs::write(&tmp, contents.as_bytes())?;
@@ -465,31 +344,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn merge_roundtrip_document() {
-        let mut s = RendererSettings::from_defaults();
-        s.rendering.vsync = true;
-        s.display.focused_fps_cap = 120;
-        s.debug.gpu_validation_layers = true;
-        s.debug.debug_hud_frame_timing = false;
-        s.debug.debug_hud_enabled = true;
-        s.debug.debug_hud_transforms = true;
-        let doc = s.to_ini_document();
-        let mut s2 = RendererSettings::from_defaults();
-        s2.merge_from_ini(&doc);
+    fn atomic_save_roundtrip() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.toml");
+        let s = RendererSettings::from_defaults();
+        save_renderer_settings(&path, &s).expect("save");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let s2: RendererSettings = toml::from_str(&text).expect("toml");
         assert_eq!(s, s2);
     }
 
     #[test]
-    fn atomic_save_roundtrip() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("config.ini");
+    fn toml_roundtrip_string() {
         let s = RendererSettings::from_defaults();
-        save_renderer_settings(&path, &s).expect("save");
-        let text = std::fs::read_to_string(&path).expect("read");
-        let (doc, w) = parse_ini_document(&text);
-        assert!(w.is_empty());
-        let mut s2 = RendererSettings::from_defaults();
-        s2.merge_from_ini(&doc);
+        let text = toml::to_string_pretty(&s).expect("ser");
+        let s2: RendererSettings = toml::from_str(&text).expect("de");
         assert_eq!(s, s2);
     }
 
@@ -497,12 +366,12 @@ mod tests {
     fn save_path_prefers_loaded() {
         let resolve = ConfigResolveOutcome {
             attempted_paths: vec![],
-            loaded_path: Some(PathBuf::from("/tmp/x/config.ini")),
+            loaded_path: Some(PathBuf::from("/tmp/x/config.toml")),
             source: ConfigSource::Search,
         };
         assert_eq!(
             resolve_save_path(&resolve),
-            PathBuf::from("/tmp/x/config.ini")
+            PathBuf::from("/tmp/x/config.toml")
         );
     }
 }
