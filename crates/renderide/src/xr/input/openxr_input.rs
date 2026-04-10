@@ -83,9 +83,13 @@ pub struct OpenxrInput {
 
 impl OpenxrInput {
     /// Creates the action set, suggests bindings for known interaction profiles, and builds grip/aim spaces.
+    ///
+    /// `runtime_supports_generic_controller` must match whether the OpenXR instance was created with
+    /// `XR_KHR_generic_controller` enabled; when `false`, generic controller binding suggestions are skipped.
     pub fn new(
         instance: &xr::Instance,
         session: &xr::Session<xr::Vulkan>,
+        runtime_supports_generic_controller: bool,
     ) -> Result<Self, xr::sys::Result> {
         let action_set = instance.create_action_set("renderide_input", "Renderide VR input", 0)?;
         let left_user_path = instance.string_to_path("/user/hand/left")?;
@@ -392,6 +396,7 @@ impl OpenxrInput {
             &interaction_profiles,
             &binding_paths,
             &action_refs,
+            runtime_supports_generic_controller,
         )?;
 
         session.attach_action_sets(&[&action_set])?;

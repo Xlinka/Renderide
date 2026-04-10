@@ -3,6 +3,7 @@
 use std::ffi::c_void;
 use std::sync::{Arc, Mutex};
 
+use ash::khr::timeline_semaphore as khr_timeline_semaphore;
 use ash::vk::{self, Handle};
 use openxr as xr;
 use thiserror::Error;
@@ -99,18 +100,21 @@ fn choose_vulkan_api_version_for_wgpu(
     Ok(ceiling)
 }
 
-/// Fails fast if [`vkWaitSemaphores`] is not exported for the logical device. WGPU uses this for
-/// timeline-semaphore fences when the extension is promoted to core (Vulkan 1.2+).
+/// Fails fast if neither [`vkWaitSemaphores`] (Vulkan 1.2 core) nor [`vkWaitSemaphoresKHR`] is
+/// exported for the logical device. WGPU uses one of these for timeline-semaphore fences.
 fn verify_device_has_wait_semaphores(
     vk_instance: &ash::Instance,
     device: vk::Device,
 ) -> Result<(), XrBootstrapError> {
-    let addr = unsafe {
+    let addr_core = unsafe {
         (vk_instance.fp_v1_0().get_device_proc_addr)(device, c"vkWaitSemaphores".as_ptr())
     };
-    if addr.is_none() {
+    let addr_khr = unsafe {
+        (vk_instance.fp_v1_0().get_device_proc_addr)(device, c"vkWaitSemaphoresKHR".as_ptr())
+    };
+    if addr_core.is_none() && addr_khr.is_none() {
         return Err(XrBootstrapError::Vulkan(
-            "Vulkan device missing vkWaitSemaphores; need Vulkan 1.2+ (or timeline semaphore support) for wgpu."
+            "Vulkan device missing vkWaitSemaphores and vkWaitSemaphoresKHR; timeline semaphore support is required for wgpu."
                 .into(),
         ));
     }
@@ -263,9 +267,25 @@ pub fn init_wgpu_openxr() -> Result<XrWgpuHandles, XrBootstrapError> {
     let wgpu_features = wgt::Features::MULTIVIEW
         | (wgpu_exposed.features & (compression | optional_float32_filterable));
 
-    let enabled_device_extensions = wgpu_exposed
+    let mut enabled_device_extensions = wgpu_exposed
         .adapter
         .required_device_extensions(wgpu_features);
+
+    // wgpu-hal omits `VK_KHR_timeline_semaphore` when the physical device already reports Vulkan
+    // 1.2+, so it uses the promoted `vkWaitSemaphores` path. Some OpenXR/driver stacks only expose
+    // `vkWaitSemaphoresKHR`; enabling the extension forces wgpu-hal to use the KHR dispatch path.
+    if vk_device_properties.api_version >= vk::API_VERSION_1_2
+        && wgpu_exposed
+            .adapter
+            .physical_device_capabilities()
+            .supports_extension(khr_timeline_semaphore::NAME)
+        && !enabled_device_extensions
+            .iter()
+            .copied()
+            .any(|e| e == khr_timeline_semaphore::NAME)
+    {
+        enabled_device_extensions.push(khr_timeline_semaphore::NAME);
+    }
 
     let mut enabled_phd_features = wgpu_exposed
         .adapter
@@ -314,7 +334,11 @@ pub fn init_wgpu_openxr() -> Result<XrWgpuHandles, XrBootstrapError> {
     let stage: xr::Space = session
         .create_reference_space(xr::ReferenceSpaceType::STAGE, xr::Posef::IDENTITY)
         .map_err(XrBootstrapError::OpenXr)?;
-    let openxr_input = match OpenxrInput::new(&xr_instance, &session) {
+    let openxr_input = match OpenxrInput::new(
+        &xr_instance,
+        &session,
+        available_extensions.khr_generic_controller,
+    ) {
         Ok(i) => Some(i),
         Err(e) => {
             logger::warn!("OpenXR controller input unavailable (continuing without actions): {e}");

@@ -109,11 +109,15 @@ pub(super) struct ActionRefs<'a> {
 }
 
 /// Applies all known interaction profile binding tables; succeeds if at least one profile accepted bindings.
+///
+/// When `suggest_generic_controller` is `false` (runtime did not enable `XR_KHR_generic_controller`),
+/// the generic controller profile is skipped so runtimes that do not support it do not log errors.
 pub(super) fn apply_suggested_interaction_bindings(
     instance: &xr::Instance,
     profiles: &InteractionProfilePaths,
     paths: &BindingPaths,
     actions: &ActionRefs<'_>,
+    suggest_generic_controller: bool,
 ) -> Result<(), xr::sys::Result> {
     let a = actions;
     let p = paths;
@@ -245,27 +249,29 @@ pub(super) fn apply_suggested_interaction_bindings(
             xr::Binding::new(a.right_menu, p.right_menu_click),
         ],
     );
-    suggest(
-        ip.generic_controller,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_trigger, p.left_trigger_value),
-            xr::Binding::new(a.right_trigger, p.right_trigger_value),
-            xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
-            xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
-            xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-            xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-            xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-            xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-            xr::Binding::new(a.left_primary, p.left_select_click),
-            xr::Binding::new(a.right_primary, p.right_select_click),
-            xr::Binding::new(a.left_secondary, p.left_menu_click),
-            xr::Binding::new(a.right_secondary, p.right_menu_click),
-        ],
-    );
+    if suggest_generic_controller {
+        suggest(
+            ip.generic_controller,
+            &[
+                xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+                xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+                xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+                xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+                xr::Binding::new(a.left_trigger, p.left_trigger_value),
+                xr::Binding::new(a.right_trigger, p.right_trigger_value),
+                xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
+                xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
+                xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+                xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+                xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+                xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+                xr::Binding::new(a.left_primary, p.left_select_click),
+                xr::Binding::new(a.right_primary, p.right_select_click),
+                xr::Binding::new(a.left_secondary, p.left_menu_click),
+                xr::Binding::new(a.right_secondary, p.right_menu_click),
+            ],
+        );
+    }
     suggest(
         ip.simple_controller,
         &[
