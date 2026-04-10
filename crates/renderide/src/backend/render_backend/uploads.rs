@@ -31,6 +31,16 @@ pub const MAX_DEFERRED_MESH_UPLOADS_DRAIN_PER_POLL: usize = 64;
 /// [`crate::runtime::RendererRuntime::poll_ipc`] before additional commands are deferred.
 pub const MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL: u32 = 32;
 
+/// Max non-[`SetTexture2DData::high_priority`] texture data uploads processed inline per
+/// [`crate::runtime::RendererRuntime::poll_ipc`] before additional commands are deferred.
+pub const TEXTURE_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL: u32 = 32;
+
+/// Max deferred low-priority texture uploads when [`TEXTURE_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL`] is hit.
+pub const MAX_DEFERRED_TEXTURE_UPLOADS: usize = 512;
+
+/// Max deferred texture uploads drained at the end of one [`crate::runtime::RendererRuntime::poll_ipc`].
+pub const MAX_DEFERRED_TEXTURE_UPLOADS_DRAIN_PER_POLL: usize = 64;
+
 /// Max queued texture data commands when GPU or format is not ready.
 pub const MAX_PENDING_TEXTURE_UPLOADS: usize = 256;
 
@@ -46,7 +56,7 @@ pub(super) fn attach_flush_pending_asset_uploads(
     let pending_mesh: Vec<MeshUploadData> = backend.pending_mesh_uploads.drain(..).collect();
     if let Some(shm) = shm {
         for data in pending_tex {
-            try_texture_upload_with_device(backend, data, shm, None);
+            try_texture_upload_with_device(backend, data, shm, None, false);
         }
         for data in pending_mesh {
             try_mesh_upload_with_device(backend, device, data, shm, None, false);
@@ -198,6 +208,21 @@ pub(super) fn on_set_texture_2d_data(
         backend.pending_texture_uploads.push_back(d);
         return;
     }
+    if !d.high_priority && backend.texture_upload_budget_this_poll == 0 {
+        if backend.deferred_texture_uploads.len() >= MAX_DEFERRED_TEXTURE_UPLOADS {
+            logger::warn!(
+                "texture {}: deferred texture upload queue full; dropping",
+                d.asset_id
+            );
+            return;
+        }
+        logger::trace!(
+            "texture {}: deferring low-priority texture upload (budget exhausted)",
+            d.asset_id
+        );
+        backend.deferred_texture_uploads.push_back(d);
+        return;
+    }
     let Some(shm) = shm else {
         logger::warn!(
             "texture {}: SetTexture2DData needs shared memory for upload",
@@ -205,15 +230,22 @@ pub(super) fn on_set_texture_2d_data(
         );
         return;
     };
-    try_texture_upload_with_device(backend, d, shm, ipc);
+    try_texture_upload_with_device(backend, d, shm, ipc, true);
 }
 
 /// Upload texture mips from shared memory and optionally notify the host on the background queue.
+///
+/// When `consume_texture_upload_budget` is `true`, a successful upload decrements
+/// [`RenderBackend::texture_upload_budget_this_poll`] for non-[`SetTexture2DData::high_priority`]
+/// payloads (mirroring [`try_mesh_upload_with_device`] `allow_defer`). Use `false` when draining
+/// [`RenderBackend::deferred_texture_uploads`] or replaying [`RenderBackend::pending_texture_uploads`]
+/// on attach so deferred work does not double-charge the budget.
 pub(super) fn try_texture_upload_with_device(
     backend: &mut RenderBackend,
     data: SetTexture2DData,
     shm: &mut SharedMemoryAccessor,
     ipc: Option<&mut DualQueueIpc>,
+    consume_texture_upload_budget: bool,
 ) {
     let id = data.asset_id;
     let Some(fmt) = backend.texture_formats.get(&id).cloned() else {
@@ -230,6 +262,16 @@ pub(super) fn try_texture_upload_with_device(
     let Some(queue_arc) = backend.gpu_queue.as_ref() else {
         return;
     };
+    logger::trace!(
+        "texture_upload telemetry asset_id={} payload_bytes={} high_priority={} has_region={} hint_readable={} mip_count={} start_mip={}",
+        id,
+        data.data.length.max(0),
+        data.high_priority,
+        data.hint.has_region != 0,
+        data.hint.readable != 0,
+        data.mip_map_sizes.len(),
+        data.start_mip_level,
+    );
     let upload_out = shm.with_read_bytes(&data.data, |raw| {
         let q = queue_arc.lock().unwrap_or_else(|e| e.into_inner());
         Some(write_texture2d_mips(
@@ -242,15 +284,21 @@ pub(super) fn try_texture_upload_with_device(
         ))
     });
     match upload_out {
-        Some(Ok(_)) => {
+        Some(Ok(0)) => {
+            logger::trace!("texture {id}: upload skipped (empty region hint)");
+        }
+        Some(Ok(uploaded_mips)) => {
+            if consume_texture_upload_budget && !data.high_priority && uploaded_mips > 0 {
+                backend.texture_upload_budget_this_poll =
+                    backend.texture_upload_budget_this_poll.saturating_sub(1);
+            }
             if let Some(t) = backend.texture_pool.get_texture_mut(id) {
-                let uploaded_mips = data.mip_map_sizes.len() as u32;
                 let start = data.start_mip_level.max(0) as u32;
                 let end_exclusive = start.saturating_add(uploaded_mips).min(t.mip_levels_total);
                 t.mip_levels_resident = t.mip_levels_resident.max(end_exclusive);
             }
             send_texture_2d_result(ipc, id, TextureUpdateResultType::DATA_UPLOAD, false);
-            logger::trace!("texture {id}: data upload ok");
+            logger::trace!("texture {id}: data upload ok ({uploaded_mips} mips)");
         }
         Some(Err(e)) => {
             logger::warn!("texture {id}: upload failed: {e}");
@@ -261,10 +309,11 @@ pub(super) fn try_texture_upload_with_device(
     }
 }
 
-/// Resets the per-poll budget for non-high-priority mesh uploads. Call at the start of each
-/// [`crate::runtime::RendererRuntime::poll_ipc`].
+/// Resets the per-poll budget for non-high-priority mesh and texture uploads. Call at the start of
+/// each [`crate::runtime::RendererRuntime::poll_ipc`].
 pub(super) fn begin_ipc_poll_mesh_upload_budget(backend: &mut RenderBackend) {
     backend.mesh_upload_budget_this_poll = MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL;
+    backend.texture_upload_budget_this_poll = TEXTURE_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL;
 }
 
 /// Processes mesh uploads deferred during the current IPC batch (low-priority overflow).
@@ -291,6 +340,33 @@ pub(super) fn drain_deferred_mesh_uploads_after_poll(
                 break;
             };
             try_mesh_upload_with_device(&mut *backend, &device, data, shm, None, false);
+            drained += 1;
+        }
+    }
+}
+
+/// Processes texture uploads deferred when the non-high-priority texture budget was exhausted
+/// mid-batch.
+pub(super) fn drain_deferred_texture_uploads_after_poll(
+    backend: &mut RenderBackend,
+    shm: &mut SharedMemoryAccessor,
+    ipc: Option<&mut DualQueueIpc>,
+) {
+    let mut drained = 0usize;
+    if let Some(ipc_ref) = ipc {
+        while drained < MAX_DEFERRED_TEXTURE_UPLOADS_DRAIN_PER_POLL {
+            let Some(data) = backend.deferred_texture_uploads.pop_front() else {
+                break;
+            };
+            try_texture_upload_with_device(&mut *backend, data, shm, Some(ipc_ref), false);
+            drained += 1;
+        }
+    } else {
+        while drained < MAX_DEFERRED_TEXTURE_UPLOADS_DRAIN_PER_POLL {
+            let Some(data) = backend.deferred_texture_uploads.pop_front() else {
+                break;
+            };
+            try_texture_upload_with_device(&mut *backend, data, shm, None, false);
             drained += 1;
         }
     }

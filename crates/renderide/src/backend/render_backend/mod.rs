@@ -69,8 +69,12 @@ pub struct RenderBackend {
     pub(super) deferred_mesh_uploads: VecDeque<MeshUploadData>,
     /// Remaining non-high-priority mesh uploads allowed this [`crate::runtime::RendererRuntime::poll_ipc`] cycle.
     pub(super) mesh_upload_budget_this_poll: u32,
+    /// Remaining non-high-priority texture uploads allowed this [`crate::runtime::RendererRuntime::poll_ipc`] cycle.
+    pub(super) texture_upload_budget_this_poll: u32,
     /// Texture mip payloads waiting for GPU allocation or shared memory.
     pub(super) pending_texture_uploads: VecDeque<SetTexture2DData>,
+    /// Low-priority texture uploads deferred when [`Self::texture_upload_budget_this_poll`] is exhausted.
+    pub(super) deferred_texture_uploads: VecDeque<SetTexture2DData>,
     /// GPU material families, router, and pipeline cache (after [`Self::attach`]).
     pub(crate) material_registry: Option<crate::materials::MaterialRegistry>,
     /// Shader asset id → pipeline kind and optional HUD label when uploads arrive before GPU attach.
@@ -135,7 +139,10 @@ impl RenderBackend {
             pending_mesh_uploads: VecDeque::new(),
             deferred_mesh_uploads: VecDeque::new(),
             mesh_upload_budget_this_poll: uploads::MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
+            texture_upload_budget_this_poll:
+                uploads::TEXTURE_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
             pending_texture_uploads: VecDeque::new(),
+            deferred_texture_uploads: VecDeque::new(),
             material_registry: None,
             pending_shader_routes: HashMap::new(),
             mesh_preprocess: None,
@@ -244,13 +251,22 @@ impl RenderBackend {
         uploads::begin_ipc_poll_mesh_upload_budget(self);
     }
 
-    /// Drains mesh uploads deferred when the non-high-priority budget was exhausted mid-batch.
+    /// Drains mesh and texture uploads deferred when the non-high-priority budget was exhausted mid-batch.
     pub fn finish_ipc_poll_mesh_upload_deferred(
         &mut self,
         shm: &mut SharedMemoryAccessor,
         ipc: Option<&mut DualQueueIpc>,
     ) {
-        uploads::drain_deferred_mesh_uploads_after_poll(self, shm, ipc);
+        match ipc {
+            Some(ipc_ref) => {
+                uploads::drain_deferred_mesh_uploads_after_poll(self, shm, Some(ipc_ref));
+                uploads::drain_deferred_texture_uploads_after_poll(self, shm, Some(ipc_ref));
+            }
+            None => {
+                uploads::drain_deferred_mesh_uploads_after_poll(self, shm, None);
+                uploads::drain_deferred_texture_uploads_after_poll(self, shm, None);
+            }
+        }
     }
 
     /// Resident Texture2D table (bind-group prep).
@@ -729,13 +745,23 @@ impl RenderBackend {
     }
 
     /// Upload texture mips from shared memory and optionally notify the host on the background queue.
+    ///
+    /// `consume_texture_upload_budget` should be `true` for normal IPC handling; use `false` when
+    /// draining deferred uploads or replaying pending uploads on GPU attach.
     pub fn try_texture_upload_with_device(
         &mut self,
         data: SetTexture2DData,
         shm: &mut SharedMemoryAccessor,
         ipc: Option<&mut DualQueueIpc>,
+        consume_texture_upload_budget: bool,
     ) {
-        uploads::try_texture_upload_with_device(self, data, shm, ipc);
+        uploads::try_texture_upload_with_device(
+            self,
+            data,
+            shm,
+            ipc,
+            consume_texture_upload_budget,
+        );
     }
 
     /// Remove a texture asset from CPU tables and the pool.
