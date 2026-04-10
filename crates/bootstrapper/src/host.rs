@@ -65,7 +65,7 @@ pub fn set_host_above_normal_priority(child: &Child) {
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::System::Threading::{SetPriorityClass, ABOVE_NORMAL_PRIORITY_CLASS};
 
-    let handle = child.as_raw_handle() as *mut std::ffi::c_void;
+    let handle = child.as_raw_handle();
     let rc = unsafe { SetPriorityClass(handle, ABOVE_NORMAL_PRIORITY_CLASS) };
     if rc == 0 {
         logger::warn!(

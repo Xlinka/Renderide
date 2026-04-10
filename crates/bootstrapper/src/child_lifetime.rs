@@ -103,6 +103,8 @@ impl ChildLifetimeGroup {
         let _ = self;
         #[cfg(target_os = "linux")]
         linux::apply_parent_death_signal(cmd);
+        #[cfg(not(target_os = "linux"))]
+        let _ = cmd;
     }
 
     /// Registers a spawned direct child (required on Windows for job assignment; tracks PIDs on macOS).

@@ -15,8 +15,6 @@ use windows_sys::Win32::System::Memory::{
     PAGE_READWRITE,
 };
 
-const WAIT_OBJECT_0: u32 = 0;
-
 /// RAII for `CreateFileMappingW` + `MapViewOfFile`.
 pub(super) struct WindowsMapping {
     map_handle: windows_sys::Win32::Foundation::HANDLE,
@@ -74,13 +72,10 @@ pub(super) fn open_queue(options: &QueueOptions) -> Result<(WindowsMapping, Sema
 
     if view.Value.is_null() {
         unsafe { CloseHandle(map_handle) };
-        return Err(OpenError(io::Error::new(
-            io::ErrorKind::Other,
-            format!(
-                "MapViewOfFile failed for queue: {}",
-                options.memory_view_name
-            ),
-        )));
+        return Err(OpenError(io::Error::other(format!(
+            "MapViewOfFile failed for queue: {}",
+            options.memory_view_name
+        ))));
     }
 
     let sem = Semaphore::open(&options.memory_view_name).map_err(OpenError)?;
@@ -127,8 +122,7 @@ fn create_or_open_file_mapping(
         wait_retries = match wait_retries.checked_sub(1) {
             Some(n) => n,
             None => {
-                return Err(OpenError(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(OpenError(io::Error::other(
                     "Failed to create or open file mapping after retries",
                 )));
             }

@@ -35,6 +35,10 @@ use crate::shared::memory_unpacker::MemoryUnpacker;
 
 /// Environment variable overriding the Unix directory for `.qu` MMF files (must match host /
 /// bootstrapper). Same value as `bootstrapper::ipc::RENDERIDE_INTERPROCESS_DIR_ENV`.
+///
+/// Only read by [`unix_mmf_backing_dir`] on Unix; Windows builds keep this symbol for API parity
+/// with the bootstrapper constant name.
+#[cfg_attr(not(unix), allow(dead_code))]
 pub const RENDERIDE_INTERPROCESS_DIR_ENV: &str = "RENDERIDE_INTERPROCESS_DIR";
 
 /// Composes the memory view name per Renderite `Helper.ComposeMemoryViewName` (prefix + hex id).
