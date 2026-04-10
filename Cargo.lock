@@ -1469,6 +1469,7 @@ dependencies = [
 name = "interprocess"
 version = "0.1.0"
 dependencies = [
+ "bytemuck",
  "libc",
  "memmap2",
  "windows-sys 0.61.2",

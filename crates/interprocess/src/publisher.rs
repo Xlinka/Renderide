@@ -95,12 +95,11 @@ impl Publisher {
                 state: STATE_WRITING,
                 body_length: len as i32,
             };
-            let header_bytes: [u8; 8] = unsafe { std::mem::transmute(msg_header) };
             circular_buffer::write(
                 self.buffer_mut(),
                 self.capacity,
                 write_offset,
-                &header_bytes,
+                bytemuck::bytes_of(&msg_header),
             );
 
             circular_buffer::write(

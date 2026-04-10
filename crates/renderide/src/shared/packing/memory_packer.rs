@@ -1,7 +1,6 @@
 //! [`MemoryPacker`]: host-compatible sequential writes into a byte slice.
 
 use core::mem::size_of;
-use std::ptr;
 
 use bytemuck::Pod;
 
@@ -9,7 +8,7 @@ use super::enum_repr::EnumRepr;
 use super::memory_packable::MemoryPackable;
 use super::polymorphic_memory_packable_entity::PolymorphicEncode;
 
-/// Sequential binary writer for IPC buffers (may be unaligned; uses unaligned primitive writes).
+/// Sequential binary writer for IPC buffers (writes `Pod` values as byte slices; works for unaligned buffers).
 pub struct MemoryPacker<'a> {
     buffer: &'a mut [u8],
 }
@@ -36,6 +35,9 @@ impl<'a> MemoryPacker<'a> {
     }
 
     /// Writes a plain data value with potentially unaligned storage (safe for shared-memory views).
+    ///
+    /// Uses [`std::mem::replace`] so the slice can be split after [`bytemuck::bytes_of`] without
+    /// borrowing `value` for the lifetime of the backing buffer.
     pub fn write<T: Pod>(&mut self, value: &T) {
         let byte_len = size_of::<T>();
         assert!(
@@ -45,14 +47,12 @@ impl<'a> MemoryPacker<'a> {
             std::any::type_name::<T>(),
             self.buffer.len()
         );
-        let buf_ptr = self.buffer.as_mut_ptr();
-        unsafe {
-            ptr::write_unaligned(buf_ptr as *mut T, *value);
-            self.buffer = core::slice::from_raw_parts_mut(
-                buf_ptr.add(byte_len),
-                self.buffer.len() - byte_len,
-            );
-        }
+        let bytes = bytemuck::bytes_of(value);
+        let empty_tail: &mut [u8] = &mut [];
+        let buf = std::mem::replace(&mut self.buffer, empty_tail);
+        let (head, tail) = buf.split_at_mut(byte_len);
+        head.copy_from_slice(bytes);
+        self.buffer = tail;
     }
 
     /// UTF‑16 code units (two-byte wchar layout): `i32` length, then each `u16`. Length `-1` means null.

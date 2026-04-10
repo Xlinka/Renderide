@@ -17,7 +17,7 @@ pub const MAX_LIGHTS: usize = 256;
 /// Layout must match `GpuLight` in `shaders/source/modules/globals.wgsl`: WGSL aligns `vec3<u32>`
 /// (`_pad_trailing`) to **16 bytes**, so 4 bytes of implicit padding follow `shadow_type`, and the
 /// struct size rounds up to **112** bytes (see naga / WebGPU validation).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
 #[repr(C)]
 pub struct GpuLight {
     pub position: [f32; 3],
@@ -41,9 +41,6 @@ pub struct GpuLight {
     /// Pads struct size to 112 bytes (WGSL struct alignment).
     pub _pad_struct_end: [u8; 12],
 }
-
-unsafe impl Pod for GpuLight {}
-unsafe impl Zeroable for GpuLight {}
 
 impl Default for GpuLight {
     fn default() -> Self {

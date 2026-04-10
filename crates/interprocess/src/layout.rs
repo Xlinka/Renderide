@@ -28,7 +28,7 @@ impl QueueHeader {
 
 /// Per-message header (8 bytes), immediately followed by the body then padding to eight bytes.
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MessageHeader {
     /// See [`STATE_WRITING`], [`STATE_LOCKED`], [`STATE_READY`].
     pub state: i32,
