@@ -15,16 +15,58 @@
 //! with the main thread on the global logger mutex, and read in chunks so a missing newline cannot
 //! fill the pipe and block writers.
 //!
+//! **Terminal tee:** Before redirecting, the original console file descriptors / handles are kept.
+//! Each forwarded line is also written to that original stream so Vulkan validation and similar
+//! output appears on the launching terminal as well as in the log file. Disable with
+//! **`RENDERIDE_LOG_TEE_TERMINAL=0`** (or `false` / `no`) for CI or headless runs.
+//!
 //! On other targets this module is a no-op.
 //!
 //! Avoid enabling the logger’s **mirror-to-stderr** option together with this redirect: mirrored
-//! lines would be written back into the pipe and re-logged.
+//! lines would be written back into the pipe and re-logged. Tee uses the **preserved** handles, not
+//! [`std::io::stderr`].
 
-use std::sync::Once;
+use std::io::Write;
+use std::sync::{Mutex, Once, OnceLock};
 
 use logger::LogLevel;
 
 static INSTALL: Once = Once::new();
+
+#[cfg(unix)]
+static PRESERVED_STDERR: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+#[cfg(unix)]
+static PRESERVED_STDOUT: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+#[cfg(windows)]
+static PRESERVED_STDERR: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+#[cfg(windows)]
+static PRESERVED_STDOUT: OnceLock<Mutex<std::fs::File>> = OnceLock::new();
+
+/// Which standard stream was redirected; used to tee to the matching preserved handle.
+#[derive(Clone, Copy, Debug)]
+enum StdioStream {
+    Stdout,
+    Stderr,
+}
+
+/// When `false`, forwarded native lines and panic terminal output are not copied to the original
+/// console (log file only). Default: enabled unless `RENDERIDE_LOG_TEE_TERMINAL` is `0`, `false`,
+/// or `no` (case-insensitive).
+fn tee_terminal_enabled() -> bool {
+    match std::env::var("RENDERIDE_LOG_TEE_TERMINAL") {
+        Ok(v) => {
+            let v = v.trim();
+            !matches!(
+                v.to_ascii_lowercase().as_str(),
+                "0" | "false" | "no" | "off"
+            )
+        }
+        Err(_) => true,
+    }
+}
 
 /// Ensures process **stdout** and **stderr** are forwarded to [`logger`] and no longer write to the
 /// original terminal streams. Idempotent.
@@ -32,10 +74,18 @@ pub(crate) fn ensure_stdio_forwarded_to_logger() {
     INSTALL.call_once(|| {
         #[cfg(unix)]
         {
-            if let Err(e) = try_redirect_unix_stream(libc::STDERR_FILENO, "renderide-stderr") {
+            if let Err(e) = try_redirect_unix_stream(
+                libc::STDERR_FILENO,
+                "renderide-stderr",
+                StdioStream::Stderr,
+            ) {
                 logger::warn!("Native stderr could not be redirected to log file: {e}");
             }
-            if let Err(e) = try_redirect_unix_stream(libc::STDOUT_FILENO, "renderide-stdout") {
+            if let Err(e) = try_redirect_unix_stream(
+                libc::STDOUT_FILENO,
+                "renderide-stdout",
+                StdioStream::Stdout,
+            ) {
                 logger::warn!("Native stdout could not be redirected to log file: {e}");
             }
         }
@@ -44,12 +94,14 @@ pub(crate) fn ensure_stdio_forwarded_to_logger() {
             if let Err(e) = try_redirect_windows_stream(
                 windows_sys::Win32::System::Console::STD_ERROR_HANDLE,
                 "renderide-stderr",
+                StdioStream::Stderr,
             ) {
                 logger::warn!("Native stderr could not be redirected to log file: {e}");
             }
             if let Err(e) = try_redirect_windows_stream(
                 windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE,
                 "renderide-stdout",
+                StdioStream::Stdout,
             ) {
                 logger::warn!("Native stdout could not be redirected to log file: {e}");
             }
@@ -57,8 +109,56 @@ pub(crate) fn ensure_stdio_forwarded_to_logger() {
     });
 }
 
+/// Writes `data` to the process’s **original** stderr (before [`ensure_stdio_forwarded_to_logger`]),
+/// for panic reporting. No-op if redirect did not run, tee is disabled, or the platform is
+/// unsupported.
+pub(crate) fn try_write_preserved_stderr(data: &[u8]) {
+    if !tee_terminal_enabled() {
+        return;
+    }
+    #[cfg(any(unix, windows))]
+    if let Some(m) = PRESERVED_STDERR.get() {
+        if let Ok(mut f) = m.lock() {
+            let _ = f.write_all(data);
+            let _ = f.flush();
+        }
+    }
+}
+
+#[cfg(any(unix, windows))]
+fn try_write_preserved_stdout(data: &[u8]) {
+    if !tee_terminal_enabled() {
+        return;
+    }
+    if let Some(m) = PRESERVED_STDOUT.get() {
+        if let Ok(mut f) = m.lock() {
+            let _ = f.write_all(data);
+            let _ = f.flush();
+        }
+    }
+}
+
 #[cfg(unix)]
-fn try_redirect_unix_stream(target_fd: i32, thread_name: &'static str) -> Result<(), String> {
+fn store_preserved_unix(stream: StdioStream, saved: i32) {
+    use std::fs::File;
+    use std::os::fd::FromRawFd;
+    use std::os::fd::OwnedFd;
+
+    let owned = unsafe { OwnedFd::from_raw_fd(saved) };
+    let file = File::from(owned);
+    let cell = match stream {
+        StdioStream::Stderr => &PRESERVED_STDERR,
+        StdioStream::Stdout => &PRESERVED_STDOUT,
+    };
+    let _ = cell.set(Mutex::new(file));
+}
+
+#[cfg(unix)]
+fn try_redirect_unix_stream(
+    target_fd: i32,
+    thread_name: &'static str,
+    stream: StdioStream,
+) -> Result<(), String> {
     use std::thread;
 
     unsafe {
@@ -97,11 +197,11 @@ fn try_redirect_unix_stream(target_fd: i32, thread_name: &'static str) -> Result
 
         let spawn = thread::Builder::new()
             .name(thread_name.into())
-            .spawn(move || forward_pipe_lines_to_logger_unix(rfd));
+            .spawn(move || forward_pipe_lines_to_logger_unix(rfd, stream));
 
         match spawn {
             Ok(_) => {
-                libc::close(saved);
+                store_preserved_unix(stream, saved);
                 Ok(())
             }
             Err(e) => {
@@ -115,7 +215,20 @@ fn try_redirect_unix_stream(target_fd: i32, thread_name: &'static str) -> Result
 }
 
 #[cfg(windows)]
-fn try_redirect_windows_stream(std_handle: u32, thread_name: &'static str) -> Result<(), String> {
+fn store_preserved_windows(stream: StdioStream, file: std::fs::File) {
+    let cell = match stream {
+        StdioStream::Stderr => &PRESERVED_STDERR,
+        StdioStream::Stdout => &PRESERVED_STDOUT,
+    };
+    let _ = cell.set(Mutex::new(file));
+}
+
+#[cfg(windows)]
+fn try_redirect_windows_stream(
+    std_handle: u32,
+    thread_name: &'static str,
+    stream: StdioStream,
+) -> Result<(), String> {
     use std::fs::File;
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use std::ptr;
@@ -154,12 +267,14 @@ fn try_redirect_windows_stream(std_handle: u32, thread_name: &'static str) -> Re
             .name(thread_name.into())
             .spawn(move || {
                 let f = File::from(read_owned);
-                forward_pipe_lines_to_logger_impl(f);
+                forward_pipe_lines_to_logger_impl(f, stream);
             });
 
         match spawn {
             Ok(_) => {
-                let _ = CloseHandle(old);
+                let old_owned = OwnedHandle::from_raw_handle(old);
+                let preserved_file = File::from(old_owned);
+                store_preserved_windows(stream, preserved_file);
                 Ok(())
             }
             Err(e) => {
@@ -172,14 +287,14 @@ fn try_redirect_windows_stream(std_handle: u32, thread_name: &'static str) -> Re
 }
 
 #[cfg(any(unix, windows))]
-fn forward_pipe_lines_to_logger_impl<R: std::io::Read>(mut reader: R) {
+fn forward_pipe_lines_to_logger_impl<R: std::io::Read>(mut reader: R, stream: StdioStream) {
     let mut pending = Vec::new();
     let mut chunk = [0u8; 4096];
     loop {
         match reader.read(&mut chunk) {
             Ok(0) => {
                 if !pending.is_empty() {
-                    emit_stdio_line(&pending, LogLevel::Info);
+                    emit_stdio_line(&pending, LogLevel::Info, stream);
                 }
                 break;
             }
@@ -190,7 +305,7 @@ fn forward_pipe_lines_to_logger_impl<R: std::io::Read>(mut reader: R) {
                     if !pending.is_empty() && pending[0] == b'\n' {
                         pending.remove(0);
                     }
-                    emit_stdio_line(&line, LogLevel::Info);
+                    emit_stdio_line(&line, LogLevel::Info, stream);
                 }
             }
             Err(e) => {
@@ -205,19 +320,26 @@ fn forward_pipe_lines_to_logger_impl<R: std::io::Read>(mut reader: R) {
 }
 
 #[cfg(unix)]
-fn forward_pipe_lines_to_logger_unix(rfd: i32) {
+fn forward_pipe_lines_to_logger_unix(rfd: i32, stream: StdioStream) {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
 
     let f = unsafe { File::from_raw_fd(rfd) };
-    forward_pipe_lines_to_logger_impl(f);
+    forward_pipe_lines_to_logger_impl(f, stream);
 }
 
 #[cfg(any(unix, windows))]
-fn emit_stdio_line(line: &[u8], level: LogLevel) {
+fn emit_stdio_line(line: &[u8], level: LogLevel, stream: StdioStream) {
     let t = String::from_utf8_lossy(line).trim().to_string();
     if t.is_empty() {
         return;
     }
     let _ = logger::try_log(level, format_args!("{t}"));
+    let mut out = t;
+    out.push('\n');
+    let bytes = out.as_bytes();
+    match stream {
+        StdioStream::Stderr => try_write_preserved_stderr(bytes),
+        StdioStream::Stdout => try_write_preserved_stdout(bytes),
+    }
 }

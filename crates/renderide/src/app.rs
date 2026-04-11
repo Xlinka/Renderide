@@ -81,11 +81,11 @@ pub fn run() -> Option<i32> {
     let initial_vsync = config_load.settings.rendering.vsync;
     let initial_gpu_validation = config_load.settings.debug.gpu_validation_layers;
 
-    let default_hook = std::panic::take_hook();
     let log_path_hook = log_path.clone();
     std::panic::set_hook(Box::new(move |info| {
-        logger::log_panic(&log_path_hook, info);
-        default_hook(info);
+        let report = logger::panic_report(info);
+        logger::append_panic_report_to_file(&log_path_hook, &report);
+        crate::native_stdio::try_write_preserved_stderr(report.as_bytes());
     }));
 
     let params = get_connection_parameters();

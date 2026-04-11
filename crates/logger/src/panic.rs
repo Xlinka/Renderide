@@ -22,21 +22,34 @@ pub fn log_panic_payload(payload: Box<dyn std::any::Any + Send>, context: &str) 
     output::log(LogLevel::Error, format_args!("{msg}"));
 }
 
-/// Writes panic info and backtrace to the given log file. Flushes immediately so the panic
-/// is visible on disk. Does not acquire the logger mutex (safe from a panic handler).
+/// Formats a panic line and full backtrace for logging and optional terminal output.
 ///
 /// Uses [`std::backtrace::Backtrace::force_capture`] so backtraces are recorded regardless of
 /// `RUST_BACKTRACE`.
-pub fn log_panic(path: impl AsRef<Path>, info: &dyn std::fmt::Display) {
+pub fn panic_report(info: &dyn std::fmt::Display) -> String {
+    format!(
+        "PANIC: {info}\nBacktrace:\n{:#?}\n",
+        std::backtrace::Backtrace::force_capture()
+    )
+}
+
+/// Appends a pre-formatted panic report to the log file without acquiring the global logger mutex.
+///
+/// Safe to call from a panic hook alongside [`panic_report`].
+pub fn append_panic_report_to_file(path: impl AsRef<Path>, report: &str) {
     let path = path.as_ref();
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "PANIC: {info}");
-        let _ = writeln!(
-            f,
-            "Backtrace:\n{:#?}",
-            std::backtrace::Backtrace::force_capture()
-        );
+        let _ = f.write_all(report.as_bytes());
         let _ = f.flush();
         let _ = f.sync_all();
     }
+}
+
+/// Writes panic info and backtrace to the given log file. Flushes immediately so the panic
+/// is visible on disk. Does not acquire the logger mutex (safe from a panic handler).
+///
+/// Uses [`panic_report`] internally.
+pub fn log_panic(path: impl AsRef<Path>, info: &dyn std::fmt::Display) {
+    let report = panic_report(info);
+    append_panic_report_to_file(path, &report);
 }
