@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use glam::Mat4;
 
-use crate::assets::mesh::BLENDSHAPE_OFFSET_GPU_STRIDE;
+use crate::assets::mesh::{GpuMesh, BLENDSHAPE_OFFSET_GPU_STRIDE};
 use crate::backend::advance_slab_cursor;
 use crate::gpu::plan_blendshape_bind_chunks;
 
@@ -44,7 +44,9 @@ struct MeshDeformSnapshot {
 }
 
 impl MeshDeformSnapshot {
-    fn from_mesh(m: &crate::assets::mesh::GpuMesh) -> Self {
+    /// Copies GPU resources from `m`. When `clone_skinning_bind_matrices` is `false`, bind matrices
+    /// are omitted (blendshape-only path never reads them).
+    fn from_mesh(m: &GpuMesh, clone_skinning_bind_matrices: bool) -> Self {
         Self {
             vertex_count: m.vertex_count,
             num_blendshapes: m.num_blendshapes,
@@ -57,9 +59,60 @@ impl MeshDeformSnapshot {
             deformed_normals_buffer: m.deformed_normals_buffer.clone(),
             bone_indices_buffer: m.bone_indices_buffer.clone(),
             bone_weights_vec4_buffer: m.bone_weights_vec4_buffer.clone(),
-            skinning_bind_matrices: m.skinning_bind_matrices.clone(),
+            skinning_bind_matrices: if clone_skinning_bind_matrices {
+                m.skinning_bind_matrices.clone()
+            } else {
+                Vec::new()
+            },
         }
     }
+}
+
+/// Returns whether blendshape compute should run for `m` (parity with [`record_mesh_deform`]).
+fn deform_needs_blend_mesh(m: &GpuMesh) -> bool {
+    m.num_blendshapes > 0 && m.blendshape_buffer.is_some() && m.deform_temp_buffer.is_some()
+}
+
+/// Returns whether skinning compute should run for `m` (parity with [`record_mesh_deform`]).
+fn deform_needs_skin_mesh(m: &GpuMesh, bone_transform_indices: Option<&[i32]>) -> bool {
+    bone_transform_indices.is_some()
+        && m.has_skeleton
+        && m.deformed_positions_buffer.is_some()
+        && m.deformed_normals_buffer.is_some()
+        && m.normals_buffer.is_some()
+        && m.bone_indices_buffer.is_some()
+        && m.bone_weights_vec4_buffer.is_some()
+        && !m.skinning_bind_matrices.is_empty()
+}
+
+/// Returns `true` when [`record_mesh_deform`] would run blend and/or skin dispatches (not an early no-op).
+fn gpu_mesh_needs_deform_dispatch(m: &GpuMesh, bone_transform_indices: Option<&[i32]>) -> bool {
+    if m.positions_buffer.is_none() || m.vertex_count == 0 {
+        return false;
+    }
+    deform_needs_blend_mesh(m) || deform_needs_skin_mesh(m, bone_transform_indices)
+}
+
+/// Snapshot variant of [`deform_needs_blend_mesh`].
+fn deform_needs_blend_snapshot(mesh: &MeshDeformSnapshot) -> bool {
+    mesh.num_blendshapes > 0
+        && mesh.blendshape_buffer.is_some()
+        && mesh.deform_temp_buffer.is_some()
+}
+
+/// Snapshot variant of [`deform_needs_skin_mesh`].
+fn deform_needs_skin_snapshot(
+    mesh: &MeshDeformSnapshot,
+    bone_transform_indices: Option<&[i32]>,
+) -> bool {
+    bone_transform_indices.is_some()
+        && mesh.has_skeleton
+        && mesh.deformed_positions_buffer.is_some()
+        && mesh.deformed_normals_buffer.is_some()
+        && mesh.normals_buffer.is_some()
+        && mesh.bone_indices_buffer.is_some()
+        && mesh.bone_weights_vec4_buffer.is_some()
+        && !mesh.skinning_bind_matrices.is_empty()
 }
 
 struct DeformWorkItem {
@@ -88,7 +141,19 @@ impl RenderPass for MeshDeformPass {
             return Ok(());
         };
 
-        let mut work: Vec<DeformWorkItem> = Vec::new();
+        let mut est = 0usize;
+        for space_id in frame.scene.render_space_ids() {
+            let Some(space) = frame.scene.space(space_id) else {
+                continue;
+            };
+            if space.is_active {
+                est = est
+                    .saturating_add(space.static_mesh_renderers.len())
+                    .saturating_add(space.skinned_mesh_renderers.len());
+            }
+        }
+        let mut work: Vec<DeformWorkItem> = Vec::with_capacity(est);
+
         for space_id in frame.scene.render_space_ids() {
             let Some(space) = frame.scene.space(space_id) else {
                 continue;
@@ -103,9 +168,12 @@ impl RenderPass for MeshDeformPass {
                 let Some(m) = frame.backend.mesh_pool().get_mesh(r.mesh_asset_id) else {
                     continue;
                 };
+                if !gpu_mesh_needs_deform_dispatch(m, None) {
+                    continue;
+                }
                 work.push(DeformWorkItem {
                     space_id,
-                    mesh: MeshDeformSnapshot::from_mesh(m),
+                    mesh: MeshDeformSnapshot::from_mesh(m, false),
                     skinned: None,
                     smr_node_id: -1,
                     blend_weights: r.blend_shape_weights.clone(),
@@ -119,9 +187,14 @@ impl RenderPass for MeshDeformPass {
                 let Some(m) = frame.backend.mesh_pool().get_mesh(r.mesh_asset_id) else {
                     continue;
                 };
+                let bone_ix = skinned.bone_transform_indices.as_slice();
+                if !gpu_mesh_needs_deform_dispatch(m, Some(bone_ix)) {
+                    continue;
+                }
+                let clone_bind = deform_needs_skin_mesh(m, Some(bone_ix));
                 work.push(DeformWorkItem {
                     space_id,
-                    mesh: MeshDeformSnapshot::from_mesh(m),
+                    mesh: MeshDeformSnapshot::from_mesh(m, clone_bind),
                     skinned: Some(skinned.bone_transform_indices.clone()),
                     smr_node_id: r.node_id,
                     blend_weights: r.blend_shape_weights.clone(),
@@ -194,17 +267,8 @@ fn record_mesh_deform(
     }
     let wg = workgroup_count(vc);
 
-    let needs_blend = mesh.num_blendshapes > 0
-        && mesh.blendshape_buffer.is_some()
-        && mesh.deform_temp_buffer.is_some();
-    let needs_skin = bone_transform_indices.is_some()
-        && mesh.has_skeleton
-        && mesh.deformed_positions_buffer.is_some()
-        && mesh.deformed_normals_buffer.is_some()
-        && mesh.normals_buffer.is_some()
-        && mesh.bone_indices_buffer.is_some()
-        && mesh.bone_weights_vec4_buffer.is_some()
-        && !mesh.skinning_bind_matrices.is_empty();
+    let needs_blend = deform_needs_blend_snapshot(mesh);
+    let needs_skin = deform_needs_skin_snapshot(mesh, bone_transform_indices);
 
     if !needs_blend && !needs_skin {
         return;
