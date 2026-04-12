@@ -134,7 +134,7 @@ impl RenderPass for WorldMeshForwardPass {
             let dict = MaterialDictionary::new(backend.material_property_store());
             collect_and_sort_world_mesh_draws(
                 frame.scene,
-                &backend.mesh_pool,
+                backend.mesh_pool(),
                 &dict,
                 router_ref,
                 shader_perm,

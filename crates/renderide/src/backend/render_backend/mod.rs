@@ -1,12 +1,5 @@
 //! [`RenderBackend`] implementation.
 
-mod uploads;
-
-pub use uploads::{
-    MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
-    MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
-};
-
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -28,6 +21,7 @@ use crate::scene::SceneCoordinator;
 #[cfg(feature = "debug-hud")]
 use crate::diagnostics::{DebugHud, DebugHudInput, SceneTransformsSnapshot};
 
+use super::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use super::embedded_material_bind::EmbeddedMaterialBindResources;
 use super::mesh_deform_scratch::MeshDeformScratch;
 use super::occlusion::OcclusionSystem;
@@ -40,6 +34,11 @@ use winit::window::Window;
 /// Max queued [`MaterialsUpdateBatch`] when shared memory is not available.
 pub const MAX_PENDING_MATERIAL_BATCHES: usize = 256;
 
+pub use super::asset_transfer_queue::{
+    MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
+    MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
+};
+
 /// GPU resource pools, material property data, and asset upload paths.
 pub struct RenderBackend {
     /// Host material property batches (`MaterialsUpdateBatch`); separate maps for materials vs blocks.
@@ -47,28 +46,8 @@ pub struct RenderBackend {
     /// Stable ids for [`crate::shared::MaterialPropertyIdRequest`] / batch `property_id` keys.
     property_id_registry: Arc<PropertyIdRegistry>,
     pending_material_batches: VecDeque<MaterialsUpdateBatch>,
-    pub(crate) mesh_pool: MeshPool,
-    texture_pool: TexturePool,
-    /// Latest [`SetTexture2DFormat`] per asset (required before data upload).
-    pub(super) texture_formats: HashMap<i32, SetTexture2DFormat>,
-    /// Latest [`SetTexture2DProperties`] per asset (sampler metadata on [`GpuTexture2d`]).
-    pub(super) texture_properties: HashMap<i32, SetTexture2DProperties>,
-    /// Bound wgpu device after [`Self::attach`]; used by mesh/texture upload paths.
-    pub(super) gpu_device: Option<Arc<wgpu::Device>>,
-    /// Submission queue paired with [`Self::gpu_device`].
-    pub(super) gpu_queue: Option<Arc<Mutex<wgpu::Queue>>>,
-    /// Mesh payloads waiting for GPU or shared memory (drained on [`Self::attach`]).
-    pub(super) pending_mesh_uploads: VecDeque<MeshUploadData>,
-    /// Low-priority mesh uploads deferred when [`Self::mesh_upload_budget_this_poll`] is exhausted.
-    pub(super) deferred_mesh_uploads: VecDeque<MeshUploadData>,
-    /// Remaining non-high-priority mesh uploads allowed this [`crate::runtime::RendererRuntime::poll_ipc`] cycle.
-    pub(super) mesh_upload_budget_this_poll: u32,
-    /// Remaining non-high-priority texture uploads allowed this [`crate::runtime::RendererRuntime::poll_ipc`] cycle.
-    pub(super) texture_upload_budget_this_poll: u32,
-    /// Texture mip payloads waiting for GPU allocation or shared memory.
-    pub(super) pending_texture_uploads: VecDeque<SetTexture2DData>,
-    /// Low-priority texture uploads deferred when [`Self::texture_upload_budget_this_poll`] is exhausted.
-    pub(super) deferred_texture_uploads: VecDeque<SetTexture2DData>,
+    /// Mesh/texture upload queues, budgets, format tables, pools, and GPU device/queue for uploads.
+    pub(crate) asset_transfers: AssetTransferQueue,
     /// GPU material families, router, and pipeline cache (after [`Self::attach`]).
     pub(crate) material_registry: Option<crate::materials::MaterialRegistry>,
     /// Shader asset id → pipeline kind and optional HUD label when uploads arrive before GPU attach.
@@ -118,19 +97,7 @@ impl RenderBackend {
             material_property_store: MaterialPropertyStore::new(),
             property_id_registry: Arc::new(PropertyIdRegistry::new()),
             pending_material_batches: VecDeque::new(),
-            mesh_pool: MeshPool::default_pool(),
-            texture_pool: TexturePool::default_pool(),
-            texture_formats: HashMap::new(),
-            texture_properties: HashMap::new(),
-            gpu_device: None,
-            gpu_queue: None,
-            pending_mesh_uploads: VecDeque::new(),
-            deferred_mesh_uploads: VecDeque::new(),
-            mesh_upload_budget_this_poll: uploads::MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
-            texture_upload_budget_this_poll:
-                uploads::TEXTURE_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
-            pending_texture_uploads: VecDeque::new(),
-            deferred_texture_uploads: VecDeque::new(),
+            asset_transfers: AssetTransferQueue::new(),
             material_registry: None,
             pending_shader_routes: HashMap::new(),
             mesh_preprocess: None,
@@ -158,12 +125,13 @@ impl RenderBackend {
 
     /// Count of host Texture2D asset ids that have received a [`SetTexture2DFormat`] (CPU-side table).
     pub fn texture_format_registration_count(&self) -> usize {
-        self.texture_formats.len()
+        self.asset_transfers.texture_formats.len()
     }
 
     /// Count of GPU-resident textures with `mip_levels_resident > 0` (at least mip0 uploaded).
     pub fn texture_mip0_ready_count(&self) -> usize {
-        self.texture_pool
+        self.asset_transfers
+            .texture_pool
             .textures()
             .values()
             .filter(|t| t.mip_levels_resident > 0)
@@ -177,17 +145,17 @@ impl RenderBackend {
 
     /// Mesh pool and VRAM accounting (draw prep, debugging).
     pub fn mesh_pool(&self) -> &MeshPool {
-        &self.mesh_pool
+        &self.asset_transfers.mesh_pool
     }
 
     /// Mutable mesh pool (eviction experiments).
     pub fn mesh_pool_mut(&mut self) -> &mut MeshPool {
-        &mut self.mesh_pool
+        &mut self.asset_transfers.mesh_pool
     }
 
     /// Resets the per-[`crate::runtime::RendererRuntime::poll_ipc`] budget for non-high-priority mesh uploads.
     pub fn begin_ipc_poll_mesh_upload_budget(&mut self) {
-        uploads::begin_ipc_poll_mesh_upload_budget(self);
+        asset_uploads::begin_ipc_poll_mesh_upload_budget(&mut self.asset_transfers);
     }
 
     /// Drains mesh and texture uploads deferred when the non-high-priority budget was exhausted mid-batch.
@@ -198,24 +166,40 @@ impl RenderBackend {
     ) {
         match ipc {
             Some(ipc_ref) => {
-                uploads::drain_deferred_mesh_uploads_after_poll(self, shm, Some(ipc_ref));
-                uploads::drain_deferred_texture_uploads_after_poll(self, shm, Some(ipc_ref));
+                asset_uploads::drain_deferred_mesh_uploads_after_poll(
+                    &mut self.asset_transfers,
+                    shm,
+                    Some(ipc_ref),
+                );
+                asset_uploads::drain_deferred_texture_uploads_after_poll(
+                    &mut self.asset_transfers,
+                    shm,
+                    Some(ipc_ref),
+                );
             }
             None => {
-                uploads::drain_deferred_mesh_uploads_after_poll(self, shm, None);
-                uploads::drain_deferred_texture_uploads_after_poll(self, shm, None);
+                asset_uploads::drain_deferred_mesh_uploads_after_poll(
+                    &mut self.asset_transfers,
+                    shm,
+                    None,
+                );
+                asset_uploads::drain_deferred_texture_uploads_after_poll(
+                    &mut self.asset_transfers,
+                    shm,
+                    None,
+                );
             }
         }
     }
 
     /// Resident Texture2D table (bind-group prep).
     pub fn texture_pool(&self) -> &TexturePool {
-        &self.texture_pool
+        &self.asset_transfers.texture_pool
     }
 
     /// Mutable texture pool.
     pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
-        &mut self.texture_pool
+        &mut self.asset_transfers.texture_pool
     }
 
     /// Material property store (host uniforms, textures, shader asset bindings).
@@ -266,8 +250,8 @@ impl RenderBackend {
         renderer_settings: RendererSettingsHandle,
         config_save_path: PathBuf,
     ) {
-        self.gpu_device = Some(device.clone());
-        self.gpu_queue = Some(queue.clone());
+        self.asset_transfers.gpu_device = Some(device.clone());
+        self.asset_transfers.gpu_queue = Some(queue.clone());
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
         self.frame_resources.attach(device.as_ref());
         #[cfg(feature = "debug-hud")]
@@ -313,7 +297,7 @@ impl RenderBackend {
                 self.embedded_material_bind = None;
             }
         }
-        uploads::attach_flush_pending_asset_uploads(self, &device, shm);
+        asset_uploads::attach_flush_pending_asset_uploads(&mut self.asset_transfers, &device, shm);
 
         self.frame_graph = match crate::render_graph::build_default_main_graph() {
             Ok(g) => Some(g),
@@ -597,7 +581,7 @@ impl RenderBackend {
         f: SetTexture2DFormat,
         ipc: Option<&mut DualQueueIpc>,
     ) {
-        uploads::on_set_texture_2d_format(self, f, ipc);
+        asset_uploads::on_set_texture_2d_format(&mut self.asset_transfers, f, ipc);
     }
 
     /// Handle [`SetTexture2DProperties`](crate::shared::SetTexture2DProperties).
@@ -606,7 +590,7 @@ impl RenderBackend {
         p: SetTexture2DProperties,
         ipc: Option<&mut DualQueueIpc>,
     ) {
-        uploads::on_set_texture_2d_properties(self, p, ipc);
+        asset_uploads::on_set_texture_2d_properties(&mut self.asset_transfers, p, ipc);
     }
 
     /// Handle [`SetTexture2DData`](crate::shared::SetTexture2DData). Pass shared memory when available
@@ -617,7 +601,7 @@ impl RenderBackend {
         shm: Option<&mut SharedMemoryAccessor>,
         ipc: Option<&mut DualQueueIpc>,
     ) {
-        uploads::on_set_texture_2d_data(self, d, shm, ipc);
+        asset_uploads::on_set_texture_2d_data(&mut self.asset_transfers, d, shm, ipc);
     }
 
     /// Upload texture mips from shared memory and optionally notify the host on the background queue.
@@ -631,8 +615,8 @@ impl RenderBackend {
         ipc: Option<&mut DualQueueIpc>,
         consume_texture_upload_budget: bool,
     ) {
-        uploads::try_texture_upload_with_device(
-            self,
+        asset_uploads::try_texture_upload_with_device(
+            &mut self.asset_transfers,
             data,
             shm,
             ipc,
@@ -642,7 +626,7 @@ impl RenderBackend {
 
     /// Remove a texture asset from CPU tables and the pool.
     pub fn on_unload_texture_2d(&mut self, u: UnloadTexture2D) {
-        uploads::on_unload_texture_2d(self, u);
+        asset_uploads::on_unload_texture_2d(&mut self.asset_transfers, u);
     }
 
     /// Ingest mesh bytes from shared memory; notifies host when `ipc` is set.
@@ -652,12 +636,12 @@ impl RenderBackend {
         shm: &mut SharedMemoryAccessor,
         ipc: Option<&mut DualQueueIpc>,
     ) {
-        uploads::try_process_mesh_upload(self, data, shm, ipc);
+        asset_uploads::try_process_mesh_upload(&mut self.asset_transfers, data, shm, ipc);
     }
 
     /// Remove a mesh from the pool.
     pub fn on_mesh_unload(&mut self, u: MeshUnload) {
-        uploads::on_mesh_unload(self, u);
+        asset_uploads::on_mesh_unload(&mut self.asset_transfers, u);
     }
 
     /// Remove material / property-block entries from the host store.

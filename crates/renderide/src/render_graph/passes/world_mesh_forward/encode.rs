@@ -103,7 +103,7 @@ pub(crate) fn draw_subset(
         draw_mesh_submesh(
             rpass,
             item,
-            &backend.mesh_pool,
+            backend.mesh_pool(),
             item.batch_key.embedded_needs_uv0,
             item.batch_key.embedded_needs_color,
         );

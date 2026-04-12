@@ -8,6 +8,7 @@
 //! own IPC queues, [`SharedMemoryAccessor`](crate::ipc::SharedMemoryAccessor), or scene graph state;
 //! callers pass those in where a command requires both transport and GPU work.
 
+mod asset_transfer_queue;
 mod cluster_gpu;
 mod debug_draw;
 mod embedded_material_bind;
@@ -18,6 +19,7 @@ mod mesh_deform_scratch;
 mod occlusion;
 mod render_backend;
 
+pub use asset_transfer_queue::AssetTransferQueue;
 pub use cluster_gpu::{
     ClusterBufferCache, ClusterBufferRefs, CLUSTER_COUNT_Z, CLUSTER_PARAMS_UNIFORM_SIZE,
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
