@@ -55,10 +55,30 @@ pub fn find_renderide_workspace_root(start: &Path) -> Option<PathBuf> {
 pub(crate) static TEST_WORKSPACE_ROOTS_OVERRIDE: std::sync::Mutex<Option<Vec<PathBuf>>> =
     std::sync::Mutex::new(None);
 
-/// When true, [`search_candidates`] returns only workspace-root paths (used to isolate tests from the real repo).
+/// When true, [`search_candidates`] stops after binary and workspace candidates (no cwd / parent crawl).
 #[cfg(test)]
 pub(crate) static TEST_EXTRA_SEARCH_CANDIDATES_DISABLED: std::sync::Mutex<bool> =
     std::sync::Mutex::new(false);
+
+/// When set by unit tests, [`binary_output_dir`] returns this path instead of `current_exe()`'s parent.
+#[cfg(test)]
+pub(crate) static TEST_BINARY_DIR_OVERRIDE: std::sync::Mutex<Option<PathBuf>> =
+    std::sync::Mutex::new(None);
+
+/// Directory containing the running executable (`target/debug/`, install folder, etc.).
+fn binary_output_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        if let Ok(g) = TEST_BINARY_DIR_OVERRIDE.lock() {
+            if let Some(p) = g.clone() {
+                return Some(p);
+            }
+        }
+    }
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(std::path::Path::to_path_buf))
+}
 
 fn discover_workspace_roots() -> Vec<PathBuf> {
     #[cfg(test)]
@@ -111,6 +131,13 @@ pub fn apply_generated_config(outcome: &mut ConfigResolveOutcome, path: PathBuf)
 fn search_candidates() -> Vec<PathBuf> {
     let mut v = Vec::new();
 
+    if let Some(dir) = binary_output_dir() {
+        push_toml_candidate(&mut v, dir.as_path());
+        if let Some(parent) = dir.parent() {
+            push_toml_candidate(&mut v, parent);
+        }
+    }
+
     for root in discover_workspace_roots() {
         push_toml_candidate(&mut v, root.as_path());
     }
@@ -120,15 +147,6 @@ fn search_candidates() -> Vec<PathBuf> {
         if let Ok(g) = TEST_EXTRA_SEARCH_CANDIDATES_DISABLED.lock() {
             if *g {
                 return v;
-            }
-        }
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            push_toml_candidate(&mut v, dir);
-            if let Some(parent) = dir.parent() {
-                push_toml_candidate(&mut v, parent);
             }
         }
     }
@@ -195,12 +213,18 @@ pub fn read_config_file(path: &Path) -> std::io::Result<String> {
 /// Picks the path used when persisting settings from the UI or [`crate::config::save_renderer_settings`].
 ///
 /// - If a file was loaded ([`ConfigResolveOutcome::loaded_path`]), that path is used.
-/// - Otherwise: prefer a discovered workspace root [`FILE_NAME_TOML`] when that directory is writable;
-///   then `current_dir()/config.toml` when the directory exists and is writable; else the first
-///   candidate in the same search order as [`resolve_config_path`] whose parent exists and is writable.
+/// - Otherwise: prefer a writable directory next to the executable ([`FILE_NAME_TOML`]), then a discovered
+///   workspace root, then `current_dir()/config.toml` when writable, else the first candidate in the
+///   same search order as [`resolve_config_path`] whose parent exists and is writable.
 pub fn resolve_save_path(resolve: &ConfigResolveOutcome) -> PathBuf {
     if let Some(p) = resolve.loaded_path.clone() {
         return p;
+    }
+
+    if let Some(dir) = binary_output_dir() {
+        if is_dir_writable(dir.as_path()) {
+            return dir.join(FILE_NAME_TOML);
+        }
     }
 
     for root in discover_workspace_roots() {
@@ -268,9 +292,11 @@ mod tests {
     }
 
     impl TestSearchIsolation {
-        fn new(temp_root: PathBuf) -> Self {
+        /// Isolates resolution to a fake binary output directory (no workspace / cwd crawl).
+        fn new_binary_only(binary_dir: PathBuf) -> Self {
             *TEST_EXTRA_SEARCH_CANDIDATES_DISABLED.lock().unwrap() = true;
-            *TEST_WORKSPACE_ROOTS_OVERRIDE.lock().unwrap() = Some(vec![temp_root]);
+            *TEST_WORKSPACE_ROOTS_OVERRIDE.lock().unwrap() = Some(Vec::new());
+            *TEST_BINARY_DIR_OVERRIDE.lock().unwrap() = Some(binary_dir);
             let old_cwd = std::env::current_dir().expect("cwd");
             Self { old_cwd }
         }
@@ -281,6 +307,7 @@ mod tests {
             let _ = std::env::set_current_dir(&self.old_cwd);
             *TEST_EXTRA_SEARCH_CANDIDATES_DISABLED.lock().unwrap() = false;
             *TEST_WORKSPACE_ROOTS_OVERRIDE.lock().unwrap() = None;
+            *TEST_BINARY_DIR_OVERRIDE.lock().unwrap() = None;
         }
     }
 
@@ -324,25 +351,18 @@ mod tests {
     }
 
     #[test]
-    fn load_creates_default_config_in_workspace() {
+    fn load_creates_default_config_next_to_binary() {
         let _guard = CWD_TEST_LOCK.lock().expect("lock");
         std::env::remove_var(ENV_OVERRIDE);
 
         let dir = tempfile::tempdir().expect("tempdir");
-        let root = dir.path().to_path_buf();
-        fs::write(root.join("Cargo.toml"), "[workspace]\n").unwrap();
-        fs::create_dir_all(root.join("crates/renderide")).unwrap();
-        fs::write(
-            root.join("crates/renderide/Cargo.toml"),
-            "[package]\nname = \"renderide\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
-        )
-        .unwrap();
+        let binary_dir = dir.path().to_path_buf();
 
-        let _iso = TestSearchIsolation::new(root.clone());
-        std::env::set_current_dir(&root).expect("set cwd");
+        let _iso = TestSearchIsolation::new_binary_only(binary_dir.clone());
+        std::env::set_current_dir(dir.path()).expect("set cwd");
 
         let load = crate::config::load_renderer_settings();
-        let path = root.join(FILE_NAME_TOML);
+        let path = binary_dir.join(FILE_NAME_TOML);
         assert!(
             path.is_file(),
             "expected generated config at {}",

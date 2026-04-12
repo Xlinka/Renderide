@@ -14,16 +14,16 @@
 //! 1. **`RENDERIDE_CONFIG`** — path to `config.toml`. If set and the path is missing, a warning is
 //!    logged and resolution continues.
 //! 2. **Search** — `config.toml` under:
+//!    - next to the current executable and its parent (binary output directory, e.g. `target/debug/`),
 //!    - a discovered workspace root (directory containing `Cargo.toml` and
 //!      `crates/renderide/Cargo.toml`, from cwd and the executable path),
-//!    - next to the current executable and its parent,
 //!    - current working directory and two levels up (e.g. repo root when running from `crates/renderide`).
 //!
 //! ## Auto-creation
 //!
 //! If no file is found and **`RENDERIDE_CONFIG` is not set to a non-empty value**, the renderer
-//! writes default settings to the preferred save path (workspace root `config.toml` when writable,
-//! otherwise [`resolve_save_path`]) and loads that file. If creation fails, built-in defaults are used.
+//! writes default settings to the preferred save path (writable directory next to the executable when
+//! possible, then [`resolve_save_path`]) and loads that file. If creation fails, built-in defaults are used.
 //!
 //! ## Persistence
 //!
