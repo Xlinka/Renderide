@@ -19,12 +19,13 @@ use crate::assets::material::{
     MaterialPropertyLookupIds, MaterialPropertyStore, MaterialPropertyValue, PropertyIdRegistry,
 };
 use crate::assets::texture::texture2d_asset_id_from_packed;
-use crate::embedded_shaders;
-use crate::materials::{
-    reflect_raster_material_wgsl, ReflectedRasterLayout, ReflectedUniformField,
-    ReflectedUniformScalarKind,
-};
+use crate::materials::{ReflectedRasterLayout, ReflectedUniformField, ReflectedUniformScalarKind};
 use crate::resources::{Texture2dSamplerState, TexturePool};
+
+use super::embedded_material_layout::{
+    build_stem_material_layout, stem_hash, EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds,
+    StemMaterialLayout,
+};
 
 /// GPU resources shared by embedded material bind groups (layouts, default texture, sampler).
 pub struct EmbeddedMaterialBindResources {
@@ -37,13 +38,6 @@ pub struct EmbeddedMaterialBindResources {
     stem_cache: RefCell<HashMap<String, Arc<StemMaterialLayout>>>,
     bind_cache: RefCell<HashMap<MaterialBindCacheKey, Arc<wgpu::BindGroup>>>,
     uniform_cache: RefCell<HashMap<MaterialUniformCacheKey, CachedUniformEntry>>,
-}
-
-/// Cached reflection for one composed stem.
-struct StemMaterialLayout {
-    bind_group_layout: wgpu::BindGroupLayout,
-    reflected: ReflectedRasterLayout,
-    ids: Arc<StemEmbeddedPropertyIds>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -66,161 +60,6 @@ struct MaterialBindCacheKey {
 struct CachedUniformEntry {
     buffer: Arc<wgpu::Buffer>,
     last_written_generation: u64,
-}
-
-/// Pre-interned property ids for static keyword names (`MSDF`, `_Flags`, texture probe lists), shared by all embedded stems.
-struct EmbeddedSharedKeywordIds {
-    text_mode: i32,
-    rect_clip: i32,
-    msdf: i32,
-    sdf: i32,
-    raster: i32,
-    msdf_lower: i32,
-    sdf_lower: i32,
-    raster_lower: i32,
-    rectclip: i32,
-    rectclip_lower: i32,
-    flags: i32,
-    offset_texture: i32,
-    offset_texture_alt: i32,
-    mask_texture_mul: i32,
-    mask_texture_mul_alt: i32,
-    mask_texture_clip: i32,
-    mask_texture_clip_alt: i32,
-    mul_rgb_by_alpha: i32,
-    mul_rgb_by_alpha_alt: i32,
-    mul_alpha_intensity: i32,
-    mul_alpha_intensity_alt: i32,
-    lerp_tex: i32,
-    main_tex: i32,
-    main_tex1: i32,
-    emission_map: i32,
-    emission_map1: i32,
-    normal_map: i32,
-    normal_map1: i32,
-    bump_map: i32,
-    specular_map: i32,
-    specular_map1: i32,
-    spec_gloss_map: i32,
-    metallic_map: i32,
-    metallic_map1: i32,
-    metallic_gloss_map: i32,
-    occlusion: i32,
-    occlusion1: i32,
-    occlusion_map: i32,
-}
-
-impl EmbeddedSharedKeywordIds {
-    fn new(registry: &PropertyIdRegistry) -> Self {
-        Self {
-            text_mode: registry.intern("_TextMode"),
-            rect_clip: registry.intern("_RectClip"),
-            msdf: registry.intern("MSDF"),
-            sdf: registry.intern("SDF"),
-            raster: registry.intern("RASTER"),
-            msdf_lower: registry.intern("msdf"),
-            sdf_lower: registry.intern("sdf"),
-            raster_lower: registry.intern("raster"),
-            rectclip: registry.intern("RECTCLIP"),
-            rectclip_lower: registry.intern("rectclip"),
-            flags: registry.intern("_Flags"),
-            offset_texture: registry.intern("_OFFSET_TEXTURE"),
-            offset_texture_alt: registry.intern("_OffsetTexture"),
-            mask_texture_mul: registry.intern("_MASK_TEXTURE_MUL"),
-            mask_texture_mul_alt: registry.intern("_MaskTextureMul"),
-            mask_texture_clip: registry.intern("_MASK_TEXTURE_CLIP"),
-            mask_texture_clip_alt: registry.intern("_MaskTextureClip"),
-            mul_rgb_by_alpha: registry.intern("_MUL_RGB_BY_ALPHA"),
-            mul_rgb_by_alpha_alt: registry.intern("_MulRgbByAlpha"),
-            mul_alpha_intensity: registry.intern("_MUL_ALPHA_INTENSITY"),
-            mul_alpha_intensity_alt: registry.intern("_MulAlphaIntensity"),
-            lerp_tex: registry.intern("_LerpTex"),
-            main_tex: registry.intern("_MainTex"),
-            main_tex1: registry.intern("_MainTex1"),
-            emission_map: registry.intern("_EmissionMap"),
-            emission_map1: registry.intern("_EmissionMap1"),
-            normal_map: registry.intern("_NormalMap"),
-            normal_map1: registry.intern("_NormalMap1"),
-            bump_map: registry.intern("_BumpMap"),
-            specular_map: registry.intern("_SpecularMap"),
-            specular_map1: registry.intern("_SpecularMap1"),
-            spec_gloss_map: registry.intern("_SpecGlossMap"),
-            metallic_map: registry.intern("_MetallicMap"),
-            metallic_map1: registry.intern("_MetallicMap1"),
-            metallic_gloss_map: registry.intern("_MetallicGlossMap"),
-            occlusion: registry.intern("_Occlusion"),
-            occlusion1: registry.intern("_Occlusion1"),
-            occlusion_map: registry.intern("_OcclusionMap"),
-        }
-    }
-}
-
-/// Per-stem stable property ids from WGSL reflection (uniform members and `@group(1)` texture globals), built once when the stem layout loads.
-struct StemEmbeddedPropertyIds {
-    shared: Arc<EmbeddedSharedKeywordIds>,
-    uniform_field_ids: HashMap<String, i32>,
-    texture_binding_to_property_id: HashMap<u32, i32>,
-    keyword_field_probe_ids: HashMap<String, [i32; 3]>,
-}
-
-impl StemEmbeddedPropertyIds {
-    fn build(
-        shared: Arc<EmbeddedSharedKeywordIds>,
-        registry: &PropertyIdRegistry,
-        reflected: &ReflectedRasterLayout,
-    ) -> Self {
-        let mut uniform_field_ids = HashMap::new();
-        let mut keyword_field_probe_ids = HashMap::new();
-        if let Some(u) = reflected.material_uniform.as_ref() {
-            for field_name in u.fields.keys() {
-                let pid = registry.intern(field_name);
-                uniform_field_ids.insert(field_name.clone(), pid);
-                let stripped = field_name.strip_prefix('_').unwrap_or(field_name);
-                let lowercase = stripped.to_ascii_lowercase();
-                let pid_strip = registry.intern(stripped);
-                let pid_lower = registry.intern(lowercase.as_str());
-                keyword_field_probe_ids.insert(field_name.clone(), [pid, pid_strip, pid_lower]);
-            }
-        }
-
-        let mut texture_binding_to_property_id = HashMap::new();
-        for entry in &reflected.material_entries {
-            if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-                if let Some(name) = reflected.material_group1_names.get(&entry.binding) {
-                    texture_binding_to_property_id
-                        .insert(entry.binding, registry.intern(name.as_str()));
-                }
-            }
-        }
-
-        Self {
-            shared,
-            uniform_field_ids,
-            texture_binding_to_property_id,
-            keyword_field_probe_ids,
-        }
-    }
-}
-
-#[cfg(test)]
-impl StemEmbeddedPropertyIds {
-    /// Shared keyword ids only (no per-stem uniform/texture reflection); for unit tests.
-    pub fn minimal_for_tests(registry: &PropertyIdRegistry) -> Self {
-        Self {
-            shared: Arc::new(EmbeddedSharedKeywordIds::new(registry)),
-            uniform_field_ids: HashMap::new(),
-            texture_binding_to_property_id: HashMap::new(),
-            keyword_field_probe_ids: HashMap::new(),
-        }
-    }
-}
-
-fn stem_hash(stem: &str) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    stem.hash(&mut h);
-    h.finish()
 }
 
 impl EmbeddedMaterialBindResources {
@@ -525,29 +364,12 @@ impl EmbeddedMaterialBindResources {
             return Ok(s.clone());
         }
 
-        let wgsl = embedded_shaders::embedded_target_wgsl(stem)
-            .ok_or_else(|| format!("embedded WGSL missing for stem {stem}"))?;
-        let reflected =
-            reflect_raster_material_wgsl(wgsl).map_err(|e| format!("reflect {stem}: {e}"))?;
-
-        let bind_group_layout =
-            self.device
-                .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("embedded_raster_material"),
-                    entries: &reflected.material_entries,
-                });
-
-        let ids = Arc::new(StemEmbeddedPropertyIds::build(
-            Arc::clone(&self.shared_keyword_ids),
+        let layout = build_stem_material_layout(
+            self.device.as_ref(),
+            stem,
+            &self.shared_keyword_ids,
             self.property_registry.as_ref(),
-            &reflected,
-        ));
-
-        let layout = Arc::new(StemMaterialLayout {
-            bind_group_layout,
-            reflected,
-            ids,
-        });
+        )?;
         cache.insert(stem.to_string(), layout.clone());
         Ok(layout)
     }

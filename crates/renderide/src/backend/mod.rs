@@ -13,6 +13,7 @@ mod debug_draw;
 #[cfg(feature = "debug-hud")]
 mod debug_hud_bundle;
 mod embedded_material_bind;
+mod embedded_material_layout;
 mod frame_gpu;
 mod frame_resource_manager;
 mod light_gpu;

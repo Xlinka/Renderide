@@ -132,12 +132,26 @@ pub(super) fn controller_pose_from_aim(position: Vec3, rotation: Quat) -> (Vec3,
     (position - rotation * tip_offset, rotation)
 }
 
-/// Universal correction applied to every OpenXR grip/aim pose after the RH-to-LH conversion
-/// (`openxr_pose_to_host_tracking`) to align with the host convention. Set to [`Quat::IDENTITY`]
-/// when no systematic offset exists between OpenXR grip orientation and the old driver convention.
-const GRIP_TO_HOST_CORRECTION: Quat = Quat::IDENTITY;
+/// Chirality-dependent roll correction applied to every OpenXR grip/aim pose after the RH-to-LH
+/// conversion. The OpenXR grip frame defines +Y as perpendicular to the controller surface
+/// (away from buttons/palm); the old SteamVR convention had +Y pointing up along the controller
+/// shaft. For a left controller +Y (away from palm) points to the right, for right it points
+/// left, so the correction roll is opposite per side. A `Rz(±90°)` maps the OpenXR grip's +Y
+/// to the old convention's ±X. Start with `Quat::IDENTITY` and adjust based on empirical
+/// testing if the controller-local axes differ from the old driver convention.
+fn grip_to_host_correction(side: Chirality) -> Quat {
+    match side {
+        Chirality::left => Quat::from_rotation_z(90.0_f32.to_radians()),
+        Chirality::right => Quat::from_rotation_z(-90.0_f32.to_radians()),
+    }
+}
 
-pub(super) fn pose_from_location(location: &xr::SpaceLocation) -> Option<(Vec3, Quat)> {
+/// Converts an [`xr::SpaceLocation`] into a host-tracking-space `(position, rotation)`,
+/// applying `grip_to_host_correction` to align the OpenXR grip axes with the host convention.
+pub(super) fn pose_from_location(
+    location: &xr::SpaceLocation,
+    side: Chirality,
+) -> Option<(Vec3, Quat)> {
     let tracked = location
         .location_flags
         .contains(xr::SpaceLocationFlags::ORIENTATION_VALID)
@@ -146,7 +160,7 @@ pub(super) fn pose_from_location(location: &xr::SpaceLocation) -> Option<(Vec3, 
             .contains(xr::SpaceLocationFlags::POSITION_VALID);
     tracked.then(|| {
         let (pos, rot) = openxr_pose_to_host_tracking(&location.pose);
-        (pos, (rot * GRIP_TO_HOST_CORRECTION).normalize())
+        (pos, (rot * grip_to_host_correction(side)).normalize())
     })
 }
 
