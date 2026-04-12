@@ -1,7 +1,8 @@
 //! Mesh and Texture2D upload queues, per-poll budgets, CPU-side format/property tables, and resident pools.
 //!
-//! [`AssetTransferQueue`] is owned by [`crate::backend::RenderBackend`] and handles shared-memory
-//! ingestion paths that populate [`crate::resources::MeshPool`] and [`crate::resources::TexturePool`].
+//! [`AssetTransferQueue`] lives in the [`crate::assets`] module and is owned by
+//! [`crate::backend::RenderBackend`]. It handles shared-memory ingestion paths that populate
+//! [`crate::resources::MeshPool`] and [`crate::resources::TexturePool`].
 
 mod uploads;
 
@@ -29,23 +30,23 @@ pub struct AssetTransferQueue {
     /// Latest [`SetTexture2DFormat`] per asset (required before data upload).
     pub(crate) texture_formats: HashMap<i32, SetTexture2DFormat>,
     /// Latest [`SetTexture2DProperties`] per asset (sampler metadata on [`crate::resources::GpuTexture2d`]).
-    pub(super) texture_properties: HashMap<i32, SetTexture2DProperties>,
+    pub(crate) texture_properties: HashMap<i32, SetTexture2DProperties>,
     /// Bound wgpu device after [`crate::backend::RenderBackend::attach`].
-    pub(super) gpu_device: Option<Arc<wgpu::Device>>,
+    pub(crate) gpu_device: Option<Arc<wgpu::Device>>,
     /// Submission queue paired with [`Self::gpu_device`].
-    pub(super) gpu_queue: Option<Arc<Mutex<wgpu::Queue>>>,
+    pub(crate) gpu_queue: Option<Arc<Mutex<wgpu::Queue>>>,
     /// Mesh payloads waiting for GPU or shared memory (drained on attach).
-    pub(super) pending_mesh_uploads: VecDeque<MeshUploadData>,
+    pub(crate) pending_mesh_uploads: VecDeque<MeshUploadData>,
     /// Low-priority mesh uploads deferred when the mesh upload budget is exhausted.
-    pub(super) deferred_mesh_uploads: VecDeque<MeshUploadData>,
+    pub(crate) deferred_mesh_uploads: VecDeque<MeshUploadData>,
     /// Remaining non-high-priority mesh uploads allowed this IPC poll cycle.
-    pub(super) mesh_upload_budget_this_poll: u32,
+    pub(crate) mesh_upload_budget_this_poll: u32,
     /// Remaining non-high-priority texture uploads allowed this IPC poll cycle.
-    pub(super) texture_upload_budget_this_poll: u32,
+    pub(crate) texture_upload_budget_this_poll: u32,
     /// Texture mip payloads waiting for GPU allocation or shared memory.
-    pub(super) pending_texture_uploads: VecDeque<SetTexture2DData>,
+    pub(crate) pending_texture_uploads: VecDeque<SetTexture2DData>,
     /// Low-priority texture uploads deferred when the texture upload budget is exhausted.
-    pub(super) deferred_texture_uploads: VecDeque<SetTexture2DData>,
+    pub(crate) deferred_texture_uploads: VecDeque<SetTexture2DData>,
 }
 
 impl Default for AssetTransferQueue {

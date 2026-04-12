@@ -1,6 +1,6 @@
 //! [`RenderBackend`] — thin coordinator for frame execution and IPC-facing GPU work.
 //!
-//! Core subsystems live in [`super::MaterialSystem`], [`super::AssetTransferQueue`],
+//! Core subsystems live in [`super::MaterialSystem`], [`crate::assets::AssetTransferQueue`],
 //! [`super::FrameResourceManager`], and [`super::OcclusionSystem`]; this type wires attach,
 //! the compiled render graph, mesh deform preprocess, and optional debug HUD.
 
@@ -24,17 +24,17 @@ use super::debug_hud_bundle::DebugHudBundle;
 #[cfg(feature = "debug-hud")]
 use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
 
-use super::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use super::material_system::MaterialSystem;
 use super::mesh_deform_scratch::MeshDeformScratch;
 use super::occlusion::OcclusionSystem;
+use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::shared::{
     MaterialsUpdateBatch, MeshUnload, MeshUploadData, SetTexture2DData, SetTexture2DFormat,
     SetTexture2DProperties, UnloadTexture2D,
 };
 use winit::window::Window;
 
-pub use super::asset_transfer_queue::{
+pub use crate::assets::asset_transfer_queue::{
     MAX_DEFERRED_MESH_UPLOADS, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
     MESH_UPLOAD_NON_HIGH_PRIORITY_BUDGET_PER_POLL,
 };

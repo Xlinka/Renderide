@@ -23,7 +23,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::assets::texture::supported_host_formats_for_init;
-use crate::assets::AssetSubsystem;
+use crate::assets::AssetTransferQueue;
 use crate::backend::RenderBackend;
 use crate::config::RendererSettingsHandle;
 use crate::connection::{ConnectionParams, InitError};
@@ -53,7 +53,6 @@ pub struct RendererRuntime {
     backend: RenderBackend,
     /// Render spaces and dense transform / mesh state from [`FrameSubmitData`](crate::shared::FrameSubmitData).
     pub scene: SceneCoordinator,
-    assets: AssetSubsystem,
     /// Last host clip / FOV / VR / ortho task state for [`crate::render_graph::FrameRenderParams`].
     pub host_camera: HostCameraFrame,
     /// Process-wide renderer settings (shared with the debug HUD and the frame loop).
@@ -79,7 +78,6 @@ impl RendererRuntime {
             frontend: RendererFrontend::new(params),
             backend: RenderBackend::new(),
             scene: SceneCoordinator::new(),
-            assets: AssetSubsystem::default(),
             host_camera: HostCameraFrame::default(),
             settings,
             config_save_path,
@@ -157,9 +155,9 @@ impl RendererRuntime {
         self.backend.texture_pool_mut()
     }
 
-    /// Exposes asset subsystem hooks (upload queues, handle table) for future workers.
-    pub fn assets_mut(&mut self) -> &mut AssetSubsystem {
-        &mut self.assets
+    /// Mesh/texture upload queues, pools, and IPC budgets ([`AssetTransferQueue`]).
+    pub fn asset_transfers_mut(&mut self) -> &mut AssetTransferQueue {
+        &mut self.backend.asset_transfers
     }
 
     /// Material property store (host uniforms, textures, shader asset bindings).
@@ -382,10 +380,9 @@ impl RendererRuntime {
     }
 
     /// Placeholder for bounded asset integration between begin-frame and frame processing (Unity:
-    /// `RunAssetIntegration`).
-    pub fn run_asset_integration_stub(&mut self, _budget: Duration) {
-        let _ = self.assets.drain_pending_meta();
-    }
+    /// `RunAssetIntegration`). Upload work is driven from [`Self::poll_ipc`] via
+    /// [`crate::backend::RenderBackend`].
+    pub fn run_asset_integration_stub(&mut self, _budget: Duration) {}
 
     /// Drains IPC and dispatches commands. Each poll batch is ordered so `renderer_init_data` runs
     /// first, then frame submits, then the rest (see [`RendererFrontend::poll_commands`]).

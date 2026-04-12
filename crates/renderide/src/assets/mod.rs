@@ -1,42 +1,20 @@
-//! Asset ingestion and GPU resource handles (skeleton).
+//! Asset ingestion, shader routing helpers, and GPU upload orchestration.
+//!
+//! [`asset_transfer_queue::AssetTransferQueue`] holds mesh/texture pools, IPC upload queues, and
+//! CPU-side format tables; [`crate::backend::RenderBackend`] owns the live instance after
+//! construction.
 
+pub mod asset_transfer_queue;
 pub mod material;
 pub mod mesh;
 pub mod shader;
 pub mod texture;
 pub mod util;
 
+pub use asset_transfer_queue::AssetTransferQueue;
 pub use shader::{
     resolve_shader_routing_name_from_upload, resolve_shader_upload, ResolvedShaderUpload,
 };
 
-use std::collections::VecDeque;
-
-/// Opaque host asset identifier (meshes, textures, shaders, etc.).
-#[derive(Clone, Copy, Debug, Default, Hash, PartialEq, Eq, PartialOrd, Ord)]
-pub struct AssetId(pub i32);
-
-/// CPU-side placeholder for IPC payloads waiting for upload workers.
-#[derive(Clone, Debug, Default)]
-pub struct PendingUploadMeta {
-    pub asset_id: AssetId,
-    pub approx_bytes: u64,
-}
-
-/// Holds generational handles and a bounded queue of pending work (mirrors “integrator” staging).
-#[derive(Debug, Default)]
-pub struct AssetSubsystem {
-    pending: VecDeque<PendingUploadMeta>,
-}
-
-impl AssetSubsystem {
-    /// Records metadata for a future upload path (no GPU work yet).
-    pub fn enqueue_pending(&mut self, meta: PendingUploadMeta) {
-        self.pending.push_back(meta);
-    }
-
-    /// Returns queued upload metadata without performing transfers.
-    pub fn drain_pending_meta(&mut self) -> Vec<PendingUploadMeta> {
-        self.pending.drain(..).collect()
-    }
-}
+/// Alias for [`AssetTransferQueue`] (same type: upload queues, pools, and per-poll budgets).
+pub type AssetSubsystem = AssetTransferQueue;
