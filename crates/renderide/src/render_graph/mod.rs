@@ -68,7 +68,7 @@ pub use builder::GraphBuilder;
 pub use camera::{
     apply_view_handedness_fix, clamp_desktop_fov_degrees, effective_head_output_clip_planes,
     reverse_z_orthographic, reverse_z_perspective, reverse_z_perspective_openxr_fov,
-    view_matrix_from_render_transform,
+    view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform,
 };
 pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use cluster_frame::{cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams};

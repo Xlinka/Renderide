@@ -9,7 +9,7 @@ use crate::assets::mesh::GpuMesh;
 use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer};
 use crate::shared::RenderingContext;
 
-use super::camera::view_matrix_from_render_transform;
+use super::camera::view_matrix_for_world_mesh_render_space;
 use super::frustum::{
     mesh_bounds_degenerate_for_cull, world_aabb_from_local_bounds,
     world_aabb_from_skinned_bone_origins, world_aabb_visible_in_homogeneous_clip,
@@ -140,7 +140,7 @@ pub(crate) fn mesh_draw_passes_cpu_cull(
     let Some(space) = scene.space(space_id) else {
         return Ok(geom.rigid_world_matrix);
     };
-    let view = view_matrix_from_render_transform(&space.view_transform);
+    let view = view_matrix_for_world_mesh_render_space(scene, space);
     let proj = &culling.proj;
 
     let passes_frustum = if let Some((sl, sr)) = proj.vr_stereo {

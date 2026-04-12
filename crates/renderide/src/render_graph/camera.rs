@@ -9,6 +9,7 @@ use glam::{Mat4, Vec3, Vec4};
 use openxr::Fovf;
 
 use crate::scene::render_transform_to_matrix;
+use crate::scene::{RenderSpaceState, SceneCoordinator};
 use crate::shared::HeadOutputDevice;
 use crate::shared::RenderTransform;
 
@@ -81,6 +82,26 @@ pub fn view_matrix_from_render_transform(tr: &RenderTransform) -> Mat4 {
     t.scale.z = fs.z;
     let cam = render_transform_to_matrix(&t);
     apply_view_handedness_fix(cam.inverse())
+}
+
+/// World-to-view for mesh rendering in `space`, accounting for [`RenderSpaceState::is_overlay`].
+///
+/// Overlay render spaces re-root object meshes into the main world's coordinates via
+/// [`SceneCoordinator::world_matrix_for_render_context`]; the camera view must therefore match the
+/// active main (non-overlay) space, not the overlay space's own view transform (Unity
+/// `HeadOutput` + `RenderSpace.UpdateOverlayPositioning` parity).
+pub fn view_matrix_for_world_mesh_render_space(
+    scene: &SceneCoordinator,
+    space: &RenderSpaceState,
+) -> Mat4 {
+    if space.is_overlay {
+        scene
+            .active_main_space()
+            .map(|main| view_matrix_from_render_transform(&main.view_transform))
+            .unwrap_or_else(|| view_matrix_from_render_transform(&space.view_transform))
+    } else {
+        view_matrix_from_render_transform(&space.view_transform)
+    }
 }
 
 /// Reverse-Z perspective projection (column-major [`Mat4`], same coefficients as legacy nalgebra path).

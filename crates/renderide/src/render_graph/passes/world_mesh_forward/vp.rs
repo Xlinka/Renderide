@@ -4,7 +4,7 @@
 
 use glam::Mat4;
 
-use crate::render_graph::camera::view_matrix_from_render_transform;
+use crate::render_graph::camera::view_matrix_for_world_mesh_render_space;
 use crate::render_graph::{HostCameraFrame, WorldMeshDrawItem};
 use crate::scene::SceneCoordinator;
 use crate::shared::RenderingContext;
@@ -34,7 +34,7 @@ pub(crate) fn compute_per_draw_vp_triple(
     let Some(space) = scene.space(item.space_id) else {
         return (Mat4::IDENTITY, Mat4::IDENTITY, Mat4::IDENTITY);
     };
-    let view = view_matrix_from_render_transform(&space.view_transform);
+    let view = view_matrix_for_world_mesh_render_space(scene, space);
     let vr_stereo_view = Mat4::IDENTITY;
     if let (true, Some((sl, sr))) = (hc.vr_active, hc.stereo_view_proj) {
         if item.is_overlay {
