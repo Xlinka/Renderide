@@ -6,24 +6,7 @@ use crate::connection::{ConnectionParams, InitError};
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{FrameStartData, InputState, OutputState, RendererCommand, RendererInitData};
 
-/// Host init sequence state (replaces paired booleans such as `init_received` / `init_finalized`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum InitState {
-    /// Waiting for [`RendererCommand::RendererInitData`].
-    #[default]
-    Uninitialized,
-    /// `renderer_init_data` received; waiting for [`RendererCommand::RendererInitFinalizeData`].
-    InitReceived,
-    /// Normal operation (or standalone mode).
-    Finalized,
-}
-
-impl InitState {
-    /// Whether host init handshake is complete.
-    pub fn is_finalized(self) -> bool {
-        matches!(self, InitState::Finalized)
-    }
-}
+use super::init_state::InitState;
 
 /// IPC, shared memory, init sequence, and lock-step fields. Does not own GPU pools or scene graph.
 pub struct RendererFrontend {
@@ -46,7 +29,7 @@ pub struct RendererFrontend {
     last_output_state: Option<OutputState>,
     /// Wall-clock start of the previous [`crate::app::RenderideApp::tick_frame`] (for FPS interval).
     last_tick_wall_start: Option<Instant>,
-    /// Microseconds between the last two tick starts; fed into [`crate::frontend::frame_perf`].
+    /// Microseconds between the last two tick starts; fed into [`crate::frontend::frame_start_performance`].
     wall_interval_us_for_perf: u64,
     /// Total microseconds for the previous completed tick ([`crate::shared::PerformanceState::render_time`]).
     perf_last_total_us: u64,
@@ -241,7 +224,7 @@ impl RendererFrontend {
         }
 
         let bootstrap = self.last_frame_index < 0 && !self.sent_bootstrap_frame_start;
-        let performance = super::frame_perf::step_frame_performance(
+        let performance = super::frame_start_performance::step_frame_performance(
             self.wall_interval_us_for_perf,
             self.perf_last_total_us,
             &mut self.smoothed_fps,

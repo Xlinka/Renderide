@@ -1,5 +1,7 @@
-//! FPS smoothing and send throttling for [`crate::shared::PerformanceState`] on outgoing
-//! [`crate::shared::FrameStartData`].
+//! Builds optional [`crate::shared::PerformanceState`] for the **`FrameStartData.performance`** IPC
+//! field (smoothed FPS and send throttling). This is **not** GPU instrumentation or engine profilers.
+//!
+//! See [`crate::shared::FrameStartData`] and [`RendererFrontend::pre_frame`](crate::frontend::RendererFrontend::pre_frame).
 
 use std::time::{Duration, Instant};
 
