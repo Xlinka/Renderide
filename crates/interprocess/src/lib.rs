@@ -11,6 +11,7 @@
 #[cfg(not(any(unix, windows)))]
 compile_error!("The `interprocess` crate only supports `cfg(unix)` and `cfg(windows)` targets.");
 
+mod atomics;
 mod circular_buffer;
 mod error;
 mod layout;
@@ -19,6 +20,7 @@ mod memory;
 mod naming;
 mod options;
 pub mod queue;
+mod queue_resources;
 mod semaphore;
 
 mod publisher;

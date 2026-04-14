@@ -6,6 +6,7 @@ use crate::Publisher;
 use crate::Subscriber;
 
 /// Builds [`Subscriber`] and [`Publisher`] instances for the same option type as the managed API.
+#[derive(PartialEq, Eq)]
 pub struct QueueFactory;
 
 impl QueueFactory {
@@ -37,9 +38,9 @@ mod tests {
     use crate::options::QueueOptions;
 
     #[test]
+    #[allow(clippy::default_constructed_unit_structs)] // Exercise `Default` for the ZST; same as `QueueFactory`.
     fn queue_factory_default_matches_new() {
-        let _ = QueueFactory::default();
-        let _ = QueueFactory::new();
+        assert!(QueueFactory::default() == QueueFactory::new());
         assert_eq!(std::mem::size_of::<QueueFactory>(), 0);
     }
 

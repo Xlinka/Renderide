@@ -67,15 +67,24 @@ impl QueueOptions {
         Ok(())
     }
 
-    /// Builds options with [`default_memory_dir()`] and `destroy_on_dispose = false`.
-    pub fn new(queue_name: &str, capacity: i64) -> Result<Self, String> {
+    fn build(
+        queue_name: &str,
+        path: PathBuf,
+        capacity: i64,
+        destroy_on_dispose: bool,
+    ) -> Result<Self, String> {
         Self::validate_capacity(capacity)?;
         Ok(Self {
             memory_view_name: queue_name.to_string(),
-            path: default_memory_dir(),
+            path,
             capacity,
-            destroy_on_dispose: false,
+            destroy_on_dispose,
         })
+    }
+
+    /// Builds options with [`default_memory_dir()`] and `destroy_on_dispose = false`.
+    pub fn new(queue_name: &str, capacity: i64) -> Result<Self, String> {
+        Self::build(queue_name, default_memory_dir(), capacity, false)
     }
 
     /// Same as [`Self::new`] but controls whether the backing file is removed on drop (Unix).
@@ -84,13 +93,12 @@ impl QueueOptions {
         capacity: i64,
         destroy_on_dispose: bool,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: default_memory_dir(),
+        Self::build(
+            queue_name,
+            default_memory_dir(),
             capacity,
             destroy_on_dispose,
-        })
+        )
     }
 
     /// Full control over the backing directory.
@@ -99,13 +107,7 @@ impl QueueOptions {
         path: impl AsRef<Path>,
         capacity: i64,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: path.as_ref().to_path_buf(),
-            capacity,
-            destroy_on_dispose: false,
-        })
+        Self::build(queue_name, path.as_ref().to_path_buf(), capacity, false)
     }
 
     /// Full control over directory and `destroy_on_dispose`.
@@ -115,13 +117,12 @@ impl QueueOptions {
         capacity: i64,
         destroy_on_dispose: bool,
     ) -> Result<Self, String> {
-        Self::validate_capacity(capacity)?;
-        Ok(Self {
-            memory_view_name: queue_name.to_string(),
-            path: path.as_ref().to_path_buf(),
+        Self::build(
+            queue_name,
+            path.as_ref().to_path_buf(),
             capacity,
             destroy_on_dispose,
-        })
+        )
     }
 
     /// Total file / mapping size: header + ring capacity.

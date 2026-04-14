@@ -1,21 +1,29 @@
 //! Consumer side of the shared-memory queue.
 
-use std::fs;
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::atomics;
 use crate::circular_buffer;
 use crate::layout::{
     padded_message_length, MessageHeader, MESSAGE_BODY_OFFSET, STATE_LOCKED, STATE_READY,
     TICKS_FOR_TEN_SECONDS,
 };
-use crate::memory::SharedMapping;
 use crate::options::QueueOptions;
-use crate::semaphore::Semaphore;
+use crate::queue_resources::QueueResources;
 use crate::QueueHeader;
 
 /// `DateTime.UtcNow.Ticks` value at the Unix epoch (100 ns ticks since 0001-01-01 UTC).
 const DOTNET_TICKS_AT_UNIX_EPOCH: i64 = 621_355_968_000_000_000;
+
+/// Starting value for the contention counter in blocking [`Subscriber::dequeue`] (managed client parity).
+const DEQUEUE_BACKOFF_COUNTER_INITIAL: i32 = -5;
+
+/// After this many backoff steps, use a fixed long semaphore wait instead of ramping wait milliseconds from the counter.
+const DEQUEUE_BACKOFF_HEAVY_PHASE_AFTER: i32 = 10;
+
+/// Milliseconds for the steady semaphore wait once past [`DEQUEUE_BACKOFF_HEAVY_PHASE_AFTER`].
+const DEQUEUE_BACKOFF_HEAVY_WAIT_MS: u64 = 10;
 
 /// Current instant in the same 100 ns tick domain as .NET `DateTime.UtcNow.Ticks`.
 fn utc_now_ticks() -> i64 {
@@ -30,46 +38,35 @@ fn utc_now_ticks() -> i64 {
 
 /// Receives messages from the queue using the same contention and backoff pattern as the managed client.
 pub struct Subscriber {
-    mapping: SharedMapping,
-    capacity: i64,
-    sem: Semaphore,
-    destroy_on_dispose: bool,
+    res: QueueResources,
 }
 
 impl Subscriber {
     /// Opens the backing mapping and semaphore.
     pub fn new(options: QueueOptions) -> Result<Self, crate::OpenError> {
-        let (mapping, sem) = SharedMapping::open_queue(&options)?;
         Ok(Self {
-            mapping,
-            capacity: options.capacity,
-            sem,
-            destroy_on_dispose: options.destroy_on_dispose,
+            res: QueueResources::open(options)?,
         })
     }
 
     /// Pointer to the shared [`crate::QueueHeader`] at the start of the mapping.
     fn header_mut(&mut self) -> *mut QueueHeader {
-        self.mapping.as_mut_ptr() as *mut QueueHeader
+        self.res.header_mut()
     }
 
     /// Pointer to the start of the byte ring (after the queue header).
     fn buffer_ptr(&self) -> *const u8 {
-        unsafe { self.mapping.as_ptr().add(crate::layout::BUFFER_BYTE_OFFSET) }
+        self.res.buffer_ptr()
     }
 
     /// Mutable pointer to the start of the byte ring (after the queue header).
     fn buffer_mut(&mut self) -> *mut u8 {
-        unsafe {
-            self.mapping
-                .as_mut_ptr()
-                .add(crate::layout::BUFFER_BYTE_OFFSET)
-        }
+        self.res.buffer_mut()
     }
 
     /// Blocks until a message arrives or `cancel` is set, using semaphore-backed backoff.
     pub fn dequeue(&mut self, cancel: &AtomicBool) -> Vec<u8> {
-        let mut num = -5i32;
+        let mut num = DEQUEUE_BACKOFF_COUNTER_INITIAL;
         loop {
             if let Some(msg) = self.try_dequeue() {
                 return msg;
@@ -77,13 +74,15 @@ impl Subscriber {
             if cancel.load(Ordering::Relaxed) {
                 break;
             }
-            if num > 10 {
-                self.sem.wait_timeout(Duration::from_millis(10));
+            if num > DEQUEUE_BACKOFF_HEAVY_PHASE_AFTER {
+                self.res
+                    .wait_semaphore_timeout(Duration::from_millis(DEQUEUE_BACKOFF_HEAVY_WAIT_MS));
             } else {
                 let old_num = num;
                 num = num.saturating_add(1);
                 if old_num > 0 {
-                    self.sem.wait_timeout(Duration::from_millis(num as u64));
+                    self.res
+                        .wait_semaphore_timeout(Duration::from_millis(num as u64));
                 } else {
                     std::thread::yield_now();
                 }
@@ -107,8 +106,7 @@ impl Subscriber {
             return None;
         }
 
-        let read_lock_ptr =
-            unsafe { &*(&(*header_ptr).read_lock_timestamp as *const i64 as *const AtomicI64) };
+        let read_lock_ptr = unsafe { atomics::queue_header_read_lock_timestamp(header_ptr) };
         if read_lock_ptr
             .compare_exchange(read_lock, ticks, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
@@ -125,12 +123,11 @@ impl Subscriber {
             let write_offset = header.write_offset;
             let msg_header_ptr = unsafe {
                 self.buffer_ptr()
-                    .add((read_offset % self.capacity) as usize)
+                    .add((read_offset % self.res.capacity) as usize)
                     as *const MessageHeader
             };
 
-            let state_ptr =
-                unsafe { &*(&(*msg_header_ptr).state as *const i32 as *const AtomicI32) };
+            let state_ptr = unsafe { atomics::message_header_state(msg_header_ptr) };
             let spin_ticks = ticks;
             loop {
                 match state_ptr.compare_exchange(
@@ -142,9 +139,8 @@ impl Subscriber {
                     Ok(_) => break,
                     Err(_) => {
                         if utc_now_ticks() - spin_ticks > TICKS_FOR_TEN_SECONDS {
-                            let read_offset_ptr = unsafe {
-                                &*(&(*header_ptr).read_offset as *const i64 as *const AtomicI64)
-                            };
+                            let read_offset_ptr =
+                                unsafe { atomics::queue_header_read_offset(header_ptr) };
                             read_offset_ptr.store(write_offset, Ordering::SeqCst);
                             return None;
                         }
@@ -160,21 +156,20 @@ impl Subscriber {
             let body_len_usize = body_len as usize;
             let msg_result = circular_buffer::read(
                 self.buffer_ptr(),
-                self.capacity,
+                self.res.capacity,
                 body_offset,
                 body_len_usize,
             );
 
             circular_buffer::clear(
                 self.buffer_mut(),
-                self.capacity,
+                self.res.capacity,
                 read_offset,
                 padded as usize,
             );
 
-            let new_read = (read_offset + padded) % (self.capacity * 2);
-            let read_offset_ptr =
-                unsafe { &*(&(*header_ptr).read_offset as *const i64 as *const AtomicI64) };
+            let new_read = (read_offset + padded) % (self.res.capacity * 2);
+            let read_offset_ptr = unsafe { atomics::queue_header_read_offset(header_ptr) };
             read_offset_ptr.store(new_read, Ordering::SeqCst);
 
             Some(msg_result)
@@ -182,16 +177,6 @@ impl Subscriber {
 
         read_lock_ptr.store(0, Ordering::SeqCst);
         result
-    }
-}
-
-impl Drop for Subscriber {
-    fn drop(&mut self) {
-        if self.destroy_on_dispose {
-            if let Some(path) = self.mapping.backing_file_path() {
-                let _ = fs::remove_file(path);
-            }
-        }
     }
 }
 
