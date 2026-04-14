@@ -76,25 +76,27 @@ pub(crate) fn tag_to_level(tag: u8) -> LogLevel {
     }
 }
 
+/// Scans `exe` then args for a case-insensitive `-LogLevel` flag followed by a level value.
+fn parse_loglevel_from_string_iter<I>(iter: I) -> Option<LogLevel>
+where
+    I: Iterator<Item = String>,
+{
+    let mut it = iter;
+    while let Some(arg) = it.next() {
+        if arg.eq_ignore_ascii_case("-LogLevel") {
+            return it.next().and_then(|s| LogLevel::parse(&s));
+        }
+    }
+    None
+}
+
 /// Parses `-LogLevel` from command line args (case-insensitive).
 ///
 /// Returns [`None`] if not present or invalid; otherwise the parsed level.
+///
+/// Scans [`std::env::args`] without collecting argv into a [`Vec`].
 pub fn parse_log_level_from_args() -> Option<LogLevel> {
-    let args: Vec<String> = std::env::args().collect();
-    parse_log_level_from_slice(&args)
-}
-
-/// Parses `-LogLevel` / value pairs from a full argv slice (same layout as [`std::env::args`], including the executable).
-pub(crate) fn parse_log_level_from_slice(args: &[String]) -> Option<LogLevel> {
-    let mut i = 0;
-    while i < args.len() {
-        let arg = &args[i];
-        if arg.eq_ignore_ascii_case("-LogLevel") && i + 1 < args.len() {
-            return LogLevel::parse(&args[i + 1]);
-        }
-        i += 1;
-    }
-    None
+    parse_loglevel_from_string_iter(std::env::args())
 }
 
 /// Roundtrip tests for [`level_to_tag`] and [`tag_to_level`], and `-LogLevel` argv parsing.
@@ -109,7 +111,9 @@ mod tag_tests {
     #[test]
     fn parse_log_level_from_slice_finds_flag() {
         assert_eq!(
-            parse_log_level_from_slice(&tokens(&["prog", "-LogLevel", "debug"])),
+            super::parse_loglevel_from_string_iter(
+                tokens(&["prog", "-LogLevel", "debug"]).into_iter(),
+            ),
             Some(LogLevel::Debug)
         );
     }
@@ -117,7 +121,9 @@ mod tag_tests {
     #[test]
     fn parse_log_level_from_slice_case_insensitive_flag() {
         assert_eq!(
-            parse_log_level_from_slice(&tokens(&["prog", "-loglevel", "INFO"])),
+            super::parse_loglevel_from_string_iter(
+                tokens(&["prog", "-loglevel", "INFO"]).into_iter(),
+            ),
             Some(LogLevel::Info)
         );
     }
@@ -125,19 +131,27 @@ mod tag_tests {
     #[test]
     fn parse_log_level_from_slice_ignores_other_tokens() {
         assert_eq!(
-            parse_log_level_from_slice(&tokens(&["prog", "-x", "-LogLevel", "warn", "y"])),
+            super::parse_loglevel_from_string_iter(
+                tokens(&["prog", "-x", "-LogLevel", "warn", "y"]).into_iter(),
+            ),
             Some(LogLevel::Warn)
         );
     }
 
     #[test]
     fn parse_log_level_from_slice_missing_value() {
-        assert!(parse_log_level_from_slice(&tokens(&["prog", "-LogLevel"])).is_none());
+        assert!(
+            super::parse_loglevel_from_string_iter(tokens(&["prog", "-LogLevel"]).into_iter(),)
+                .is_none()
+        );
     }
 
     #[test]
     fn parse_log_level_from_slice_absent() {
-        assert!(parse_log_level_from_slice(&tokens(&["prog", "a", "b"])).is_none());
+        assert!(
+            super::parse_loglevel_from_string_iter(tokens(&["prog", "a", "b"]).into_iter())
+                .is_none()
+        );
     }
 
     #[test]

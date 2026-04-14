@@ -89,13 +89,22 @@ fn current_max_level(logger: &Logger) -> LogLevel {
     tag_to_level(logger.max_level.load(Ordering::Relaxed))
 }
 
-/// Returns whether a message at `level` would be written given the current max level.
-///
-/// Use to avoid expensive formatting when logging is filtered out.
-pub fn enabled(level: LogLevel) -> bool {
+/// Used by macros to skip argument evaluation when the level is disabled.
+#[doc(hidden)]
+#[inline(always)]
+pub fn is_level_enabled(level: LogLevel) -> bool {
     LOGGER
         .get()
         .is_some_and(|logger| level <= current_max_level(logger))
+}
+
+/// Returns whether a message at `level` would be written given the current max level.
+///
+/// Use to avoid expensive formatting when logging is filtered out.
+///
+/// Equivalent to [`is_level_enabled`]; kept as the public name for call sites.
+pub fn enabled(level: LogLevel) -> bool {
+    is_level_enabled(level)
 }
 
 /// Flushes any buffered log output. Call periodically if desired for API consistency.
@@ -110,11 +119,11 @@ pub fn flush() {
     }
 }
 
-/// Used by macros to skip argument evaluation when the level is disabled.
-#[doc(hidden)]
-#[inline(always)]
-pub fn is_level_enabled(level: LogLevel) -> bool {
-    LOGGER.get().is_some_and(|l| level <= current_max_level(l))
+/// Full log line with UTC prefix timestamp, for file (and optional stderr) output.
+fn format_log_line(level: LogLevel, args: std::fmt::Arguments<'_>) -> String {
+    let msg = args.to_string();
+    let timestamp = format_line_timestamp();
+    format!("[{timestamp}] {level:?} {msg}\n")
 }
 
 /// Internal log writer. Called by the log macros.
@@ -127,9 +136,7 @@ pub fn log(level: LogLevel, args: std::fmt::Arguments<'_>) {
     if level > max {
         return;
     }
-    let msg = args.to_string();
-    let timestamp = format_line_timestamp();
-    let line = format!("[{timestamp}] {level:?} {msg}\n");
+    let line = format_log_line(level, args);
     if let Ok(mut file) = logger.file.lock() {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
@@ -155,9 +162,7 @@ pub fn try_log(level: LogLevel, args: std::fmt::Arguments<'_>) -> bool {
     if level > max {
         return false;
     }
-    let msg = args.to_string();
-    let timestamp = format_line_timestamp();
-    let line = format!("[{timestamp}] {level:?} {msg}\n");
+    let line = format_log_line(level, args);
     if let Ok(mut file) = logger.file.try_lock() {
         let _ = file.write_all(line.as_bytes());
         let _ = file.flush();
