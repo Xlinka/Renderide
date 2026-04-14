@@ -101,7 +101,7 @@ pub fn try_upload_mesh_from_raw(
 mod tests {
     use crate::shared::MeshUploadHintFlag;
 
-    use super::super::gpu_mesh::{
+    use super::super::gpu_mesh_hints::{
         mesh_upload_hint_any_selective, mesh_upload_hint_touches_vertex_streams,
     };
 
