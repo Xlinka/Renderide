@@ -58,3 +58,21 @@ fn wine_get_version_linux() -> Option<String> {
     unsafe { libc::dlclose(handle) };
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn wine_never_detected_off_linux() {
+        assert!(wine_get_version().is_none());
+        assert!(!is_wine());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn is_wine_matches_presence_of_version_string() {
+        assert_eq!(is_wine(), wine_get_version().is_some());
+    }
+}

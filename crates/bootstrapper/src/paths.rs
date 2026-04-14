@@ -194,6 +194,55 @@ fn steam_path_from_registry() -> Result<PathBuf, std::io::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    #[test]
+    fn parse_libraryfolders_vdf_extracts_quoted_paths() {
+        let tmp = std::env::temp_dir().join(format!(
+            "bootstrapper_libraryfolders_{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("steamapps")).unwrap();
+        let vdf = tmp.join("steamapps").join("libraryfolders.vdf");
+        let mut f = fs::File::create(&vdf).unwrap();
+        writeln!(f, r#" "path" "/data/SteamLibrary" "#,).unwrap();
+        let paths = parse_libraryfolders_vdf(&tmp);
+        assert!(
+            paths
+                .iter()
+                .any(|p| p == std::path::Path::new("/data/SteamLibrary")),
+            "paths={paths:?}"
+        );
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_dotnet_for_host_prefers_bundled_dotnet() {
+        let tmp =
+            std::env::temp_dir().join(format!("bootstrapper_dotnet_unix_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let bundled = tmp.join("dotnet-runtime").join("dotnet");
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, b"").unwrap();
+        assert_eq!(find_dotnet_for_host(&tmp), bundled);
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn find_dotnet_for_host_prefers_bundled_exe() {
+        let tmp =
+            std::env::temp_dir().join(format!("bootstrapper_dotnet_win_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let bundled_exe = tmp.join("dotnet-runtime").join("dotnet.exe");
+        fs::create_dir_all(bundled_exe.parent().unwrap()).unwrap();
+        fs::write(&bundled_exe, b"").unwrap();
+        assert_eq!(find_dotnet_for_host(&tmp), bundled_exe);
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn is_resonite_install_dir_requires_host_artifact() {

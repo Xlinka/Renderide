@@ -242,4 +242,20 @@ mod tests {
             other => panic!("expected StartRenderer, got {:?}", other),
         }
     }
+
+    #[test]
+    fn parse_host_command_empty_message_is_start_renderer_empty() {
+        match parse_host_command("") {
+            HostCommand::StartRenderer(args) => assert!(args.is_empty()),
+            other => panic!("expected StartRenderer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_host_command_settext_only() {
+        match parse_host_command("SETTEXT") {
+            HostCommand::SetText(s) => assert!(s.is_empty()),
+            other => panic!("expected SetText, got {:?}", other),
+        }
+    }
 }
