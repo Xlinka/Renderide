@@ -1,9 +1,10 @@
 using System.Globalization;
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
+using SharedTypeGenerator.Logging;
 using Xunit;
 
-namespace Renderide.Generators.Logging.Tests;
+namespace SharedTypeGenerator.Tests.Unit;
 
 /// <summary>Unit tests for <see cref="ErrorDuplicatingSink"/> stdout/stderr mirroring.</summary>
 public sealed class ErrorDuplicatingSinkTests

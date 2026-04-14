@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// Resolves log paths aligned with the Rust workspace logger crate: <c>logs/&lt;component&gt;/&lt;UTC-timestamp&gt;.log</c>,

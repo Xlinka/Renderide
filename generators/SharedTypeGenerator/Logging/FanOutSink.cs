@@ -1,7 +1,7 @@
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>Forwards each log line to every child sink (console plus file, etc.).</summary>
 public sealed class FanOutSink : ILoggerSink, IDisposable

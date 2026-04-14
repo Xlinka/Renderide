@@ -2,7 +2,6 @@ using System.Runtime;
 using CommandLine;
 using NotEnoughLogs;
 using NotEnoughLogs.Behaviour;
-using Renderide.Generators.Logging;
 using SharedTypeGenerator;
 using SharedTypeGenerator.Logging;
 using SharedTypeGenerator.Options;

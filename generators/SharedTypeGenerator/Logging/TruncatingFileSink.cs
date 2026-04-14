@@ -2,7 +2,7 @@ using System.Text;
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// Appends UTF-8 log lines to a file opened with <see cref="FileMode.Create"/> so each process run starts with an empty file.

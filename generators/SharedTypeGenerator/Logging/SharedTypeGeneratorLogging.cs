@@ -1,4 +1,4 @@
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// Factory for the SharedTypeGenerator log pipeline: suppresses warnings, writes to a log file, mirrors

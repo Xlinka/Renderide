@@ -3,7 +3,7 @@ using System.Text;
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// Appends UTF-8 lines to a single log file, using a line prefix compatible with the Rust logger crate

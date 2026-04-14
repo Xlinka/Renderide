@@ -1,7 +1,6 @@
 using System.Reflection;
 using NotEnoughLogs;
 using NotEnoughLogs.Behaviour;
-using Renderide.Generators.Logging;
 using Renderite.Shared;
 using SharedTypeGenerator.Analysis;
 using SharedTypeGenerator.IR;

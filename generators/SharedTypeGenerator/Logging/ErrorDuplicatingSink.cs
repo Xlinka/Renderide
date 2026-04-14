@@ -2,7 +2,7 @@ using System.Globalization;
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// Forwards logs to an inner sink. When the inner is a <see cref="LogFileSink"/>, formats each line once and

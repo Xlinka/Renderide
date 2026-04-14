@@ -1,7 +1,7 @@
 using NotEnoughLogs;
 using NotEnoughLogs.Sinks;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>
 /// <see cref="ILoggerSink"/> that drops <see cref="LogLevel.Warning"/> so generator logs stay focused on

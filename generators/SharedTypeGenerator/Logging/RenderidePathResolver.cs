@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace Renderide.Generators.Logging;
+namespace SharedTypeGenerator.Logging;
 
 /// <summary>Resolves the Renderide tree root (directory containing <c>crates/renderide</c>) for generators and logging paths.</summary>
 public static class RenderidePathResolver
