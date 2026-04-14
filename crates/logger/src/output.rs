@@ -13,7 +13,7 @@ use crate::timestamp::format_line_timestamp;
 /// primary mutex is held (for example a stderr forwarder thread).
 static LOG_FILE_PATH: OnceLock<PathBuf> = OnceLock::new();
 
-/// Logger that writes to file and optionally mirrors each line to stderr.
+/// Global logger state: mutex-protected file sink, optional stderr mirror, and atomic max level.
 struct Logger {
     /// File output. Mutex for thread-safe writes.
     file: Mutex<std::fs::File>,
@@ -83,6 +83,7 @@ pub fn set_max_level(level: LogLevel) {
         .store(level_to_tag(level), Ordering::Relaxed);
 }
 
+/// Returns the effective max level from `logger`'s atomic tag.
 #[inline]
 fn current_max_level(logger: &Logger) -> LogLevel {
     tag_to_level(logger.max_level.load(Ordering::Relaxed))

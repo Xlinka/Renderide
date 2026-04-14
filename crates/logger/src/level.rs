@@ -64,6 +64,7 @@ pub(crate) fn level_to_tag(level: LogLevel) -> u8 {
     }
 }
 
+/// Maps a stored `0..=4` tag back to [`LogLevel`]. Values above `4` clamp to [`LogLevel::Trace`].
 #[inline]
 pub(crate) fn tag_to_level(tag: u8) -> LogLevel {
     match tag.min(4) {
@@ -91,6 +92,7 @@ pub fn parse_log_level_from_args() -> Option<LogLevel> {
     None
 }
 
+/// Roundtrip tests for [`level_to_tag`] and [`tag_to_level`].
 #[cfg(test)]
 mod tag_tests {
     use super::*;

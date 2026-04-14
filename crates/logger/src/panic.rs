@@ -1,4 +1,7 @@
 //! Append-only panic logging so panic hooks never block on the global logger mutex.
+//!
+//! Prefer [`append_panic_report_to_file`] and [`log_panic`] from panic handlers; use [`log_panic_payload`]
+//! only when you already have a `catch_unwind` payload and an initialized global logger.
 
 use std::fs::OpenOptions;
 use std::io::Write;
