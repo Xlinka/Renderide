@@ -1,11 +1,17 @@
-//! GPU device, adapter, and swapchain configuration.
+//! GPU device, adapter, swapchain, frame uniforms, and VR mirror blit.
+//!
+//! Layout: [`context`] ([`GpuContext`]), [`instance_limits`] ([`instance_flags_for_gpu_init`]),
+//! [`frame_globals`] ([`FrameGpuUniforms`]), [`frame_cpu_gpu_timing`] (debug HUD CPU/GPU intervals),
+//! [`vr_mirror`] (HMD eye → staging → window).
 
 mod context;
 mod frame_cpu_gpu_timing;
-pub mod vr_mirror_blit;
+mod instance_limits;
+mod vr_mirror;
 
 pub mod frame_globals;
 
-pub use context::{instance_flags_for_gpu_init, GpuContext};
+pub use context::GpuContext;
 pub use frame_globals::FrameGpuUniforms;
-pub use vr_mirror_blit::{VrMirrorBlitResources, VR_MIRROR_EYE_LAYER};
+pub use instance_limits::instance_flags_for_gpu_init;
+pub use vr_mirror::{VrMirrorBlitResources, VR_MIRROR_EYE_LAYER};
