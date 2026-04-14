@@ -9,7 +9,7 @@ use crate::gpu::{GpuContext, VrMirrorBlitResources};
 use crate::present::PresentClearError;
 use crate::render_graph::GraphExecuteError;
 use crate::runtime::RendererRuntime;
-use crate::xr::{OpenxrFrameTick, XrStereoSwapchain, XrWgpuHandles};
+use crate::xr::{OpenxrFrameTick, XrSessionBundle, XrWgpuHandles};
 
 /// Runs OpenXR `wait_frame` + view pose for stereo uniforms and IPC head tracking.
 pub(crate) fn begin_openxr_frame_tick(
@@ -20,27 +20,14 @@ pub(crate) fn begin_openxr_frame_tick(
 }
 
 /// Renders to the HMD multiview swapchain when VR is active; returns whether a projection layer was submitted.
-#[allow(clippy::too_many_arguments)] // OpenXR + swapchain + mirror blit wiring; kept explicit at call site.
 pub(crate) fn try_hmd_multiview_submit(
     gpu: &mut GpuContext,
-    handles: &mut XrWgpuHandles,
+    bundle: &mut XrSessionBundle,
     runtime: &mut RendererRuntime,
-    xr_swapchain: &mut Option<XrStereoSwapchain>,
-    xr_stereo_depth: &mut Option<(wgpu::Texture, wgpu::TextureView)>,
-    mirror_blit: &mut VrMirrorBlitResources,
     window: &Window,
     tick: &OpenxrFrameTick,
 ) -> bool {
-    crate::xr::try_openxr_hmd_multiview_submit(
-        gpu,
-        handles,
-        runtime,
-        xr_swapchain,
-        xr_stereo_depth,
-        mirror_blit,
-        window,
-        tick,
-    )
+    crate::xr::try_openxr_hmd_multiview_submit(gpu, bundle, runtime, window, tick)
 }
 
 /// Blits the last HMD eye staging texture to the window (VR mirror); no full scene render.

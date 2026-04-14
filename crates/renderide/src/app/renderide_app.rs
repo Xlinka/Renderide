@@ -1,5 +1,5 @@
 //! Winit [`ApplicationHandler`] state: [`RendererRuntime`], lazily created window and [`GpuContext`],
-//! OpenXR handles, and the per-frame tick ([`RenderideApp::tick_frame`]). See [`crate::app`] for the
+//! optional [`crate::xr::XrSessionBundle`] (OpenXR GPU path), and the per-frame tick ([`RenderideApp::tick_frame`]). See [`crate::app`] for the
 //! high-level flow.
 //!
 //! ## Frame tick phases
@@ -33,13 +33,13 @@ use crate::frontend::input::{
     apply_device_event, apply_output_state_to_window, apply_per_frame_cursor_lock_when_locked,
     apply_window_event, vr_inputs_for_session, CursorOutputTracking, WindowInputAccumulator,
 };
-use crate::gpu::{GpuContext, VrMirrorBlitResources};
+use crate::gpu::GpuContext;
 use crate::output_device::head_output_device_wants_openxr;
 use crate::present::present_clear_frame;
 use crate::render_graph::GraphExecuteError;
 use crate::runtime::RendererRuntime;
 use crate::shared::{HeadOutputDevice, VRControllerState};
-use crate::xr::OpenxrFrameTick;
+use crate::xr::{OpenxrFrameTick, XrSessionBundle};
 use glam::{Quat, Vec3};
 
 use super::frame_loop;
@@ -80,11 +80,8 @@ pub(crate) struct RenderideApp {
     input: WindowInputAccumulator,
     /// Host cursor lock transitions (unlock warp parity with Unity mouse driver).
     cursor_output_tracking: CursorOutputTracking,
-    xr_handles: Option<crate::xr::XrWgpuHandles>,
-    xr_swapchain: Option<crate::xr::XrStereoSwapchain>,
-    xr_stereo_depth: Option<(wgpu::Texture, wgpu::TextureView)>,
-    /// Staging texture and blit pipelines for the VR desktop mirror (left HMD eye).
-    vr_mirror_blit: VrMirrorBlitResources,
+    /// OpenXR bootstrap plus stereo swapchain/depth and mirror blit when the Vulkan path succeeded.
+    xr_session: Option<XrSessionBundle>,
     /// Previous redraw instant for HUD FPS ([`crate::diagnostics::DebugHud`]).
     hud_frame_last: Option<Instant>,
     /// Wall-clock end of the last [`Self::tick_frame`] (for desktop FPS caps).
@@ -124,10 +121,7 @@ impl RenderideApp {
             last_log_flush: None,
             input: WindowInputAccumulator::default(),
             cursor_output_tracking: CursorOutputTracking::default(),
-            xr_handles: None,
-            xr_swapchain: None,
-            xr_stereo_depth: None,
-            vr_mirror_blit: VrMirrorBlitResources::new(),
+            xr_session: None,
             hud_frame_last: None,
             last_frame_end: None,
         }
@@ -210,7 +204,7 @@ impl RenderideApp {
                             );
                             self.runtime.attach_gpu(&gpu);
                             self.gpu = Some(gpu);
-                            self.xr_handles = Some(h);
+                            self.xr_session = Some(XrSessionBundle::new(h));
                         }
                         Err(e) => {
                             logger::warn!(
@@ -311,18 +305,18 @@ impl RenderideApp {
     fn xr_begin_tick(&mut self) -> Option<OpenxrFrameTick> {
         tick_phase_trace("xr_begin_tick");
         let xr_tick = self
-            .xr_handles
+            .xr_session
             .as_mut()
-            .and_then(|h| frame_loop::begin_openxr_frame_tick(h, &mut self.runtime));
+            .and_then(|b| frame_loop::begin_openxr_frame_tick(&mut b.handles, &mut self.runtime));
 
         if let Some(ref tick) = xr_tick {
             crate::xr::OpenxrInput::log_stereo_view_order_once(&tick.views);
-            if let Some(handles) = &self.xr_handles {
-                if let Some(ref input) = handles.openxr_input {
-                    if handles.xr_session.session_running() {
+            if let Some(bundle) = &self.xr_session {
+                if let Some(ref input) = bundle.handles.openxr_input {
+                    if bundle.handles.xr_session.session_running() {
                         match input.sync_and_sample(
-                            handles.xr_session.xr_vulkan_session(),
-                            handles.xr_session.stage_space(),
+                            bundle.handles.xr_session.xr_vulkan_session(),
+                            bundle.handles.xr_session.stage_space(),
                             tick.predicted_display_time,
                         ) {
                             Ok(v) => self.cached_openxr_controllers = v,
@@ -387,14 +381,11 @@ impl RenderideApp {
         xr_tick: Option<&OpenxrFrameTick>,
     ) -> Option<bool> {
         tick_phase_trace("render_views");
-        let hmd_projection_ended = match (self.gpu.as_mut(), self.xr_handles.as_mut(), xr_tick) {
-            (Some(gpu), Some(handles), Some(tick)) => frame_loop::try_hmd_multiview_submit(
+        let hmd_projection_ended = match (self.gpu.as_mut(), self.xr_session.as_mut(), xr_tick) {
+            (Some(gpu), Some(bundle), Some(tick)) => frame_loop::try_hmd_multiview_submit(
                 gpu,
-                handles,
+                bundle,
                 &mut self.runtime,
-                &mut self.xr_swapchain,
-                &mut self.xr_stereo_depth,
-                &mut self.vr_mirror_blit,
                 window.as_ref(),
                 tick,
             ),
@@ -446,14 +437,16 @@ impl RenderideApp {
         // Debug HUD overlay is not drawn on this path (see `frame_graph::compiled` for non-VR HUD).
         if self.runtime.vr_active() {
             if hmd_projection_ended {
-                if let Err(e) = frame_loop::present_vr_mirror_blit(
-                    gpu,
-                    window.as_ref(),
-                    &mut self.vr_mirror_blit,
-                ) {
-                    logger::debug!("VR mirror blit failed: {e:?}");
-                    if let Err(pe) = present_clear_frame(gpu, window.as_ref()) {
-                        logger::warn!("present_clear_frame after mirror blit: {pe:?}");
+                if let Some(bundle) = self.xr_session.as_mut() {
+                    if let Err(e) = frame_loop::present_vr_mirror_blit(
+                        gpu,
+                        window.as_ref(),
+                        &mut bundle.mirror_blit,
+                    ) {
+                        logger::debug!("VR mirror blit failed: {e:?}");
+                        if let Err(pe) = present_clear_frame(gpu, window.as_ref()) {
+                            logger::warn!("present_clear_frame after mirror blit: {pe:?}");
+                        }
                     }
                 }
             } else if let Err(e) = present_clear_frame(gpu, window.as_ref()) {
@@ -465,9 +458,10 @@ impl RenderideApp {
             Self::handle_frame_graph_error(gpu, window.as_ref(), e);
         }
 
-        if let (Some(handles), Some(tick)) = (self.xr_handles.as_mut(), xr_tick) {
+        if let (Some(bundle), Some(tick)) = (self.xr_session.as_mut(), xr_tick) {
             if !hmd_projection_ended {
-                if let Err(e) = handles
+                if let Err(e) = bundle
+                    .handles
                     .xr_session
                     .end_frame_empty(tick.predicted_display_time)
                 {
