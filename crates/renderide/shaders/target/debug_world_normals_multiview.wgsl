@@ -2,7 +2,8 @@ struct PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX {
     view_proj_left: mat4x4<f32>,
     view_proj_right: mat4x4<f32>,
     model: mat4x4<f32>,
-    _pad: array<vec4<f32>, 4>,
+    normal_matrix: mat3x3<f32>,
+    _pad: vec4<f32>,
 }
 
 struct FrameGlobalsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX {
@@ -66,17 +67,17 @@ fn vs_main(@builtin(instance_index) instance_index: u32, @builtin(view_index) vi
 
     let _e1: PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX = get_drawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX(instance_index);
     let world_p: vec4<f32> = (_e1.model * vec4<f32>(pos.xyz, 1f));
-    let world_n: vec3<f32> = normalize((_e1.model * vec4<f32>(normal.xyz, 0f)).xyz);
+    let world_n: vec3<f32> = normalize((_e1.normal_matrix * normal.xyz));
     if (view_idx == 0u) {
         vp = _e1.view_proj_left;
     } else {
         vp = _e1.view_proj_right;
     }
-    let _e24: mat4x4<f32> = vp;
-    out.clip_pos = (_e24 * world_p);
+    let _e21: mat4x4<f32> = vp;
+    out.clip_pos = (_e21 * world_p);
     out.world_n = world_n;
-    let _e27: VertexOutput = out;
-    return _e27;
+    let _e24: VertexOutput = out;
+    return _e24;
 }
 
 @fragment 

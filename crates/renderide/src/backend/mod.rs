@@ -37,7 +37,7 @@ pub use light_gpu::{
 pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
 pub use mesh_deform::{
     advance_slab_cursor, plan_blendshape_bind_chunks, write_per_draw_uniform_slab,
-    MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
+    MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms, WgslMat3x3,
     INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
 };
 pub use occlusion::OcclusionSystem;

@@ -21,7 +21,8 @@ struct PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX {
     view_proj_left: mat4x4<f32>,
     view_proj_right: mat4x4<f32>,
     model: mat4x4<f32>,
-    _pad: array<vec4<f32>, 4>,
+    normal_matrix: mat3x3<f32>,
+    _pad: vec4<f32>,
 }
 
 struct FrameGlobalsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX {
@@ -119,10 +120,12 @@ var _DetailMask: texture_2d<f32>;
 var _DetailMask_sampler: sampler;
 
 fn orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_2: vec3<f32>) -> mat3x3<f32> {
-    let up: vec3<f32> = select(vec3<f32>(0f, 1f, 0f), vec3<f32>(1f, 0f, 0f), (abs(n_2.y) > 0.99f));
-    let t: vec3<f32> = normalize(cross(up, n_2));
-    let b: vec3<f32> = cross(n_2, t);
-    return mat3x3<f32>(t, b, n_2);
+    let sign_: f32 = select(-1f, 1f, (n_2.z >= 0f));
+    let a: f32 = (-1f / (sign_ + n_2.z));
+    let b: f32 = ((n_2.x * n_2.y) * a);
+    let t: vec3<f32> = vec3<f32>((1f + (((sign_ * n_2.x) * n_2.x) * a)), (sign_ * b), (-(sign_) * n_2.x));
+    let bitan: vec3<f32> = vec3<f32>(b, (sign_ + ((n_2.y * n_2.y) * a)), -(n_2.y));
+    return mat3x3<f32>(normalize(t), normalize(bitan), n_2);
 }
 
 fn pow5X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(x: f32) -> f32 {
@@ -136,8 +139,8 @@ fn fresnel_schlickX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(cos_theta: f
 }
 
 fn distribution_ggxX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_dot_h: f32, roughness: f32) -> f32 {
-    let a: f32 = (roughness * roughness);
-    let a2_: f32 = (a * a);
+    let a_1: f32 = (roughness * roughness);
+    let a2_: f32 = (a_1 * a_1);
     let denom: f32 = (((n_dot_h * n_dot_h) * (a2_ - 1f)) + 1f);
     return (a2_ / max(((denom * denom) * 3.1415927f), 0.0001f));
 }
@@ -236,7 +239,10 @@ fn diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_
     return ((((base_color_2 / vec3(3.1415927f)) * light_color_1) * _e91) * n_dot_l_2);
 }
 
-fn decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+fn decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+    if all((raw > vec3<f32>(0.99f, 0.99f, 0.99f))) {
+        return vec3<f32>(0f, 0f, 1f);
+    }
     let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
     let z: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
     return normalize(vec3<f32>(nm_xy, z));
@@ -289,13 +295,13 @@ fn sample_normal_world(uv_main: vec2<f32>, uv_det: vec2<f32>, world_n_1: vec3<f3
     let _e1: mat3x3<f32> = orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(world_n_1);
     let _e5: vec4<f32> = textureSample(_BumpMap, _BumpMap_sampler, uv_main);
     let _e9: f32 = mat._BumpScale;
-    let _e10: vec3<f32> = decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e5.xyz, _e9);
+    let _e10: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e5.xyz, _e9);
     ts_n = _e10;
     if (detail_mask > 0.001f) {
         let _e18: vec4<f32> = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_det);
         let detail_raw: vec3<f32> = _e18.xyz;
         let _e22: f32 = mat._DetailNormalMapScale;
-        let _e23: vec3<f32> = decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(detail_raw, _e22);
+        let _e23: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(detail_raw, _e22);
         let _e24: vec3<f32> = ts_n;
         let _e30: f32 = ts_n.z;
         ts_n = normalize(vec3<f32>((_e24.xy + (_e23.xy * detail_mask)), _e30));
@@ -329,21 +335,21 @@ fn vs_main(@builtin(instance_index) instance_index: u32, @builtin(view_index) vi
 
     let _e1: PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX = get_drawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX(instance_index);
     let world_p: vec4<f32> = (_e1.model * vec4<f32>(pos.xyz, 1f));
-    let wn: vec3<f32> = normalize((_e1.model * vec4<f32>(n.xyz, 0f)).xyz);
+    let wn: vec3<f32> = normalize((_e1.normal_matrix * n.xyz));
     if (view_idx == 0u) {
         vp = _e1.view_proj_left;
     } else {
         vp = _e1.view_proj_right;
     }
-    let _e24: mat4x4<f32> = vp;
-    out.clip_pos = (_e24 * world_p);
+    let _e21: mat4x4<f32> = vp;
+    out.clip_pos = (_e21 * world_p);
     out.world_pos = world_p.xyz;
     out.world_n = wn;
     out.uv0_ = uv0_;
     out.uv1_ = uv0_;
     out.view_layer = view_idx;
-    let _e33: VertexOutput = out;
-    return _e33;
+    let _e30: VertexOutput = out;
+    return _e30;
 }
 
 @fragment 

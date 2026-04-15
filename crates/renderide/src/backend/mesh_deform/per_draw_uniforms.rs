@@ -1,6 +1,6 @@
 //! Per-draw uniform packing for mesh forward passes (WebGPU dynamic uniform offset = 256 bytes).
 
-use glam::Mat4;
+use glam::{Mat3, Mat4};
 
 /// Stride between consecutive draw slots in the uniform slab (`mat4`×3 + WGSL padding).
 pub const PER_DRAW_UNIFORM_STRIDE: usize = 256;
@@ -8,7 +8,51 @@ pub const PER_DRAW_UNIFORM_STRIDE: usize = 256;
 /// Initial number of draw slots allocated for [`crate::backend::PerDrawResources`].
 pub const INITIAL_PER_DRAW_UNIFORM_SLOTS: usize = 256;
 
-/// GPU layout: left/right view–projection, `model`, then padding to 256 bytes.
+/// Column-major `mat3x3` with WGSL storage layout: each column is `vec3` padded to 16 bytes.
+///
+/// Matches [`mat3x3<f32>`](https://www.w3.org/TR/WGSL/#alignment-and-size) in storage (`vec3` stride 16).
+#[repr(C)]
+#[derive(Clone, Copy, PartialEq, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct WgslMat3x3 {
+    /// First column (x, y, z, _pad).
+    pub col0: [f32; 4],
+    /// Second column (x, y, z, _pad).
+    pub col1: [f32; 4],
+    /// Third column (x, y, z, _pad).
+    pub col2: [f32; 4],
+}
+
+impl WgslMat3x3 {
+    /// Identity `mat3x3` (flat normals unchanged when `model` is identity).
+    pub const IDENTITY: Self = Self {
+        col0: [1.0, 0.0, 0.0, 0.0],
+        col1: [0.0, 1.0, 0.0, 0.0],
+        col2: [0.0, 0.0, 1.0, 0.0],
+    };
+
+    /// `transpose(inverse(M))` for the upper 3×3 of `model`, packed for WGSL `normal_matrix`.
+    ///
+    /// For singular or near-singular linear parts, returns identity to avoid NaNs in the shader.
+    #[must_use]
+    pub fn from_model_upper_3x3(model: Mat4) -> Self {
+        let m3 = Mat3::from_mat4(model);
+        let det = m3.determinant();
+        if !det.is_finite() || det.abs() < 1e-20 {
+            return Self::IDENTITY;
+        }
+        let nm = m3.inverse().transpose();
+        let c0 = nm.x_axis;
+        let c1 = nm.y_axis;
+        let c2 = nm.z_axis;
+        Self {
+            col0: [c0.x, c0.y, c0.z, 0.0],
+            col1: [c1.x, c1.y, c1.z, 0.0],
+            col2: [c2.x, c2.y, c2.z, 0.0],
+        }
+    }
+}
+
+/// GPU layout: left/right view–projection, `model`, inverse-transpose normal matrix, padding to 256 bytes.
 ///
 /// Matches composed `shaders/target/debug_world_normals_*.wgsl` (`PerDrawUniforms` at `@group(2)`).
 ///
@@ -25,8 +69,10 @@ pub struct PaddedPerDrawUniforms {
     pub view_proj_right: [f32; 16],
     /// Column-major world matrix from the scene (identity for skinned meshes with world-space positions).
     pub model: [f32; 16],
+    /// Inverse transpose of the upper 3×3 of [`Self::model`] for correct normals under non-uniform scale.
+    pub normal_matrix: WgslMat3x3,
     /// Padding to [`PER_DRAW_UNIFORM_STRIDE`] bytes.
-    pub _pad: [f32; 16],
+    pub _pad: [f32; 4],
 }
 
 impl PaddedPerDrawUniforms {
@@ -40,7 +86,8 @@ impl PaddedPerDrawUniforms {
             view_proj_left: vp,
             view_proj_right: vp,
             model: model.to_cols_array(),
-            _pad: [0.0; 16],
+            normal_matrix: WgslMat3x3::from_model_upper_3x3(model),
+            _pad: [0.0; 4],
         }
     }
 
@@ -53,7 +100,8 @@ impl PaddedPerDrawUniforms {
             view_proj_left: view_proj_left.to_cols_array(),
             view_proj_right: view_proj_right.to_cols_array(),
             model: model.to_cols_array(),
-            _pad: [0.0; 16],
+            normal_matrix: WgslMat3x3::from_model_upper_3x3(model),
+            _pad: [0.0; 4],
         }
     }
 }
@@ -131,5 +179,16 @@ mod tests {
         assert_eq!(a.view_proj_left, vp.to_cols_array());
         assert_eq!(a.view_proj_right, vp.to_cols_array());
         assert_eq!(a.model, m.to_cols_array());
+        assert_eq!(a.normal_matrix, WgslMat3x3::from_model_upper_3x3(m));
+    }
+
+    #[test]
+    fn normal_matrix_uniform_scale_matches_model_linear() {
+        let m = Mat4::from_scale(glam::Vec3::splat(2.0));
+        let nm = WgslMat3x3::from_model_upper_3x3(m);
+        let m3 = Mat3::from_mat4(m);
+        let expected = m3.inverse().transpose();
+        let c0 = glam::Vec3::new(nm.col0[0], nm.col0[1], nm.col0[2]);
+        assert!((c0 - expected.x_axis).length() < 1e-4);
     }
 }

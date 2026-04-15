@@ -80,7 +80,7 @@ fn vs_main(
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
     let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+    let wn = normalize(d.normal_matrix * n.xyz);
 #ifdef MULTIVIEW
     var vp: mat4x4<f32>;
     if (view_idx == 0u) {

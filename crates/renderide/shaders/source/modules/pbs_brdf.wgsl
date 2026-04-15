@@ -33,12 +33,17 @@ fn fresnel_schlick(cos_theta: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow5(1.0 - cos_theta);
 }
 
-/// Builds an orthonormal TBN from a world-space normal (Mikkelsen-style fallback when no tangent).
+/// Builds an orthonormal TBN from a world-space normal (fallback when mesh tangents are unavailable).
+///
+/// Uses the branchless construction from *Building an Orthonormal Basis, Revisited* (Duff et al., JCGT 2017)
+/// so there is no discontinuity near the poles (unlike a fixed world-up cross).
 fn orthonormal_tbn(n: vec3<f32>) -> mat3x3<f32> {
-    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.99);
-    let t = normalize(cross(up, n));
-    let b = cross(n, t);
-    return mat3x3<f32>(t, b, n);
+    let sign = select(-1.0, 1.0, n.z >= 0.0);
+    let a = -1.0 / (sign + n.z);
+    let b = n.x * n.y * a;
+    let t = vec3<f32>(1.0 + sign * n.x * n.x * a, sign * b, -sign * n.x);
+    let bitan = vec3<f32>(b, sign + n.y * n.y * a, -n.y);
+    return mat3x3<f32>(normalize(t), normalize(bitan), n);
 }
 
 /// Metallic workflow: Cook–Torrance direct light with GGX + Schlick; diffuse scaled by `(1 - metallic)`.
