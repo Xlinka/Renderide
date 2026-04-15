@@ -46,7 +46,7 @@ fn skinning_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 
 fn blendshape_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("mesh_blendshape"),
+        label: Some("mesh_blendshape_scatter"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -60,8 +60,7 @@ fn blendshape_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
             },
             storage_buffer_entry(1, true),
             storage_buffer_entry(2, true),
-            storage_buffer_entry(3, true),
-            storage_buffer_entry(4, false),
+            storage_buffer_entry(3, false),
         ],
     })
 }
@@ -113,10 +112,10 @@ impl MeshPreprocessPipelines {
         });
         let blendshape_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mesh_blendshape_pipeline"),
+                label: Some("mesh_blendshape_scatter_pipeline"),
                 layout: Some(&blend_layout),
                 module: &blend_shader,
-                entry_point: Some("blendshape_main"),
+                entry_point: Some("blendshape_scatter_main"),
                 compilation_options: Default::default(),
                 cache: None,
             });

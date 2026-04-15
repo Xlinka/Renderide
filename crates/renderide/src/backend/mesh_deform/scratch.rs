@@ -16,9 +16,9 @@ fn align256(n: u64) -> u64 {
 pub struct MeshDeformScratch {
     /// Linear blend skinning bone palette (`mat4` column-major, 64 bytes each); subranges use 256-byte-aligned offsets.
     pub bone_matrices: wgpu::Buffer,
-    /// 32-byte uniform for chunked blendshape compute (`source/compute/mesh_blendshape.wgsl` `Params`).
+    /// 32-byte uniform for sparse blendshape scatter (`source/compute/mesh_blendshape.wgsl` `Params`).
     pub blendshape_params: wgpu::Buffer,
-    /// Upload + copy source for packed per-chunk `Params` before `copy_buffer_to_buffer` into `blendshape_params`.
+    /// Upload + copy source for packed scatter `Params` before `copy_buffer_to_buffer` into `blendshape_params`.
     pub blendshape_params_staging: wgpu::Buffer,
     /// `f32` weight per blendshape; subranges use 256-byte-aligned offsets between meshes.
     pub blendshape_weights: wgpu::Buffer,

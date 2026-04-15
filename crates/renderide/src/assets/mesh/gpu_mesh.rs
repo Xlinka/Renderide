@@ -9,15 +9,15 @@ use super::layout::{
     color_float4_stream_bytes, compute_index_count, compute_vertex_stride, extract_bind_poses,
     extract_blendshape_offsets, extract_float3_position_normal_as_vec4_streams,
     split_bone_weights_tail_for_gpu, synthetic_bone_data_for_blendshape_only,
-    uv0_float2_stream_bytes, MeshBufferLayout, BLENDSHAPE_OFFSET_GPU_STRIDE,
+    uv0_float2_stream_bytes, MeshBufferLayout,
 };
 
 use crate::gpu::GpuLimits;
 
 use super::upload_impl::{
     allocate_deform_outputs, create_core_vertex_index_buffers, extract_derived_vertex_streams,
-    resident_bytes_for_mesh_upload, upload_blendshape_buffer, upload_bone_and_skin_buffers,
-    validate_mesh_upload_layout,
+    padded_sparse_bytes, resident_bytes_for_mesh_upload, upload_blendshape_buffer,
+    upload_bone_and_skin_buffers, validate_mesh_upload_layout,
 };
 
 use super::gpu_mesh_hints::{
@@ -58,9 +58,13 @@ pub struct GpuMesh {
     pub bone_weights_vec4_buffer: Option<Arc<wgpu::Buffer>>,
     /// Column-major `float4x4` bind poses (64 bytes per bone).
     pub bind_poses_buffer: Option<Arc<wgpu::Buffer>>,
-    /// Packed blendshape deltas (`BLENDSHAPE_OFFSET_GPU_STRIDE` × vertices × shapes).
-    pub blendshape_buffer: Option<Arc<wgpu::Buffer>>,
-    /// Number of blendshape shapes in `blendshape_buffer` (0 when none).
+    /// Sparse packed position deltas (`vertex_index`, `delta.xyz`) for all shapes ([`crate::assets::mesh::BLENDSHAPE_SPARSE_ENTRY_SIZE`] bytes/entry).
+    pub blendshape_sparse_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Per-shape `(first_entry, entry_count)` rows (`u32` pairs) mirroring [`Self::blendshape_sparse_ranges`].
+    pub blendshape_shape_descriptor_buffer: Option<Arc<wgpu::Buffer>>,
+    /// CPU copy of each shape’s sparse range for scatter dispatch (length equals [`Self::num_blendshapes`] when blendshapes are present).
+    pub blendshape_sparse_ranges: Vec<(u32, u32)>,
+    /// Number of logical blendshape slots (`max(blendshape_index)+1`).
     pub num_blendshapes: u32,
     /// Decomposed position stream (`vec4<f32>` per vertex) for compute + debug raster.
     pub positions_buffer: Option<Arc<wgpu::Buffer>>,
@@ -88,22 +92,48 @@ pub struct GpuMesh {
     pub resident_bytes: u64,
 }
 
-/// Validates packed blendshape and deform/skeleton output buffer sizes against `data`.
+/// Validates sparse blendshape GPU buffers and scatter ranges against a fresh [`extract_blendshape_offsets`] pass.
 fn blendshape_and_deform_buffers_match_for_in_place(
     mesh: &GpuMesh,
     data: &MeshUploadData,
+    layout: &MeshBufferLayout,
+    raw: &[u8],
     use_blendshapes: bool,
-    vc_usize: usize,
 ) -> bool {
     let n_blend = blendshape_descriptor_count(&data.blendshape_buffers);
     if use_blendshapes && n_blend > 0 {
-        let expected = n_blend as usize * vc_usize * BLENDSHAPE_OFFSET_GPU_STRIDE;
-        if mesh.blendshape_buffer.as_ref().map(|b| b.size()) != Some(expected as u64)
-            || mesh.num_blendshapes != n_blend
-        {
+        let Some(extracted) =
+            extract_blendshape_offsets(raw, layout, &data.blendshape_buffers, data.vertex_count)
+        else {
+            return false;
+        };
+        if extracted.num_blendshapes.max(0) as u32 != n_blend {
             return false;
         }
-    } else if mesh.num_blendshapes > 0 || mesh.blendshape_buffer.is_some() {
+        let sparse_expect = padded_sparse_bytes(&extracted.sparse_deltas);
+        let Some(sb) = mesh.blendshape_sparse_buffer.as_ref() else {
+            return false;
+        };
+        if sb.size() != sparse_expect.len() as u64 {
+            return false;
+        }
+        let Some(db) = mesh.blendshape_shape_descriptor_buffer.as_ref() else {
+            return false;
+        };
+        if db.size() != extracted.shape_descriptor_bytes.len() as u64 {
+            return false;
+        }
+        if mesh.blendshape_sparse_ranges != extracted.shape_ranges {
+            return false;
+        }
+        if mesh.num_blendshapes != n_blend {
+            return false;
+        }
+    } else if mesh.num_blendshapes > 0
+        || mesh.blendshape_sparse_buffer.is_some()
+        || mesh.blendshape_shape_descriptor_buffer.is_some()
+        || !mesh.blendshape_sparse_ranges.is_empty()
+    {
         return false;
     }
 
@@ -349,7 +379,7 @@ fn write_in_place_bone_buffers(
     Some(())
 }
 
-/// Packed blendshape delta block upload.
+/// Sparse blendshape GPU buffers and CPU ranges (`write_buffer` for both storage blobs).
 fn write_in_place_blendshape_buffer(
     mesh: &GpuMesh,
     queue: &wgpu::Queue,
@@ -361,12 +391,17 @@ fn write_in_place_blendshape_buffer(
     if !write_blend {
         return Some(());
     }
-    let Some(bb) = mesh.blendshape_buffer.as_ref() else {
+    let Some(sb) = mesh.blendshape_sparse_buffer.as_ref() else {
         return Some(());
     };
-    let (pack, _) =
+    let Some(db) = mesh.blendshape_shape_descriptor_buffer.as_ref() else {
+        return Some(());
+    };
+    let extracted =
         extract_blendshape_offsets(raw, layout, &data.blendshape_buffers, data.vertex_count)?;
-    queue.write_buffer(bb.as_ref(), 0, &pack);
+    let sparse = padded_sparse_bytes(&extracted.sparse_deltas);
+    queue.write_buffer(sb.as_ref(), 0, &sparse);
+    queue.write_buffer(db.as_ref(), 0, &extracted.shape_descriptor_bytes);
     Some(())
 }
 
@@ -397,7 +432,7 @@ impl GpuMesh {
         let bone_skin =
             upload_bone_and_skin_buffers(device, raw, data, layout, use_blendshapes, vc_usize)?;
 
-        let (blendshape_buffer, num_blendshapes) = upload_blendshape_buffer(
+        let blend_up = upload_blendshape_buffer(
             device,
             gpu_limits,
             raw,
@@ -406,6 +441,7 @@ impl GpuMesh {
             use_blendshapes,
             max_buf,
         );
+        let num_blendshapes = blend_up.num_blendshapes;
 
         let has_skeleton = data.bone_count > 0;
         let needs_blend_compute = num_blendshapes > 0;
@@ -420,7 +456,8 @@ impl GpuMesh {
             &core.ib,
             &derived,
             &bone_skin,
-            &blendshape_buffer,
+            &blend_up.sparse_buffer,
+            &blend_up.shape_descriptor_buffer,
             &deform,
         );
 
@@ -438,7 +475,9 @@ impl GpuMesh {
             bone_indices_buffer: bone_skin.bone_indices_buffer,
             bone_weights_vec4_buffer: bone_skin.bone_weights_vec4_buffer,
             bind_poses_buffer: bone_skin.bind_poses_buffer,
-            blendshape_buffer,
+            blendshape_sparse_buffer: blend_up.sparse_buffer,
+            blendshape_shape_descriptor_buffer: blend_up.shape_descriptor_buffer,
+            blendshape_sparse_ranges: blend_up.sparse_ranges,
             num_blendshapes,
             positions_buffer: derived.positions_buffer,
             normals_buffer: derived.normals_buffer,
@@ -497,7 +536,10 @@ impl GpuMesh {
             && self.bone_indices_buffer.is_none()
             && self.bone_weights_vec4_buffer.is_none()
             && self.bind_poses_buffer.is_none();
-        let no_gpu_blend = self.blendshape_buffer.is_none() && self.num_blendshapes == 0;
+        let no_gpu_blend = self.blendshape_sparse_buffer.is_none()
+            && self.blendshape_shape_descriptor_buffer.is_none()
+            && self.num_blendshapes == 0
+            && self.blendshape_sparse_ranges.is_empty();
 
         let data_static = data.bone_count == 0 && !use_blendshapes;
         let gpu_static =
@@ -517,8 +559,13 @@ impl GpuMesh {
             return false;
         }
 
-        if !blendshape_and_deform_buffers_match_for_in_place(self, data, use_blendshapes, vc_usize)
-        {
+        if !blendshape_and_deform_buffers_match_for_in_place(
+            self,
+            data,
+            layout,
+            raw,
+            use_blendshapes,
+        ) {
             return false;
         }
 
@@ -647,7 +694,9 @@ impl GpuMesh {
             bone_indices_buffer: self.bone_indices_buffer.clone(),
             bone_weights_vec4_buffer: self.bone_weights_vec4_buffer.clone(),
             bind_poses_buffer: self.bind_poses_buffer.clone(),
-            blendshape_buffer: self.blendshape_buffer.clone(),
+            blendshape_sparse_buffer: self.blendshape_sparse_buffer.clone(),
+            blendshape_shape_descriptor_buffer: self.blendshape_shape_descriptor_buffer.clone(),
+            blendshape_sparse_ranges: self.blendshape_sparse_ranges.clone(),
             num_blendshapes: self.num_blendshapes,
             positions_buffer: self.positions_buffer.clone(),
             normals_buffer: self.normals_buffer.clone(),

@@ -5,7 +5,9 @@ use std::sync::Arc;
 use glam::Mat4;
 use wgpu::util::DeviceExt;
 
-use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
+use crate::backend::mesh_deform::{
+    blendshape_sparse_buffers_fit_device, BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES,
+};
 use crate::gpu::GpuLimits;
 use crate::shared::MeshUploadData;
 
@@ -129,7 +131,8 @@ fn upload_positions_normals(
         Some((pb, nb)) => {
             let usage = wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::COPY_DST;
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC;
             let pbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("mesh {} positions_stream", data.asset_id)),
                 contents: &pb,
@@ -352,7 +355,29 @@ pub(super) fn upload_bone_and_skin_buffers(
     }
 }
 
-/// Packed blendshape buffer and shape count (zero when dropped or disabled).
+/// Sparse GPU buffers and CPU scatter ranges produced by `layout::extract_blendshape_offsets`.
+pub(super) struct BlendshapeBuffersUpload {
+    /// Storage buffer of packed sparse position deltas (padded when empty; see `BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES`).
+    pub sparse_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Storage buffer of per-shape `(first_entry, entry_count)` descriptor rows.
+    pub shape_descriptor_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Copy of descriptor rows for CPU-side scatter dispatch (mirrors [`super::gpu_mesh::GpuMesh::blendshape_sparse_ranges`]).
+    pub sparse_ranges: Vec<(u32, u32)>,
+    /// Logical blendshape slot count for weight indexing.
+    pub num_blendshapes: u32,
+}
+
+/// Pads sparse CPU bytes to at least [`BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES`] for `wgpu` buffers.
+pub(super) fn padded_sparse_bytes(sparse_deltas: &[u8]) -> Vec<u8> {
+    let mut v = sparse_deltas.to_vec();
+    let min = BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES as usize;
+    if v.len() < min {
+        v.resize(min, 0);
+    }
+    v
+}
+
+/// Builds sparse / descriptor GPU buffers (or empty upload when blendshapes are disabled).
 pub(super) fn upload_blendshape_buffer(
     device: &wgpu::Device,
     gpu_limits: &GpuLimits,
@@ -361,49 +386,66 @@ pub(super) fn upload_blendshape_buffer(
     layout: &MeshBufferLayout,
     use_blendshapes: bool,
     max_buf: u64,
-) -> (Option<Arc<wgpu::Buffer>>, u32) {
+) -> BlendshapeBuffersUpload {
     if !use_blendshapes {
-        return (None, 0);
+        return BlendshapeBuffersUpload {
+            sparse_buffer: None,
+            shape_descriptor_buffer: None,
+            sparse_ranges: Vec::new(),
+            num_blendshapes: 0,
+        };
     }
-    match extract_blendshape_offsets(raw, layout, &data.blendshape_buffers, data.vertex_count) {
-        Some((pack, n)) if !pack.is_empty() => {
-            let vc_u32 = data.vertex_count.max(0) as u32;
-            let n_u32 = n.max(0) as u32;
-            let pack_len = pack.len() as u64;
-            if pack_len > max_buf {
-                logger::warn!(
-                    "mesh {}: blendshapes dropped (packed size {} bytes exceeds device max_buffer_size {})",
-                    data.asset_id,
-                    pack_len,
-                    max_buf
-                );
-                return (None, 0);
-            }
-            if plan_blendshape_bind_chunks(
-                n_u32,
-                vc_u32,
-                gpu_limits.wgpu.max_storage_buffer_binding_size,
-                gpu_limits.wgpu.min_storage_buffer_offset_alignment,
-            )
-            .is_none()
-            {
-                logger::warn!(
-                    "mesh {}: blendshapes dropped ({} shapes × {} verts exceed binding limit {} or offset alignment)",
-                    data.asset_id,
-                    n_u32,
-                    vc_u32,
-                    gpu_limits.wgpu.max_storage_buffer_binding_size
-                );
-                return (None, 0);
-            }
-            let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("mesh {} blendshapes", data.asset_id)),
-                contents: &pack,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            (Some(Arc::new(buf)), n_u32)
-        }
-        _ => (None, 0),
+    let Some(pack) =
+        extract_blendshape_offsets(raw, layout, &data.blendshape_buffers, data.vertex_count)
+    else {
+        return BlendshapeBuffersUpload {
+            sparse_buffer: None,
+            shape_descriptor_buffer: None,
+            sparse_ranges: Vec::new(),
+            num_blendshapes: 0,
+        };
+    };
+
+    let n_u32 = pack.num_blendshapes.max(0) as u32;
+    if !blendshape_sparse_buffers_fit_device(
+        &pack,
+        max_buf,
+        gpu_limits.wgpu.max_storage_buffer_binding_size,
+    ) {
+        logger::warn!(
+            "mesh {}: blendshapes dropped (sparse or descriptor bytes exceed buffer / binding limits)",
+            data.asset_id
+        );
+        return BlendshapeBuffersUpload {
+            sparse_buffer: None,
+            shape_descriptor_buffer: None,
+            sparse_ranges: Vec::new(),
+            num_blendshapes: 0,
+        };
+    }
+
+    let sparse_bytes = padded_sparse_bytes(&pack.sparse_deltas);
+    let desc_bytes = pack.shape_descriptor_bytes.clone();
+
+    let sparse_label = format!("mesh {} blendshape_sparse", data.asset_id);
+    let sparse_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&sparse_label),
+        contents: &sparse_bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    let desc_label = format!("mesh {} blendshape_shape_desc", data.asset_id);
+    let desc_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&desc_label),
+        contents: &desc_bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+    });
+
+    BlendshapeBuffersUpload {
+        sparse_buffer: Some(Arc::new(sparse_buf)),
+        shape_descriptor_buffer: Some(Arc::new(desc_buf)),
+        sparse_ranges: pack.shape_ranges,
+        num_blendshapes: n_u32,
     }
 }
 
@@ -474,7 +516,8 @@ pub(super) fn resident_bytes_for_mesh_upload(
     core_ib: &wgpu::Buffer,
     derived: &DerivedStreams,
     bone_skin: &BoneSkinUpload,
-    blendshape_buffer: &Option<Arc<wgpu::Buffer>>,
+    blend_sparse: &Option<Arc<wgpu::Buffer>>,
+    blend_shape_desc: &Option<Arc<wgpu::Buffer>>,
     deform: &DeformOutputs,
 ) -> u64 {
     let mut n = core_vb.size() + core_ib.size();
@@ -491,7 +534,10 @@ pub(super) fn resident_bytes_for_mesh_upload(
         derived.uv0_buffer.as_ref(),
         derived.color_buffer.as_ref(),
     ]);
-    if let Some(ref b) = blendshape_buffer {
+    if let Some(ref b) = blend_sparse {
+        n += b.size();
+    }
+    if let Some(ref b) = blend_shape_desc {
         n += b.size();
     }
     n

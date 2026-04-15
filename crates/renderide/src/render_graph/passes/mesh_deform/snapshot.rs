@@ -14,7 +14,9 @@ pub(super) struct MeshDeformSnapshot {
     pub(super) has_skeleton: bool,
     pub(super) positions_buffer: Option<Arc<wgpu::Buffer>>,
     pub(super) normals_buffer: Option<Arc<wgpu::Buffer>>,
-    pub(super) blendshape_buffer: Option<Arc<wgpu::Buffer>>,
+    pub(super) blendshape_sparse_buffer: Option<Arc<wgpu::Buffer>>,
+    /// Per-shape `(first_entry, entry_count)` into [`Self::blendshape_sparse_buffer`] (scatter dispatch).
+    pub(super) blendshape_sparse_ranges: Vec<(u32, u32)>,
     pub(super) deform_temp_buffer: Option<Arc<wgpu::Buffer>>,
     pub(super) deformed_positions_buffer: Option<Arc<wgpu::Buffer>>,
     pub(super) deformed_normals_buffer: Option<Arc<wgpu::Buffer>>,
@@ -33,7 +35,8 @@ impl MeshDeformSnapshot {
             has_skeleton: m.has_skeleton,
             positions_buffer: m.positions_buffer.clone(),
             normals_buffer: m.normals_buffer.clone(),
-            blendshape_buffer: m.blendshape_buffer.clone(),
+            blendshape_sparse_buffer: m.blendshape_sparse_buffer.clone(),
+            blendshape_sparse_ranges: m.blendshape_sparse_ranges.clone(),
             deform_temp_buffer: m.deform_temp_buffer.clone(),
             deformed_positions_buffer: m.deformed_positions_buffer.clone(),
             deformed_normals_buffer: m.deformed_normals_buffer.clone(),
@@ -50,7 +53,10 @@ impl MeshDeformSnapshot {
 
 /// Returns whether blendshape compute should run for `m` (parity with deform encode).
 pub(super) fn deform_needs_blend_mesh(m: &GpuMesh) -> bool {
-    m.num_blendshapes > 0 && m.blendshape_buffer.is_some() && m.deform_temp_buffer.is_some()
+    m.num_blendshapes > 0
+        && m.blendshape_sparse_buffer.is_some()
+        && m.blendshape_sparse_ranges.len() == m.num_blendshapes as usize
+        && m.deform_temp_buffer.is_some()
 }
 
 /// Returns whether skinning compute should run for `m` (parity with deform encode).
@@ -79,7 +85,8 @@ pub(super) fn gpu_mesh_needs_deform_dispatch(
 /// Snapshot variant of [`deform_needs_blend_mesh`].
 pub(super) fn deform_needs_blend_snapshot(mesh: &MeshDeformSnapshot) -> bool {
     mesh.num_blendshapes > 0
-        && mesh.blendshape_buffer.is_some()
+        && mesh.blendshape_sparse_buffer.is_some()
+        && mesh.blendshape_sparse_ranges.len() == mesh.num_blendshapes as usize
         && mesh.deform_temp_buffer.is_some()
 }
 

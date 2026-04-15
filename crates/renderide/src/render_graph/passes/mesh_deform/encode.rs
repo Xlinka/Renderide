@@ -4,9 +4,8 @@ use std::num::NonZeroU64;
 
 use glam::Mat4;
 
-use crate::assets::mesh::BLENDSHAPE_OFFSET_GPU_STRIDE;
 use crate::backend::advance_slab_cursor;
-use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
+use crate::backend::mesh_deform::plan_blendshape_scatter_chunks;
 use crate::gpu::GpuLimits;
 use crate::render_graph::skinning_palette::build_skinning_palette;
 use crate::scene::RenderSpaceId;
@@ -49,7 +48,6 @@ pub(super) fn record_mesh_deform(
             pre,
             scratch,
             mesh,
-            deform_guard.wg,
             blend_weights,
             blend_weight_cursor,
         );
@@ -71,7 +69,7 @@ pub(super) fn record_mesh_deform(
             head_output_transform,
             bone_cursor,
             deform_guard.needs_blend,
-            deform_guard.wg,
+            deform_guard.skin_wg,
         );
     }
 }
@@ -80,7 +78,8 @@ pub(super) fn record_mesh_deform(
 struct DeformValidate {
     needs_blend: bool,
     needs_skin: bool,
-    wg: u32,
+    /// Workgroups for skinning (`mesh_skinning.wgsl`), one thread per vertex.
+    skin_wg: u32,
 }
 
 /// Returns `None` when there is no deform work or dispatch would exceed GPU limits.
@@ -101,11 +100,11 @@ fn validate_deform_preconditions(
         return None;
     }
 
-    let wg = workgroup_count(vc);
-    if !gpu_limits.compute_dispatch_fits(wg, 1, 1) {
+    let skin_wg = workgroup_count(vc);
+    if needs_skin && !gpu_limits.compute_dispatch_fits(skin_wg, 1, 1) {
         logger::warn!(
-            "mesh deform: compute dispatch {}×1×1 exceeds max_compute_workgroups_per_dimension ({})",
-            wg,
+            "mesh deform: skinning dispatch {}×1×1 exceeds max_compute_workgroups_per_dimension ({})",
+            skin_wg,
             gpu_limits.max_compute_workgroups_per_dimension()
         );
         return None;
@@ -114,11 +113,11 @@ fn validate_deform_preconditions(
     Some(DeformValidate {
         needs_blend,
         needs_skin,
-        wg,
+        skin_wg,
     })
 }
 
-/// Blendshape deltas compute: weight slab upload, chunked params, and dispatches.
+/// Sparse blendshape scatter: copy bind poses → temp, then one scatter dispatch per weighted shape chunk.
 #[allow(clippy::too_many_arguments)]
 fn record_blendshape_deform(
     queue: &wgpu::Queue,
@@ -128,7 +127,6 @@ fn record_blendshape_deform(
     pre: &crate::backend::mesh_deform::MeshPreprocessPipelines,
     scratch: &mut crate::backend::MeshDeformScratch,
     mesh: &MeshDeformSnapshot,
-    wg: u32,
     blend_weights: &[f32],
     blend_weight_cursor: &mut u64,
 ) {
@@ -138,7 +136,7 @@ fn record_blendshape_deform(
     let Some(ref temp) = mesh.deform_temp_buffer else {
         return;
     };
-    let Some(ref deltas) = mesh.blendshape_buffer else {
+    let Some(ref sparse) = mesh.blendshape_sparse_buffer else {
         return;
     };
     let vc = mesh.vertex_count;
@@ -146,6 +144,18 @@ fn record_blendshape_deform(
     if shape_count == 0 {
         return;
     }
+    if mesh.blendshape_sparse_ranges.len() != shape_count as usize {
+        logger::warn!(
+            "mesh deform: blendshape_sparse_ranges len {} != num_blendshapes {}",
+            mesh.blendshape_sparse_ranges.len(),
+            shape_count
+        );
+        return;
+    }
+
+    let copy_len = u64::from(vc).saturating_mul(16).max(16);
+    encoder.copy_buffer_to_buffer(positions.as_ref(), 0, temp.as_ref(), 0, copy_len);
+
     scratch.ensure_shape_weight_capacity(device, shape_count);
     let mut wbytes = vec![0u8; (shape_count as usize) * 4];
     for s in 0..shape_count as usize {
@@ -160,65 +170,55 @@ fn record_blendshape_deform(
     );
     queue.write_buffer(&scratch.blendshape_weights, *blend_weight_cursor, &wbytes);
 
-    let Some(chunks) = plan_blendshape_bind_chunks(
-        shape_count,
-        vc,
-        gpu_limits.wgpu.max_storage_buffer_binding_size,
-        gpu_limits.wgpu.min_storage_buffer_offset_alignment,
-    ) else {
-        logger::warn!(
-            "mesh deform: blendshape bind chunks unavailable (vertex_count={vc} shape_count={shape_count} max_bind={})",
-            gpu_limits.wgpu.max_storage_buffer_binding_size
-        );
-        return;
-    };
+    let max_wg = gpu_limits.max_compute_workgroups_per_dimension();
 
-    let stride = u64::from(vc) * u64::from(BLENDSHAPE_OFFSET_GPU_STRIDE as u32);
+    let mut packed_params: Vec<u8> = Vec::new();
+    let mut dispatch_wgs: Vec<u32> = Vec::new();
 
-    let mut packed_params = Vec::with_capacity(chunks.len() * 32);
-    for (chunk_i, (shape_start, chunk_shapes)) in chunks.iter().enumerate() {
-        let params = build_blend_params(vc, *chunk_shapes, *shape_start, chunk_i == 0);
-        packed_params.extend_from_slice(&params);
+    for s in 0..shape_count {
+        let w = blend_weights.get(s as usize).copied().unwrap_or(0.0);
+        if w == 0.0 {
+            continue;
+        }
+        let (first, cnt) = mesh.blendshape_sparse_ranges[s as usize];
+        if cnt == 0 {
+            continue;
+        }
+        for (sparse_base, sparse_count) in plan_blendshape_scatter_chunks(first, cnt, max_wg) {
+            let wg = workgroup_count(sparse_count);
+            if !gpu_limits.compute_dispatch_fits(wg, 1, 1) {
+                logger::warn!(
+                    "mesh deform: blendshape scatter dispatch {}×1×1 exceeds max_compute_workgroups_per_dimension ({})",
+                    wg,
+                    max_wg
+                );
+                return;
+            }
+            packed_params.extend_from_slice(&build_scatter_params(
+                vc,
+                s,
+                sparse_base,
+                sparse_count,
+            ));
+            dispatch_wgs.push(wg);
+        }
     }
+
+    if packed_params.is_empty() {
+        *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+        return;
+    }
+
     scratch.ensure_blendshape_params_staging(device, packed_params.len() as u64);
     queue.write_buffer(&scratch.blendshape_params_staging, 0, &packed_params);
 
-    dispatch_blendshape_compute_chunks(
-        device,
-        encoder,
-        pre,
-        scratch,
-        positions,
-        temp,
-        deltas,
-        &chunks,
-        stride,
-        wg,
-        *blend_weight_cursor,
-        weight_binding_len,
-    );
+    let Some(weight_size) = NonZeroU64::new(weight_binding_len) else {
+        *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+        return;
+    };
 
-    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
-}
-
-/// Staging → uniform copy, bind group per chunk, and blendshape compute dispatches.
-#[allow(clippy::too_many_arguments)]
-fn dispatch_blendshape_compute_chunks(
-    device: &wgpu::Device,
-    encoder: &mut wgpu::CommandEncoder,
-    pre: &crate::backend::mesh_deform::MeshPreprocessPipelines,
-    scratch: &crate::backend::MeshDeformScratch,
-    positions: &wgpu::Buffer,
-    temp: &wgpu::Buffer,
-    deltas: &wgpu::Buffer,
-    chunks: &[(u32, u32)],
-    stride: u64,
-    wg: u32,
-    blend_weight_cursor: u64,
-    weight_binding_len: u64,
-) {
-    for (chunk_i, (shape_start, chunk_shapes)) in chunks.iter().enumerate() {
-        let src_off = (chunk_i as u64).saturating_mul(32);
+    for (i, &scatter_wg) in dispatch_wgs.iter().enumerate() {
+        let src_off = (i as u64).saturating_mul(32);
         encoder.copy_buffer_to_buffer(
             &scratch.blendshape_params_staging,
             src_off,
@@ -227,18 +227,8 @@ fn dispatch_blendshape_compute_chunks(
             32,
         );
 
-        let offset = u64::from(*shape_start).saturating_mul(stride);
-        let size = u64::from(*chunk_shapes).saturating_mul(stride);
-        let Some(size_nz) = NonZeroU64::new(size) else {
-            continue;
-        };
-
-        let Some(weight_size) = NonZeroU64::new(weight_binding_len) else {
-            continue;
-        };
-
         let blend_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("blendshape_bg"),
+            label: Some("blendshape_scatter_bg"),
             layout: &pre.blendshape_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
@@ -247,39 +237,33 @@ fn dispatch_blendshape_compute_chunks(
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: positions.as_entire_binding(),
+                    resource: sparse.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: deltas,
-                        offset,
-                        size: Some(size_nz),
-                    }),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &scratch.blendshape_weights,
-                        offset: blend_weight_cursor,
+                        offset: *blend_weight_cursor,
                         size: Some(weight_size),
                     }),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 4,
+                    binding: 3,
                     resource: temp.as_entire_binding(),
                 },
             ],
         });
 
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some("blendshape"),
+            label: Some("blendshape_scatter"),
             timestamp_writes: None,
         });
         cpass.set_pipeline(&pre.blendshape_pipeline);
         cpass.set_bind_group(0, &blend_bg, &[]);
-        cpass.dispatch_workgroups(wg, 1, 1);
+        cpass.dispatch_workgroups(scatter_wg, 1, 1);
     }
+
+    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
 }
 
 /// Linear blend skinning compute after optional blendshape pass.
@@ -444,23 +428,21 @@ fn skinning_dispatch_with_uploaded_palette(
     cpass.dispatch_workgroups(wg, 1, 1);
 }
 
-fn workgroup_count(vertex_count: u32) -> u32 {
-    (vertex_count.saturating_add(63)) / 64
+fn workgroup_count(count: u32) -> u32 {
+    (count.saturating_add(63)) / 64
 }
 
 /// Encodes `source/compute/mesh_blendshape.wgsl` `Params` (32 bytes).
-fn build_blend_params(
+fn build_scatter_params(
     vertex_count: u32,
-    chunk_shape_count: u32,
-    weight_base: u32,
-    first_chunk: bool,
+    shape_index: u32,
+    sparse_base: u32,
+    sparse_count: u32,
 ) -> [u8; 32] {
     let mut o = [0u8; 32];
     o[0..4].copy_from_slice(&vertex_count.to_le_bytes());
-    o[4..8].copy_from_slice(&chunk_shape_count.to_le_bytes());
-    o[8..12].copy_from_slice(&vertex_count.to_le_bytes());
-    o[12..16].copy_from_slice(&weight_base.to_le_bytes());
-    let fc = u32::from(first_chunk);
-    o[16..20].copy_from_slice(&fc.to_le_bytes());
+    o[4..8].copy_from_slice(&shape_index.to_le_bytes());
+    o[8..12].copy_from_slice(&sparse_base.to_le_bytes());
+    o[12..16].copy_from_slice(&sparse_count.to_le_bytes());
     o
 }

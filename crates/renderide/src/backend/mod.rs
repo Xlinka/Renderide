@@ -40,9 +40,9 @@ pub use light_gpu::{
 };
 pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
 pub use mesh_deform::{
-    advance_slab_cursor, plan_blendshape_bind_chunks, write_per_draw_uniform_slab,
-    MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms, WgslMat3x3,
-    INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
+    advance_slab_cursor, blendshape_sparse_buffers_fit_device, plan_blendshape_scatter_chunks,
+    write_per_draw_uniform_slab, MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
+    WgslMat3x3, INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
 };
 pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
