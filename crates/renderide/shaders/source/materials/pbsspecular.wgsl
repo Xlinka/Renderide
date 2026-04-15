@@ -80,11 +80,14 @@ fn sample_normal_world(
     detail_mask: f32,
 ) -> vec3<f32> {
     let tbn = brdf::orthonormal_tbn(world_n);
-    var ts_n = nd::decode_ts_normal(textureSample(_BumpMap, _BumpMap_sampler, uv_main).xyz, mat._BumpScale);
+    var ts_n = nd::decode_ts_normal_with_placeholder(
+        textureSample(_BumpMap, _BumpMap_sampler, uv_main).xyz,
+        mat._BumpScale,
+    );
 
     if detail_mask > 0.001 {
         let detail_raw = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_det).xyz;
-        let ts_detail  = nd::decode_ts_normal(detail_raw, mat._DetailNormalMapScale);
+        let ts_detail = nd::decode_ts_normal_with_placeholder(detail_raw, mat._DetailNormalMapScale);
         ts_n = normalize(vec3<f32>(ts_n.xy + ts_detail.xy * detail_mask, ts_n.z));
     }
 
@@ -103,7 +106,7 @@ fn vs_main(
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
     let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+    let wn = normalize(d.normal_matrix * n.xyz);
 #ifdef MULTIVIEW
     var vp: mat4x4<f32>;
     if (view_idx == 0u) {

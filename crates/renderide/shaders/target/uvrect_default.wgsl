@@ -2,7 +2,8 @@ struct PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX {
     view_proj_left: mat4x4<f32>,
     view_proj_right: mat4x4<f32>,
     model: mat4x4<f32>,
-    _pad: array<vec4<f32>, 4>,
+    normal_matrix: mat3x3<f32>,
+    _pad: vec4<f32>,
 }
 
 struct FrameGlobalsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX {

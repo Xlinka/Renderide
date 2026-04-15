@@ -299,6 +299,7 @@ fn decode_bc3_to_rgba8(width: usize, height: usize, raw: &[u8]) -> Option<Vec<u8
             for i in 0..16 {
                 tile[i * 4 + 3] = alphas[i];
             }
+            swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
             for y in 0..4 {
                 for x in 0..4 {
                     let gx = bxi * 4 + x;
@@ -313,6 +314,40 @@ fn decode_bc3_to_rgba8(width: usize, height: usize, raw: &[u8]) -> Option<Vec<u8
         }
     }
     Some(out)
+}
+
+/// Resonite/Unity **BC3nm** (DXT5nm) packs tangent-space **X** in the **alpha** block and sets **red**
+/// to **1.0** in the color block (`Bitmap.PackNormalMap` → `(1, Y, Y, X)` per texel). After BC3 decode,
+/// PBS materials read tangent XY from the **RG** channels in WGSL, so **X** must be moved from **A→R**
+/// for correct lighting.
+///
+/// Detection (per **4×4** tile): skip **uniform opaque white** RGB (`R=G=B=255` everywhere) so BC3 UI
+/// cutouts are not turned cyan. Otherwise require every texel’s **R** ≥ [`BC3NM_R_CHANNEL_MIN`] (BC3 can
+/// round the constant 1.0 channel down slightly) and **G≈B** within [`BC3NM_GB_MAX_DELTA`] (duplicate Y
+/// can diverge across endpoints/indices). Then assign `R := A`, `A := 0xFF`.
+const BC3NM_R_CHANNEL_MIN: u8 = 250;
+const BC3NM_GB_MAX_DELTA: u8 = 8;
+
+fn swizzle_bc3nm_normal_map_tile_if_detected(tile: &mut [u8; 64]) {
+    let uniform_white_rgb =
+        (0..16).all(|i| tile[i * 4] == 255 && tile[i * 4 + 1] == 255 && tile[i * 4 + 2] == 255);
+    if uniform_white_rgb {
+        return;
+    }
+    let all_r_high = (0..16).all(|i| tile[i * 4] >= BC3NM_R_CHANNEL_MIN);
+    if !all_r_high {
+        return;
+    }
+    let gb_duplicate_y =
+        (0..16).all(|i| tile[i * 4 + 1].abs_diff(tile[i * 4 + 2]) <= BC3NM_GB_MAX_DELTA);
+    if !gb_duplicate_y {
+        return;
+    }
+    for i in 0..16 {
+        let a = tile[i * 4 + 3];
+        tile[i * 4] = a;
+        tile[i * 4 + 3] = 255;
+    }
 }
 
 fn flip_rgba_image_rows(buf: &mut [u8], width: usize, height: usize) {
@@ -400,5 +435,96 @@ mod tests {
         let raw = vec![0x00u8, 0xF8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let out = decode_mip_to_rgba8(TextureFormat::BC1, 1, 1, false, &raw).expect("ok");
         assert!(out[0] >= 250 && out[1] < 5 && out[2] < 5 && out[3] == 255);
+    }
+
+    #[test]
+    fn bc3nm_swizzle_moves_alpha_to_red_when_all_red_saturated() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 255;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 127;
+            tile[i * 4 + 3] = 42;
+        }
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        for i in 0..16 {
+            assert_eq!(tile[i * 4], 42, "texel {i}");
+            assert_eq!(tile[i * 4 + 1], 128);
+            assert_eq!(tile[i * 4 + 2], 127);
+            assert_eq!(tile[i * 4 + 3], 255);
+        }
+    }
+
+    #[test]
+    fn bc3nm_swizzle_applies_when_red_slightly_below_255_from_lossy_decode() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 252;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 126;
+            tile[i * 4 + 3] = 99;
+        }
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        for i in 0..16 {
+            assert_eq!(tile[i * 4], 99, "texel {i}");
+            assert_eq!(tile[i * 4 + 1], 128);
+            assert_eq!(tile[i * 4 + 2], 126);
+            assert_eq!(tile[i * 4 + 3], 255);
+        }
+    }
+
+    #[test]
+    fn bc3nm_swizzle_no_op_when_red_not_uniformly_saturated() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 255;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 127;
+            tile[i * 4 + 3] = 42;
+        }
+        tile[0] = 200;
+        let expected = tile;
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        assert_eq!(tile, expected);
+    }
+
+    #[test]
+    fn bc3nm_swizzle_no_op_when_g_and_b_diverge_beyond_tolerance() {
+        let mut tile = [0u8; 64];
+        for i in 0..16 {
+            tile[i * 4] = 255;
+            tile[i * 4 + 1] = 128;
+            tile[i * 4 + 2] = 100;
+            tile[i * 4 + 3] = 42;
+        }
+        let expected = tile;
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        assert_eq!(tile, expected);
+    }
+
+    #[test]
+    fn bc3nm_swizzle_all_white_rgba_unchanged_visual() {
+        let mut tile = [255u8; 64];
+        super::swizzle_bc3nm_normal_map_tile_if_detected(&mut tile);
+        assert_eq!(tile, [255u8; 64]);
+    }
+
+    #[test]
+    fn bc3_full_mip_decode_swizzles_when_tile_is_nm_packed() {
+        // One BC3 macroblock: alpha indices all 0 → alpha 50 per texel. BC1 duplicate red endpoints
+        // (`0xF800`) and zero indices → solid sRGB red (R=255) for all 16 texels → nm detection fires.
+        let raw = vec![
+            50u8, 50, 0, 0, 0, 0, 0, 0, // alpha: a0=a1=50; 48 index bits = 0
+            0x00, 0xF8, 0x00, 0xF8, 0x00, 0x00, 0x00, 0x00, // BC1: c0=c1=red, indices 0
+        ];
+        let out = decode_mip_to_rgba8(TextureFormat::BC3, 4, 4, false, &raw).expect("ok");
+        assert_eq!(out.len(), 4 * 4 * 4);
+        for px in out.chunks_exact(4) {
+            assert_eq!(
+                px[0], 50,
+                "R holds tangent X (was in alpha) after BC3nm swizzle"
+            );
+            assert_eq!(px[3], 255);
+        }
     }
 }

@@ -11,7 +11,9 @@ struct PerDrawUniforms {
     view_proj_left: mat4x4<f32>,
     view_proj_right: mat4x4<f32>,
     model: mat4x4<f32>,
-    _pad: array<vec4<f32>, 4>,
+    /// Inverse transpose of the upper 3×3 of `model` (correct normals under non-uniform scale).
+    normal_matrix: mat3x3<f32>,
+    _pad: vec4<f32>,
 }
 
 @group(2) @binding(0) var<storage, read> instances: array<PerDrawUniforms>;

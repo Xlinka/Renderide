@@ -63,7 +63,7 @@ fn vs_main(
 ) -> VertexOutput {
     let d = pd::get_draw(instance_index);
     let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
-    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+    let wn = normalize(d.normal_matrix * n.xyz);
 #ifdef MULTIVIEW
     var vp: mat4x4<f32>;
     if (view_idx == 0u) {
@@ -101,7 +101,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (mat._NORMALMAP > 0.99) {
         let uv_n = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
         let tbn = brdf::orthonormal_tbn(n);
-        let ts_n = nd::decode_ts_normal(
+        let ts_n = nd::decode_ts_normal_with_placeholder(
             textureSample(_NormalMap, _NormalMap_sampler, uv_n).xyz,
             mat._NormalScale,
         );

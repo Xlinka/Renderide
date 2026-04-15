@@ -2,7 +2,8 @@ struct PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX {
     view_proj_left: mat4x4<f32>,
     view_proj_right: mat4x4<f32>,
     model: mat4x4<f32>,
-    _pad: array<vec4<f32>, 4>,
+    normal_matrix: mat3x3<f32>,
+    _pad: vec4<f32>,
 }
 
 struct GpuLightX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX {
@@ -127,13 +128,18 @@ fn mask_luminance_mul_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOB
 }
 
 fn orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(n_2: vec3<f32>) -> mat3x3<f32> {
-    let up: vec3<f32> = select(vec3<f32>(0f, 1f, 0f), vec3<f32>(1f, 0f, 0f), (abs(n_2.y) > 0.99f));
-    let t: vec3<f32> = normalize(cross(up, n_2));
-    let b: vec3<f32> = cross(n_2, t);
-    return mat3x3<f32>(t, b, n_2);
+    let sign_: f32 = select(-1f, 1f, (n_2.z >= 0f));
+    let a: f32 = (-1f / (sign_ + n_2.z));
+    let b: f32 = ((n_2.x * n_2.y) * a);
+    let t: vec3<f32> = vec3<f32>((1f + (((sign_ * n_2.x) * n_2.x) * a)), (sign_ * b), (-(sign_) * n_2.x));
+    let bitan: vec3<f32> = vec3<f32>(b, (sign_ + ((n_2.y * n_2.y) * a)), -(n_2.y));
+    return mat3x3<f32>(normalize(t), normalize(bitan), n_2);
 }
 
-fn decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+fn decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
+    if all((raw > vec3<f32>(0.99f, 0.99f, 0.99f))) {
+        return vec3<f32>(0f, 0f, 1f);
+    }
     let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
     let z: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
     return normalize(vec3<f32>(nm_xy, z));
@@ -184,14 +190,14 @@ fn vs_main(@builtin(instance_index) instance_index: u32, @location(0) pos: vec4<
 
     let _e1: PerDrawUniformsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX = get_drawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGK4S7MRZGC5YX(instance_index);
     let world_p: vec4<f32> = (_e1.model * vec4<f32>(pos.xyz, 1f));
-    let wn: vec3<f32> = normalize((_e1.model * vec4<f32>(n.xyz, 0f)).xyz);
+    let wn: vec3<f32> = normalize((_e1.normal_matrix * n.xyz));
     let vp: mat4x4<f32> = _e1.view_proj_left;
     out.clip_pos = (vp * world_p);
     out.world_pos = world_p.xyz;
     out.world_n = wn;
     out.uv = uv;
-    let _e25: VertexOutput = out;
-    return _e25;
+    let _e22: VertexOutput = out;
+    return _e22;
 }
 
 @fragment 
@@ -214,7 +220,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let _e17: mat3x3<f32> = orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(_e16);
         let _e20: vec4<f32> = textureSample(_NormalMap, _NormalMap_sampler, uv_n);
         let _e24: f32 = mat._NormalScale;
-        let _e25: vec3<f32> = decode_ts_normalX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e20.xyz, _e24);
+        let _e25: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e20.xyz, _e24);
         n_1 = normalize((_e17 * _e25));
     }
     let _e30: vec4<f32> = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.camera_world_pos;
