@@ -6,6 +6,126 @@ use super::super::decode::{decode_mip_to_rgba8, needs_rgba8_decode_before_upload
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_dimensions_at_level_3d};
 use super::mip_write_common::{is_rgba8_family, write_texture3d_volume_mip};
 
+/// Host mip dimensions, flat payload slice, and slice/volume byte sizes for one 3D level.
+type Texture3dMipPayload<'a> = (u32, u32, u32, &'a [u8], usize, usize);
+
+/// Byte offset in a tight mip chain for `level` (sum of prior level volumes).
+fn texture3d_chain_byte_offset_to_level(
+    base_w: u32,
+    base_h: u32,
+    base_d: u32,
+    level: u32,
+    format: crate::shared::TextureFormat,
+    asset_id: i32,
+) -> Result<usize, String> {
+    let mut offset = 0usize;
+    for l in 0..level {
+        let (lw, lh, ld) = mip_dimensions_at_level_3d(base_w, base_h, base_d, l);
+        let slice = mip_byte_len(format, lw, lh).ok_or_else(|| {
+            format!(
+                "texture3d {}: mip byte size unsupported for {:?}",
+                asset_id, format
+            )
+        })? as usize;
+        let vol = slice
+            .checked_mul(ld as usize)
+            .ok_or_else(|| "texture3d offset overflow".to_string())?;
+        offset = offset
+            .checked_add(vol)
+            .ok_or_else(|| "texture3d offset overflow".to_string())?;
+    }
+    Ok(offset)
+}
+
+/// Host payload subslice for one 3D mip level (full volume), with flat sizes for decode/upload.
+fn texture3d_mip_volume_payload_slice<'a>(
+    base_w: u32,
+    base_h: u32,
+    base_d: u32,
+    level: u32,
+    fmt: &SetTexture3DFormat,
+    upload: &SetTexture3DData,
+    payload: &'a [u8],
+) -> Result<Texture3dMipPayload<'a>, String> {
+    let (w, h, d) = mip_dimensions_at_level_3d(base_w, base_h, base_d, level);
+
+    let offset = texture3d_chain_byte_offset_to_level(
+        base_w,
+        base_h,
+        base_d,
+        level,
+        fmt.format,
+        upload.asset_id,
+    )?;
+
+    let slice_bytes = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
+        format!(
+            "texture3d {}: mip byte size unsupported for {:?}",
+            upload.asset_id, fmt.format
+        )
+    })? as usize;
+    let vol_bytes = slice_bytes
+        .checked_mul(d as usize)
+        .ok_or_else(|| "texture3d volume bytes overflow".to_string())?;
+
+    let mip_src = payload.get(offset..offset + vol_bytes).ok_or_else(|| {
+        format!(
+            "texture3d {}: mip {level} slice out of range (offset {offset} len {vol_bytes} payload {})",
+            upload.asset_id,
+            payload.len()
+        )
+    })?;
+    Ok((w, h, d, mip_src, slice_bytes, vol_bytes))
+}
+
+/// Prepares decoded RGBA8 slab or passes raw host bytes through for 3D volume upload.
+#[allow(clippy::too_many_arguments)]
+fn texture3d_mip_to_upload_pixels<'a>(
+    fmt: &SetTexture3DFormat,
+    wgpu_format: wgpu::TextureFormat,
+    w: u32,
+    h: u32,
+    d: u32,
+    level: u32,
+    slice_bytes: usize,
+    vol_bytes: usize,
+    upload: &SetTexture3DData,
+    mip_src: &'a [u8],
+) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+    let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
+        if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
+            let mut out = Vec::with_capacity(vol_bytes);
+            let mut z_off = 0usize;
+            for _z in 0..d {
+                let slice_raw = mip_src
+                    .get(z_off..z_off + slice_bytes)
+                    .ok_or_else(|| "texture3d slice bounds".to_string())?;
+                let decoded =
+                    decode_mip_to_rgba8(fmt.format, w, h, false, slice_raw).ok_or_else(|| {
+                        format!(
+                            "texture3d {}: RGBA decode failed mip {level}",
+                            upload.asset_id
+                        )
+                    })?;
+                out.extend_from_slice(&decoded);
+                z_off += slice_bytes;
+            }
+            std::borrow::Cow::Owned(out)
+        } else {
+            std::borrow::Cow::Borrowed(mip_src)
+        }
+    } else {
+        if needs_rgba8_decode_before_upload(fmt.format) {
+            return Err(format!(
+                "texture3d {}: host {:?} must decode to RGBA but GPU format is {:?}",
+                upload.asset_id, fmt.format, wgpu_format
+            ));
+        }
+        std::borrow::Cow::Borrowed(mip_src)
+    };
+    Ok(pixels)
+}
+
 /// Incremental 3D mip upload: one mip level per [`Texture3dMipChainUploader::upload_next_mip`] call.
 #[derive(Debug)]
 pub struct Texture3dMipChainUploader {
@@ -118,77 +238,28 @@ impl Texture3dMipChainUploader {
             });
         }
 
-        let (w, h, d) = mip_dimensions_at_level_3d(self.base_w, self.base_h, self.base_d, level);
+        let (w, h, d, mip_src, slice_bytes, vol_bytes) = texture3d_mip_volume_payload_slice(
+            self.base_w,
+            self.base_h,
+            self.base_d,
+            level,
+            fmt,
+            upload,
+            payload,
+        )?;
 
-        let mut offset = 0usize;
-        for l in 0..level {
-            let (lw, lh, ld) = mip_dimensions_at_level_3d(self.base_w, self.base_h, self.base_d, l);
-            let slice = mip_byte_len(fmt.format, lw, lh).ok_or_else(|| {
-                format!(
-                    "texture3d {}: mip byte size unsupported for {:?}",
-                    upload.asset_id, fmt.format
-                )
-            })? as usize;
-            let vol = slice
-                .checked_mul(ld as usize)
-                .ok_or_else(|| "texture3d offset overflow".to_string())?;
-            offset = offset
-                .checked_add(vol)
-                .ok_or_else(|| "texture3d offset overflow".to_string())?;
-        }
-
-        let slice_bytes = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
-            format!(
-                "texture3d {}: mip byte size unsupported for {:?}",
-                upload.asset_id, fmt.format
-            )
-        })? as usize;
-        let vol_bytes = slice_bytes
-            .checked_mul(d as usize)
-            .ok_or_else(|| "texture3d volume bytes overflow".to_string())?;
-
-        let mip_src = payload
-            .get(offset..offset + vol_bytes)
-            .ok_or_else(|| {
-                format!(
-                    "texture3d {}: mip {level} slice out of range (offset {offset} len {vol_bytes} payload {})",
-                    upload.asset_id,
-                    payload.len()
-                )
-            })?;
-
-        let pixels: std::borrow::Cow<'_, [u8]> = if is_rgba8_family(wgpu_format) {
-            if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format)
-            {
-                let mut out = Vec::with_capacity(vol_bytes);
-                let mut z_off = 0usize;
-                for _z in 0..d {
-                    let slice_raw = mip_src
-                        .get(z_off..z_off + slice_bytes)
-                        .ok_or_else(|| "texture3d slice bounds".to_string())?;
-                    let decoded = decode_mip_to_rgba8(fmt.format, w, h, false, slice_raw)
-                        .ok_or_else(|| {
-                            format!(
-                                "texture3d {}: RGBA decode failed mip {level}",
-                                upload.asset_id
-                            )
-                        })?;
-                    out.extend_from_slice(&decoded);
-                    z_off += slice_bytes;
-                }
-                std::borrow::Cow::Owned(out)
-            } else {
-                std::borrow::Cow::Borrowed(mip_src)
-            }
-        } else {
-            if needs_rgba8_decode_before_upload(fmt.format) {
-                return Err(format!(
-                    "texture3d {}: host {:?} must decode to RGBA but GPU format is {:?}",
-                    upload.asset_id, fmt.format, wgpu_format
-                ));
-            }
-            std::borrow::Cow::Borrowed(mip_src)
-        };
+        let pixels = texture3d_mip_to_upload_pixels(
+            fmt,
+            wgpu_format,
+            w,
+            h,
+            d,
+            level,
+            slice_bytes,
+            vol_bytes,
+            upload,
+            mip_src,
+        )?;
 
         write_texture3d_volume_mip(queue, texture, level, w, h, d, wgpu_format, pixels.as_ref())?;
 

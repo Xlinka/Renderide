@@ -110,6 +110,113 @@ fn layout_entry_for_storage(
     })
 }
 
+/// Maps a WGSL `texture_*` [`ImageClass`] to the corresponding [`wgpu::TextureSampleType`].
+fn texture_sample_type_for_image_class(
+    class: &ImageClass,
+    group: u32,
+    binding: u32,
+) -> Result<wgpu::TextureSampleType, ReflectError> {
+    match class {
+        ImageClass::Sampled { kind, multi } => {
+            if *multi {
+                return Err(ReflectError::UnsupportedBinding {
+                    group,
+                    binding,
+                    reason: "multisampled textures not supported yet".into(),
+                });
+            }
+            match kind {
+                ScalarKind::Float => Ok(wgpu::TextureSampleType::Float { filterable: true }),
+                ScalarKind::Sint => Ok(wgpu::TextureSampleType::Sint),
+                ScalarKind::Uint => Ok(wgpu::TextureSampleType::Uint),
+                ScalarKind::Bool => Err(ReflectError::UnsupportedBinding {
+                    group,
+                    binding,
+                    reason: "bool texture sample".into(),
+                }),
+                ScalarKind::AbstractInt | ScalarKind::AbstractFloat => {
+                    Err(ReflectError::UnsupportedBinding {
+                        group,
+                        binding,
+                        reason: "abstract texture sample".into(),
+                    })
+                }
+            }
+        }
+        ImageClass::Depth { multi } => {
+            if *multi {
+                return Err(ReflectError::UnsupportedBinding {
+                    group,
+                    binding,
+                    reason: "multisampled depth not supported yet".into(),
+                });
+            }
+            Ok(wgpu::TextureSampleType::Depth)
+        }
+        ImageClass::Storage { .. } | ImageClass::External => {
+            Err(ReflectError::UnsupportedBinding {
+                group,
+                binding,
+                reason: "storage/external images not supported yet".into(),
+            })
+        }
+    }
+}
+
+/// Layout entry for a WGSL `texture_2d` / `texture_depth_2d` binding (non-array, D2 only).
+fn layout_entry_for_sampled_image(
+    dim: &ImageDimension,
+    arrayed: bool,
+    class: &ImageClass,
+    group: u32,
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> Result<wgpu::BindGroupLayoutEntry, ReflectError> {
+    if arrayed {
+        return Err(ReflectError::UnsupportedBinding {
+            group,
+            binding,
+            reason: "arrayed images not supported yet".into(),
+        });
+    }
+    if *dim != ImageDimension::D2 {
+        return Err(ReflectError::UnsupportedBinding {
+            group,
+            binding,
+            reason: "only 2D textures supported".into(),
+        });
+    }
+    let sample_type = texture_sample_type_for_image_class(class, group, binding)?;
+    Ok(wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: wgpu::BindingType::Texture {
+            sample_type,
+            view_dimension: wgpu::TextureViewDimension::D2,
+            multisampled: false,
+        },
+        count: None,
+    })
+}
+
+/// Layout entry for a WGSL `sampler` / `sampler_comparison` binding.
+fn layout_entry_for_sampler_handle(
+    comparison: bool,
+    binding: u32,
+    visibility: wgpu::ShaderStages,
+) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility,
+        ty: if comparison {
+            wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)
+        } else {
+            wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
+        },
+        count: None,
+    }
+}
+
 /// Texture or sampler handle for sampled bindings.
 fn layout_entry_for_handle(
     module: &Module,
@@ -124,89 +231,12 @@ fn layout_entry_for_handle(
             dim,
             arrayed,
             class,
-        } => {
-            if *arrayed {
-                return Err(ReflectError::UnsupportedBinding {
-                    group,
-                    binding,
-                    reason: "arrayed images not supported yet".into(),
-                });
-            }
-            if *dim != ImageDimension::D2 {
-                return Err(ReflectError::UnsupportedBinding {
-                    group,
-                    binding,
-                    reason: "only 2D textures supported".into(),
-                });
-            }
-            let sample_type = match class {
-                ImageClass::Sampled { kind, multi } => {
-                    if *multi {
-                        return Err(ReflectError::UnsupportedBinding {
-                            group,
-                            binding,
-                            reason: "multisampled textures not supported yet".into(),
-                        });
-                    }
-                    match kind {
-                        ScalarKind::Float => wgpu::TextureSampleType::Float { filterable: true },
-                        ScalarKind::Sint => wgpu::TextureSampleType::Sint,
-                        ScalarKind::Uint => wgpu::TextureSampleType::Uint,
-                        ScalarKind::Bool => {
-                            return Err(ReflectError::UnsupportedBinding {
-                                group,
-                                binding,
-                                reason: "bool texture sample".into(),
-                            });
-                        }
-                        ScalarKind::AbstractInt | ScalarKind::AbstractFloat => {
-                            return Err(ReflectError::UnsupportedBinding {
-                                group,
-                                binding,
-                                reason: "abstract texture sample".into(),
-                            });
-                        }
-                    }
-                }
-                ImageClass::Depth { multi } => {
-                    if *multi {
-                        return Err(ReflectError::UnsupportedBinding {
-                            group,
-                            binding,
-                            reason: "multisampled depth not supported yet".into(),
-                        });
-                    }
-                    wgpu::TextureSampleType::Depth
-                }
-                ImageClass::Storage { .. } | ImageClass::External => {
-                    return Err(ReflectError::UnsupportedBinding {
-                        group,
-                        binding,
-                        reason: "storage/external images not supported yet".into(),
-                    });
-                }
-            };
-            Ok(wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility,
-                ty: wgpu::BindingType::Texture {
-                    sample_type,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            })
-        }
-        TypeInner::Sampler { comparison } => Ok(wgpu::BindGroupLayoutEntry {
+        } => layout_entry_for_sampled_image(dim, *arrayed, class, group, binding, visibility),
+        TypeInner::Sampler { comparison } => Ok(layout_entry_for_sampler_handle(
+            *comparison,
             binding,
             visibility,
-            ty: if *comparison {
-                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison)
-            } else {
-                wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
-            },
-            count: None,
-        }),
+        )),
         _ => Err(ReflectError::UnsupportedBinding {
             group,
             binding,

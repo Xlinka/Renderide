@@ -2,6 +2,133 @@
 
 use crate::shared::TextureFormat;
 
+/// Applies [`flip_rgba_image_rows`] when `flip_y` (host top-down vs GPU bottom-up).
+#[inline]
+fn apply_optional_rgba_vertical_flip(
+    mut rgba: Vec<u8>,
+    width: usize,
+    height: usize,
+    flip_y: bool,
+) -> Vec<u8> {
+    if flip_y {
+        flip_rgba_image_rows(&mut rgba, width, height);
+    }
+    rgba
+}
+
+/// Expands tight RGB24 texels to RGBA8 (alpha 255).
+fn decode_rgb24_mip_to_rgba8(w: usize, h: usize, raw: &[u8]) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    let need = count.checked_mul(3)?;
+    if raw.len() < need {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count * 4);
+    for p in raw[..need].chunks_exact(3) {
+        out.extend_from_slice(&[p[0], p[1], p[2], 255]);
+    }
+    Some(out)
+}
+
+/// Copies tight RGBA32 bytes (no swizzle).
+fn decode_rgba32_mip_copy(w: usize, h: usize, raw: &[u8]) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    let need = count.checked_mul(4)?;
+    if raw.len() < need {
+        return None;
+    }
+    Some(raw[..need].to_vec())
+}
+
+/// Unpacks ARGB32 (Windows-style) to RGBA8.
+fn decode_argb32_mip_to_rgba8(w: usize, h: usize, raw: &[u8]) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    let need = count.checked_mul(4)?;
+    if raw.len() < need {
+        return None;
+    }
+    let mut out = Vec::with_capacity(need);
+    for p in raw[..need].chunks_exact(4) {
+        out.extend_from_slice(&[p[1], p[2], p[3], p[0]]);
+    }
+    Some(out)
+}
+
+/// Swizzles BGRA32 to RGBA8.
+fn decode_bgra32_mip_to_rgba8(w: usize, h: usize, raw: &[u8]) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    let need = count.checked_mul(4)?;
+    if raw.len() < need {
+        return None;
+    }
+    let mut out = Vec::with_capacity(need);
+    for p in raw[..need].chunks_exact(4) {
+        out.push(p[2]);
+        out.push(p[1]);
+        out.push(p[0]);
+        out.push(p[3]);
+    }
+    Some(out)
+}
+
+/// Expands grayscale or alpha-only 8-bit mips to RGBA8.
+fn decode_r8_or_alpha8_mip_to_rgba8(
+    format: TextureFormat,
+    w: usize,
+    h: usize,
+    raw: &[u8],
+) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    if raw.len() < count {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count * 4);
+    if format == TextureFormat::R8 {
+        for &g in &raw[..count] {
+            out.extend_from_slice(&[g, g, g, 255]);
+        }
+    } else {
+        for &a in &raw[..count] {
+            out.extend_from_slice(&[255, 255, 255, a]);
+        }
+    }
+    Some(out)
+}
+
+/// Decodes 565 packed rgb or bgr swizzle to RGBA8.
+fn decode_rgb565_family_mip_to_rgba8(
+    format: TextureFormat,
+    w: usize,
+    h: usize,
+    raw: &[u8],
+) -> Option<Vec<u8>> {
+    let count = w.checked_mul(h)?;
+    let need = count.checked_mul(2)?;
+    if raw.len() < need {
+        return None;
+    }
+    let mut out = Vec::with_capacity(count * 4);
+    for chunk in raw[..need].chunks_exact(2) {
+        let v = u16::from_le_bytes([chunk[0], chunk[1]]);
+        let (r5, g6, b5) = if format == TextureFormat::BGR565 {
+            let b5 = (v >> 11) & 0x1f;
+            let g6 = (v >> 5) & 0x3f;
+            let r5 = v & 0x1f;
+            (r5, g6, b5)
+        } else {
+            let r5 = (v >> 11) & 0x1f;
+            let g6 = (v >> 5) & 0x3f;
+            let b5 = v & 0x1f;
+            (r5, g6, b5)
+        };
+        let r = ((u32::from(r5) * 255 + 15) / 31) as u8;
+        let g = ((u32::from(g6) * 255 + 31) / 63) as u8;
+        let b = ((u32::from(b5) * 255 + 15) / 31) as u8;
+        out.extend_from_slice(&[r, g, b, 255]);
+    }
+    Some(out)
+}
+
 /// Decodes one mip level from `raw` to tightly packed RGBA8 (row-major, top-first after optional flip).
 ///
 /// Used as a fallback for missing compression features or packed formats without a direct `wgpu` layout match.
@@ -14,127 +141,23 @@ pub fn decode_mip_to_rgba8(
 ) -> Option<Vec<u8>> {
     let w = width as usize;
     let h = height as usize;
-    let count = w.checked_mul(h)?;
-    match format {
-        TextureFormat::RGB24 => {
-            let need = count.checked_mul(3)?;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = Vec::with_capacity(count * 4);
-            for p in raw[..need].chunks_exact(3) {
-                out.extend_from_slice(&[p[0], p[1], p[2], 255]);
-            }
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
-        }
-        TextureFormat::RGBA32 => {
-            let need = count.checked_mul(4)?;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = raw[..need].to_vec();
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
-        }
-        TextureFormat::ARGB32 => {
-            let need = count.checked_mul(4)?;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = Vec::with_capacity(need);
-            for p in raw[..need].chunks_exact(4) {
-                out.extend_from_slice(&[p[1], p[2], p[3], p[0]]);
-            }
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
-        }
-        TextureFormat::BGRA32 => {
-            let need = count.checked_mul(4)?;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = Vec::with_capacity(need);
-            for p in raw[..need].chunks_exact(4) {
-                out.push(p[2]);
-                out.push(p[1]);
-                out.push(p[0]);
-                out.push(p[3]);
-            }
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
-        }
+    w.checked_mul(h)?;
+    let rgba = match format {
+        TextureFormat::RGB24 => decode_rgb24_mip_to_rgba8(w, h, raw)?,
+        TextureFormat::RGBA32 => decode_rgba32_mip_copy(w, h, raw)?,
+        TextureFormat::ARGB32 => decode_argb32_mip_to_rgba8(w, h, raw)?,
+        TextureFormat::BGRA32 => decode_bgra32_mip_to_rgba8(w, h, raw)?,
         TextureFormat::R8 | TextureFormat::Alpha8 => {
-            let need = count;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = Vec::with_capacity(count * 4);
-            if format == TextureFormat::R8 {
-                for &g in &raw[..need] {
-                    out.extend_from_slice(&[g, g, g, 255]);
-                }
-            } else {
-                for &a in &raw[..need] {
-                    out.extend_from_slice(&[255, 255, 255, a]);
-                }
-            }
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
+            decode_r8_or_alpha8_mip_to_rgba8(format, w, h, raw)?
         }
         TextureFormat::RGB565 | TextureFormat::BGR565 => {
-            let need = count.checked_mul(2)?;
-            if raw.len() < need {
-                return None;
-            }
-            let mut out = Vec::with_capacity(count * 4);
-            for chunk in raw[..need].chunks_exact(2) {
-                let v = u16::from_le_bytes([chunk[0], chunk[1]]);
-                let (r5, g6, b5) = if format == TextureFormat::BGR565 {
-                    let b5 = (v >> 11) & 0x1f;
-                    let g6 = (v >> 5) & 0x3f;
-                    let r5 = v & 0x1f;
-                    (r5, g6, b5)
-                } else {
-                    let r5 = (v >> 11) & 0x1f;
-                    let g6 = (v >> 5) & 0x3f;
-                    let b5 = v & 0x1f;
-                    (r5, g6, b5)
-                };
-                let r = ((u32::from(r5) * 255 + 15) / 31) as u8;
-                let g = ((u32::from(g6) * 255 + 31) / 63) as u8;
-                let b = ((u32::from(b5) * 255 + 15) / 31) as u8;
-                out.extend_from_slice(&[r, g, b, 255]);
-            }
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            Some(out)
+            decode_rgb565_family_mip_to_rgba8(format, w, h, raw)?
         }
-        TextureFormat::BC1 => decode_bc1_to_rgba8(w, h, raw).map(|mut out| {
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            out
-        }),
-        TextureFormat::BC3 => decode_bc3_to_rgba8(w, h, raw).map(|mut out| {
-            if flip_y {
-                flip_rgba_image_rows(&mut out, w, h);
-            }
-            out
-        }),
-        _ => None,
-    }
+        TextureFormat::BC1 => decode_bc1_to_rgba8(w, h, raw)?,
+        TextureFormat::BC3 => decode_bc3_to_rgba8(w, h, raw)?,
+        _ => return None,
+    };
+    Some(apply_optional_rgba_vertical_flip(rgba, w, h, flip_y))
 }
 
 /// Returns true if host packing differs from tight RGBA8 used by `wgpu::TextureFormat::Rgba8Unorm`.

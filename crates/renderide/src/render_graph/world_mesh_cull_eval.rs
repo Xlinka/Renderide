@@ -20,8 +20,83 @@ use super::hi_z_view_proj_matrices;
 use super::mesh_fully_occluded_in_hiz;
 use super::skinning_palette::build_skinning_palette;
 use super::stereo_hiz_keeps_draw;
-use super::world_mesh_cull::{HiZTemporalState, WorldMeshCullInput};
+use super::world_mesh_cull::{HiZTemporalState, WorldMeshCullInput, WorldMeshCullProjParams};
 use super::HiZCullData;
+
+/// Frustum acceptance for one world AABB using the same stereo / overlay rules as the forward pass.
+fn cpu_cull_frustum_visible(
+    proj: &WorldMeshCullProjParams,
+    is_overlay: bool,
+    view: Mat4,
+    wmin: Vec3,
+    wmax: Vec3,
+) -> bool {
+    if let Some((sl, sr)) = proj.vr_stereo {
+        if is_overlay {
+            let vp = proj.overlay_proj * view;
+            world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax)
+        } else {
+            world_aabb_visible_in_homogeneous_clip(sl, wmin, wmax)
+                || world_aabb_visible_in_homogeneous_clip(sr, wmin, wmax)
+        }
+    } else {
+        let base_proj = if is_overlay {
+            proj.overlay_proj
+        } else {
+            proj.world_proj
+        };
+        let vp = base_proj * view;
+        world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax)
+    }
+}
+
+/// Returns `true` when the draw should be **culled** by Hi-Z (fully occluded).
+fn cpu_cull_hi_z_should_cull(
+    space_id: RenderSpaceId,
+    wmin: Vec3,
+    wmax: Vec3,
+    culling: &WorldMeshCullInput<'_>,
+) -> bool {
+    let Some(hi) = &culling.hi_z else {
+        return false;
+    };
+    let Some(temporal) = &culling.hi_z_temporal else {
+        return false;
+    };
+    if !hi_z_snapshot_matches_temporal(hi, temporal) {
+        return false;
+    }
+    let Some(prev_view) = temporal.prev_view_by_space.get(&space_id).copied() else {
+        return false;
+    };
+
+    let passes_hiz = match hi {
+        HiZCullData::Desktop(ref snap) => {
+            if temporal.prev_cull.vr_stereo.is_some() {
+                true
+            } else {
+                let vps = hi_z_view_proj_matrices(&temporal.prev_cull, prev_view, false);
+                match vps.first().copied() {
+                    None => true,
+                    Some(vp) => !mesh_fully_occluded_in_hiz(snap, vp, wmin, wmax),
+                }
+            }
+        }
+        HiZCullData::Stereo {
+            ref left,
+            ref right,
+        } => match temporal.prev_cull.vr_stereo {
+            None => true,
+            Some((sl, sr)) => {
+                let oc_l = mesh_fully_occluded_in_hiz(left, sl, wmin, wmax);
+                let oc_r = mesh_fully_occluded_in_hiz(right, sr, wmin, wmax);
+                stereo_hiz_keeps_draw(oc_l, oc_r)
+            }
+        },
+    };
+
+    !passes_hiz
+}
 
 /// World-space bounds and rigid transform for a single CPU cull evaluation.
 #[derive(Clone, Copy)]
@@ -148,70 +223,15 @@ pub(crate) fn mesh_draw_passes_cpu_cull(
         .unwrap_or_else(|| view_matrix_for_world_mesh_render_space(scene, space));
     let proj = &culling.proj;
 
-    let passes_frustum = if let Some((sl, sr)) = proj.vr_stereo {
-        if is_overlay {
-            let vp = proj.overlay_proj * view;
-            world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax)
-        } else {
-            world_aabb_visible_in_homogeneous_clip(sl, wmin, wmax)
-                || world_aabb_visible_in_homogeneous_clip(sr, wmin, wmax)
-        }
-    } else {
-        let base_proj = if is_overlay {
-            proj.overlay_proj
-        } else {
-            proj.world_proj
-        };
-        let vp = base_proj * view;
-        world_aabb_visible_in_homogeneous_clip(vp, wmin, wmax)
-    };
-
-    if !passes_frustum {
+    if !cpu_cull_frustum_visible(proj, is_overlay, view, wmin, wmax) {
         return Err(CpuCullFailure::Frustum);
     }
 
-    let Some(hi) = &culling.hi_z else {
-        return Ok(geom.rigid_world_matrix);
-    };
-    let Some(temporal) = &culling.hi_z_temporal else {
-        return Ok(geom.rigid_world_matrix);
-    };
     if is_overlay {
         return Ok(geom.rigid_world_matrix);
     }
-    if !hi_z_snapshot_matches_temporal(hi, temporal) {
-        return Ok(geom.rigid_world_matrix);
-    }
-    let Some(prev_view) = temporal.prev_view_by_space.get(&space_id).copied() else {
-        return Ok(geom.rigid_world_matrix);
-    };
 
-    let passes_hiz = match hi {
-        HiZCullData::Desktop(ref snap) => {
-            if temporal.prev_cull.vr_stereo.is_some() {
-                true
-            } else {
-                let vps = hi_z_view_proj_matrices(&temporal.prev_cull, prev_view, is_overlay);
-                match vps.first().copied() {
-                    None => true,
-                    Some(vp) => !mesh_fully_occluded_in_hiz(snap, vp, wmin, wmax),
-                }
-            }
-        }
-        HiZCullData::Stereo {
-            ref left,
-            ref right,
-        } => match temporal.prev_cull.vr_stereo {
-            None => true,
-            Some((sl, sr)) => {
-                let oc_l = mesh_fully_occluded_in_hiz(left, sl, wmin, wmax);
-                let oc_r = mesh_fully_occluded_in_hiz(right, sr, wmin, wmax);
-                stereo_hiz_keeps_draw(oc_l, oc_r)
-            }
-        },
-    };
-
-    if !passes_hiz {
+    if cpu_cull_hi_z_should_cull(space_id, wmin, wmax, culling) {
         return Err(CpuCullFailure::HiZ);
     }
     Ok(geom.rigid_world_matrix)

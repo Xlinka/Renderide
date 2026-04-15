@@ -14,7 +14,7 @@ use crate::render_graph::{
     collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
     host_camera_frame_for_render_texture, CameraTransformDrawFilter, ExternalOffscreenTargets,
     FrameView, FrameViewTarget, GraphExecuteError, HostCameraFrame, OcclusionViewId,
-    OutputDepthMode, WorldMeshCullInput, WorldMeshDrawCollectParallelism,
+    OutputDepthMode, WorldMeshCullInput, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
 };
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 
@@ -31,6 +31,41 @@ struct SecondaryRtPrepared {
     depth_view: Arc<wgpu::TextureView>,
     viewport: (u32, u32),
     color_format: wgpu::TextureFormat,
+}
+
+/// Secondary offscreen [`FrameView`]s with prefetched draws, then the main swapchain view.
+fn build_desktop_multi_view_frame_list<'a>(
+    prepared: &'a [SecondaryRtPrepared],
+    secondary_prefetched: Vec<WorldMeshDrawCollection>,
+    hc: HostCameraFrame,
+    main_collection: WorldMeshDrawCollection,
+) -> Vec<FrameView<'a>> {
+    let mut views: Vec<FrameView<'a>> = Vec::new();
+    for (prep, collection) in prepared.iter().zip(secondary_prefetched.into_iter()) {
+        let ext = ExternalOffscreenTargets {
+            render_texture_asset_id: prep.rt_id,
+            color_view: prep.color_view.as_ref(),
+            depth_texture: prep.depth_texture.as_ref(),
+            depth_view: prep.depth_view.as_ref(),
+            extent_px: prep.viewport,
+            color_format: prep.color_format,
+        };
+        views.push(FrameView {
+            host_camera: prep.host_camera,
+            target: FrameViewTarget::OffscreenRt(ext),
+            draw_filter: Some(prep.filter.clone()),
+            prefetched_world_mesh_draws: Some(collection),
+        });
+    }
+
+    views.push(FrameView {
+        host_camera: hc,
+        target: FrameViewTarget::Swapchain,
+        draw_filter: None,
+        prefetched_world_mesh_draws: Some(main_collection),
+    });
+
+    views
 }
 
 impl RendererRuntime {
@@ -221,30 +256,12 @@ impl RendererRuntime {
             None,
         );
 
-        let mut views: Vec<FrameView<'_>> = Vec::new();
-        for (prep, collection) in prepared.iter().zip(secondary_prefetched.into_iter()) {
-            let ext = ExternalOffscreenTargets {
-                render_texture_asset_id: prep.rt_id,
-                color_view: prep.color_view.as_ref(),
-                depth_texture: prep.depth_texture.as_ref(),
-                depth_view: prep.depth_view.as_ref(),
-                extent_px: prep.viewport,
-                color_format: prep.color_format,
-            };
-            views.push(FrameView {
-                host_camera: prep.host_camera,
-                target: FrameViewTarget::OffscreenRt(ext),
-                draw_filter: Some(prep.filter.clone()),
-                prefetched_world_mesh_draws: Some(collection),
-            });
-        }
-
-        views.push(FrameView {
-            host_camera: hc,
-            target: FrameViewTarget::Swapchain,
-            draw_filter: None,
-            prefetched_world_mesh_draws: Some(main_collection),
-        });
+        let views = build_desktop_multi_view_frame_list(
+            &prepared,
+            secondary_prefetched,
+            hc,
+            main_collection,
+        );
 
         self.backend
             .execute_multi_view_frame(gpu, window, scene_ref, views, true)

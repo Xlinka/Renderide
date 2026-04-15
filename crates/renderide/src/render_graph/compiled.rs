@@ -331,69 +331,90 @@ impl CompiledRenderGraph {
 
         // Per-view: separate encoder + submit so queue writes before each submit apply only to this view.
         for view in &mut views {
-            let prefetched = view.prefetched_world_mesh_draws.take();
-            let draw_filter = view.draw_filter.clone();
-            let host_camera = view.host_camera;
-            let target_is_swapchain = matches!(view.target, FrameViewTarget::Swapchain);
-            let resolved =
-                Self::resolve_view_from_target(&view.target, gpu, &backbuffer_view_holder)?;
-            let mut frame_params = frame_render_params_from_resolved(
+            self.execute_multi_view_submit_for_one_view(
+                view,
+                gpu,
                 scene,
                 backend,
-                &resolved,
-                host_camera,
-                draw_filter,
-                prefetched,
-            );
-            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render-graph-per-view"),
-            });
-            let mut ctx = RenderPassContext {
                 device,
                 gpu_limits,
-                queue: &queue_arc,
-                encoder: &mut encoder,
-                backbuffer: resolved.backbuffer,
-                depth_view: Some(resolved.depth_view),
-                frame: Some(&mut frame_params),
-            };
-            for pass in &mut self.passes {
-                if pass.phase() == PassPhase::PerView {
-                    pass.execute(&mut ctx)?;
-                }
-            }
-
-            if target_is_swapchain {
-                let Some(bb) = backbuffer_view_holder.as_ref() else {
-                    return Err(GraphExecuteError::MissingSwapchainView);
-                };
-                let viewport_px = gpu.surface_extent_px();
-                let mut queue_lock = queue_arc.lock().expect("queue mutex poisoned");
-                if let Err(e) = backend.encode_debug_hud_overlay(
-                    device,
-                    &queue_lock,
-                    &mut encoder,
-                    bb,
-                    viewport_px,
-                ) {
-                    logger::warn!("debug HUD overlay: {e}");
-                }
-                let cmd = encoder.finish();
-                gpu.submit_tracked_frame_commands_with_queue(&mut queue_lock, cmd);
-            } else {
-                let cmd = encoder.finish();
-                gpu.submit_tracked_frame_commands(cmd);
-            }
-
-            if Self::should_hi_z_submit_after_pass(&view.host_camera, &view.target) {
-                backend
-                    .occlusion
-                    .hi_z_on_frame_submitted_for_view(device, view.occlusion_view_id());
-            }
+                &queue_arc,
+                &backbuffer_view_holder,
+            )?;
         }
 
         if let Some(f) = frame {
             f.present();
+        }
+        Ok(())
+    }
+
+    /// One per-view encoder, per-view [`PassPhase::PerView`] passes, submit, and Hi-Z bookkeeping.
+    #[allow(clippy::too_many_arguments)]
+    fn execute_multi_view_submit_for_one_view(
+        &mut self,
+        view: &mut FrameView<'_>,
+        gpu: &mut GpuContext,
+        scene: &SceneCoordinator,
+        backend: &mut RenderBackend,
+        device: &wgpu::Device,
+        gpu_limits: &GpuLimits,
+        queue_arc: &Arc<Mutex<wgpu::Queue>>,
+        backbuffer_view_holder: &Option<wgpu::TextureView>,
+    ) -> Result<(), GraphExecuteError> {
+        let prefetched = view.prefetched_world_mesh_draws.take();
+        let draw_filter = view.draw_filter.clone();
+        let host_camera = view.host_camera;
+        let target_is_swapchain = matches!(view.target, FrameViewTarget::Swapchain);
+        let resolved = Self::resolve_view_from_target(&view.target, gpu, backbuffer_view_holder)?;
+        let mut frame_params = frame_render_params_from_resolved(
+            scene,
+            backend,
+            &resolved,
+            host_camera,
+            draw_filter,
+            prefetched,
+        );
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render-graph-per-view"),
+        });
+        let mut ctx = RenderPassContext {
+            device,
+            gpu_limits,
+            queue: queue_arc,
+            encoder: &mut encoder,
+            backbuffer: resolved.backbuffer,
+            depth_view: Some(resolved.depth_view),
+            frame: Some(&mut frame_params),
+        };
+        for pass in &mut self.passes {
+            if pass.phase() == PassPhase::PerView {
+                pass.execute(&mut ctx)?;
+            }
+        }
+
+        if target_is_swapchain {
+            let Some(bb) = backbuffer_view_holder.as_ref() else {
+                return Err(GraphExecuteError::MissingSwapchainView);
+            };
+            let viewport_px = gpu.surface_extent_px();
+            let mut queue_lock = queue_arc.lock().expect("queue mutex poisoned");
+            if let Err(e) =
+                backend.encode_debug_hud_overlay(device, &queue_lock, &mut encoder, bb, viewport_px)
+            {
+                logger::warn!("debug HUD overlay: {e}");
+            }
+            let cmd = encoder.finish();
+            gpu.submit_tracked_frame_commands_with_queue(&mut queue_lock, cmd);
+        } else {
+            let cmd = encoder.finish();
+            gpu.submit_tracked_frame_commands(cmd);
+        }
+
+        if Self::should_hi_z_submit_after_pass(&view.host_camera, &view.target) {
+            backend
+                .occlusion
+                .hi_z_on_frame_submitted_for_view(device, view.occlusion_view_id());
         }
         Ok(())
     }

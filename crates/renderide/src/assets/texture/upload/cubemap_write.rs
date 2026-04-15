@@ -9,6 +9,128 @@ use super::super::layout::{
 use super::mip_write_common::{is_rgba8_family, uncompressed_row_bytes, write_cubemap_face_mip};
 use super::write_mip_chain::MipChainAdvance;
 
+/// Host payload subslice for one cubemap face × mip after bias and length checks.
+#[allow(clippy::too_many_arguments)]
+fn resolve_cubemap_face_mip_slice<'a>(
+    face: usize,
+    mip_i: usize,
+    fmt: &SetCubemapFormat,
+    upload: &SetCubemapData,
+    w: u32,
+    h: u32,
+    start_bias: usize,
+    payload: &'a [u8],
+) -> Result<&'a [u8], String> {
+    let start_raw = upload.mip_starts[face][mip_i];
+    if start_raw < 0 {
+        return Err("negative mip_starts".into());
+    }
+    let start_abs = start_raw as usize;
+    if start_abs < start_bias {
+        return Err(format!(
+            "mip start {} is before descriptor offset {}",
+            start_abs, start_bias
+        ));
+    }
+    let start = start_abs - start_bias;
+
+    let host_len = mip_byte_len(fmt.format, w, h)
+        .ok_or_else(|| format!("cubemap mip byte size unsupported for {:?}", fmt.format))?
+        as usize;
+
+    payload
+        .get(start..start + host_len)
+        .ok_or_else(|| {
+            format!(
+                "cubemap {} face {} mip {mip_i}: slice out of range (start {start} len {host_len}, payload {})",
+                upload.asset_id, face, payload.len()
+            )
+        })
+}
+
+/// Converts host face mip bytes for [`write_cubemap_face_mip`] (decode, optional row flip).
+#[allow(clippy::too_many_arguments)]
+fn cubemap_mip_src_to_upload_pixels<'a>(
+    fmt: &SetCubemapFormat,
+    wgpu_format: wgpu::TextureFormat,
+    w: u32,
+    h: u32,
+    flip: bool,
+    mip_i: usize,
+    face: u32,
+    asset_id: i32,
+    mip_src: &'a [u8],
+) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+    let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
+        if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
+            std::borrow::Cow::Owned(
+                decode_mip_to_rgba8(fmt.format, w, h, flip, mip_src).ok_or_else(|| {
+                    format!("RGBA decode failed for cubemap face {face} mip {mip_i}",)
+                })?,
+            )
+        } else if flip {
+            let mut v = mip_src.to_vec();
+            let bpp = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
+                format!(
+                    "cubemap mip {mip_i}: RGBA8 upload len {} not divisible by {}×{} texels",
+                    v.len(),
+                    w,
+                    h
+                )
+            })?;
+            if bpp != 4 {
+                return Err(format!(
+                    "cubemap mip {mip_i}: RGBA8 family expects 4 bytes per texel, got {bpp}"
+                ));
+            }
+            flip_mip_rows(&mut v, w, h, bpp);
+            std::borrow::Cow::Owned(v)
+        } else {
+            std::borrow::Cow::Borrowed(mip_src)
+        }
+    } else {
+        if needs_rgba8_decode_before_upload(fmt.format) {
+            return Err(format!(
+                "host {:?} must use RGBA decode but GPU format is {:?}",
+                fmt.format, wgpu_format
+            ));
+        }
+        if flip && !host_format_is_compressed(fmt.format) {
+            let mut v = mip_src.to_vec();
+            let bpp_host = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
+                format!(
+                    "cubemap mip {mip_i}: len {} not divisible by {}×{} texels (flip_y)",
+                    v.len(),
+                    w,
+                    h
+                )
+            })?;
+            if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
+                if bpp_host != bpp_gpu {
+                    logger::warn!(
+                        "cubemap {} face {face} mip {mip_i}: host texel stride {} B != GPU {:?} stride {} B",
+                        asset_id,
+                        bpp_host,
+                        wgpu_format,
+                        bpp_gpu
+                    );
+                }
+            }
+            flip_mip_rows(&mut v, w, h, bpp_host);
+            std::borrow::Cow::Owned(v)
+        } else {
+            if flip && host_format_is_compressed(fmt.format) {
+                logger::warn!(
+                    "cubemap {asset_id} mip {mip_i}: flip_y skipped for compressed {:?} GPU upload",
+                    wgpu_format
+                );
+            }
+            std::borrow::Cow::Borrowed(mip_src)
+        }
+    };
+    Ok(pixels)
+}
+
 /// Incremental cubemap upload: one face × one mip per step.
 #[derive(Debug)]
 pub struct CubemapMipChainUploader {
@@ -134,106 +256,28 @@ impl CubemapMipChainUploader {
             ));
         }
 
-        let start_raw = upload.mip_starts[self.face as usize][mip_i];
-        if start_raw < 0 {
-            return Err("negative mip_starts".into());
-        }
-        let start_abs = start_raw as usize;
-        if start_abs < self.start_bias {
-            return Err(format!(
-                "mip start {} is before descriptor offset {}",
-                start_abs, self.start_bias
-            ));
-        }
-        let start = start_abs - self.start_bias;
+        let mip_src = resolve_cubemap_face_mip_slice(
+            self.face as usize,
+            mip_i,
+            fmt,
+            upload,
+            w,
+            h,
+            self.start_bias,
+            payload,
+        )?;
 
-        let host_len = mip_byte_len(fmt.format, w, h)
-            .ok_or_else(|| format!("cubemap mip byte size unsupported for {:?}", fmt.format))?
-            as usize;
-
-        let Some(mip_src) = payload.get(start..start + host_len) else {
-            return Err(format!(
-                "cubemap {} face {} mip {mip_i}: slice out of range (start {start} len {host_len}, payload {})",
-                upload.asset_id,
-                self.face,
-                payload.len()
-            ));
-        };
-
-        let flip = self.flip;
-        let pixels: std::borrow::Cow<'_, [u8]> = if is_rgba8_family(wgpu_format) {
-            if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format)
-            {
-                std::borrow::Cow::Owned(
-                    decode_mip_to_rgba8(fmt.format, w, h, flip, mip_src).ok_or_else(|| {
-                        format!(
-                            "RGBA decode failed for cubemap face {} mip {mip_i}",
-                            self.face
-                        )
-                    })?,
-                )
-            } else if flip {
-                let mut v = mip_src.to_vec();
-                let bpp = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
-                    format!(
-                        "cubemap mip {mip_i}: RGBA8 upload len {} not divisible by {}×{} texels",
-                        v.len(),
-                        w,
-                        h
-                    )
-                })?;
-                if bpp != 4 {
-                    return Err(format!(
-                        "cubemap mip {mip_i}: RGBA8 family expects 4 bytes per texel, got {bpp}"
-                    ));
-                }
-                flip_mip_rows(&mut v, w, h, bpp);
-                std::borrow::Cow::Owned(v)
-            } else {
-                std::borrow::Cow::Borrowed(mip_src)
-            }
-        } else {
-            if needs_rgba8_decode_before_upload(fmt.format) {
-                return Err(format!(
-                    "host {:?} must use RGBA decode but GPU format is {:?}",
-                    fmt.format, wgpu_format
-                ));
-            }
-            if flip && !host_format_is_compressed(fmt.format) {
-                let mut v = mip_src.to_vec();
-                let bpp_host = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
-                    format!(
-                        "cubemap mip {mip_i}: len {} not divisible by {}×{} texels (flip_y)",
-                        v.len(),
-                        w,
-                        h
-                    )
-                })?;
-                if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
-                    if bpp_host != bpp_gpu {
-                        logger::warn!(
-                            "cubemap {} face {} mip {mip_i}: host texel stride {} B != GPU {:?} stride {} B",
-                            upload.asset_id,
-                            self.face,
-                            bpp_host,
-                            wgpu_format,
-                            bpp_gpu
-                        );
-                    }
-                }
-                flip_mip_rows(&mut v, w, h, bpp_host);
-                std::borrow::Cow::Owned(v)
-            } else {
-                if flip && host_format_is_compressed(fmt.format) {
-                    logger::warn!(
-                        "cubemap {} mip {mip_i}: flip_y skipped for compressed {:?} GPU upload",
-                        upload.asset_id,
-                        wgpu_format
-                    );
-                }
-                std::borrow::Cow::Borrowed(mip_src)
-            }
-        };
+        let pixels = cubemap_mip_src_to_upload_pixels(
+            fmt,
+            wgpu_format,
+            w,
+            h,
+            self.flip,
+            mip_i,
+            self.face,
+            upload.asset_id,
+            mip_src,
+        )?;
 
         write_cubemap_face_mip(
             queue,

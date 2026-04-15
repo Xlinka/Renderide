@@ -18,8 +18,10 @@ use crate::render_graph::cluster_frame::{
 };
 use crate::render_graph::context::RenderPassContext;
 use crate::render_graph::error::RenderPassError;
+use crate::render_graph::frame_params::HostCameraFrame;
 use crate::render_graph::pass::RenderPass;
 use crate::render_graph::resources::{PassResources, ResourceSlot};
+use crate::scene::SceneCoordinator;
 
 /// CPU layout for the compute shader `ClusterParams` uniform (WGSL `struct` + tail pad).
 ///
@@ -136,6 +138,28 @@ fn write_cluster_params_padded(
     queue.write_buffer(buf, buf_offset, &padded);
 }
 
+/// Resolves mono or stereo [`ClusterFrameParams`] rows for the current host camera and viewport.
+fn clustered_light_eye_params_for_viewport(
+    stereo: bool,
+    hc: &HostCameraFrame,
+    scene: &SceneCoordinator,
+    viewport: (u32, u32),
+) -> Option<Vec<ClusterFrameParams>> {
+    if stereo {
+        if let Some((left, right)) = cluster_frame_params_stereo(hc, scene, viewport) {
+            Some(vec![left, right])
+        } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
+            Some(vec![mono])
+        } else {
+            None
+        }
+    } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
+        Some(vec![mono])
+    } else {
+        None
+    }
+}
+
 /// Builds per-cluster light lists before the world forward pass.
 #[derive(Debug)]
 pub struct ClusteredLightPass {
@@ -239,23 +263,14 @@ impl RenderPass for ClusteredLightPass {
         };
         let viewport = (vw, vh);
 
-        let eye_params: Vec<ClusterFrameParams> = if stereo {
-            if let Some((left, right)) = cluster_frame_params_stereo(&hc, scene, viewport) {
-                vec![left, right]
-            } else if let Some(mono) = cluster_frame_params(&hc, scene, viewport) {
-                vec![mono]
-            } else {
-                return Ok(());
-            }
-        } else if let Some(mono) = cluster_frame_params(&hc, scene, viewport) {
-            vec![mono]
-        } else {
+        let Some(eye_params) =
+            clustered_light_eye_params_for_viewport(stereo, &hc, scene, viewport)
+        else {
             return Ok(());
         };
 
-        let clusters_per_eye = eye_params[0].cluster_count_x as u32
-            * eye_params[0].cluster_count_y as u32
-            * CLUSTER_COUNT_Z;
+        let clusters_per_eye =
+            eye_params[0].cluster_count_x * eye_params[0].cluster_count_y * CLUSTER_COUNT_Z;
 
         let (pipeline, bgl) = ensure_compute_pipeline(ctx.device);
         let cluster_ver = fgpu.cluster_cache.version;

@@ -183,6 +183,40 @@ fn record_blendshape_deform(
     scratch.ensure_blendshape_params_staging(device, packed_params.len() as u64);
     queue.write_buffer(&scratch.blendshape_params_staging, 0, &packed_params);
 
+    dispatch_blendshape_compute_chunks(
+        device,
+        encoder,
+        pre,
+        scratch,
+        positions,
+        temp,
+        deltas,
+        &chunks,
+        stride,
+        wg,
+        *blend_weight_cursor,
+        weight_binding_len,
+    );
+
+    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
+}
+
+/// Staging → uniform copy, bind group per chunk, and blendshape compute dispatches.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_blendshape_compute_chunks(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    pre: &crate::backend::mesh_deform::MeshPreprocessPipelines,
+    scratch: &crate::backend::MeshDeformScratch,
+    positions: &wgpu::Buffer,
+    temp: &wgpu::Buffer,
+    deltas: &wgpu::Buffer,
+    chunks: &[(u32, u32)],
+    stride: u64,
+    wg: u32,
+    blend_weight_cursor: u64,
+    weight_binding_len: u64,
+) {
     for (chunk_i, (shape_start, chunk_shapes)) in chunks.iter().enumerate() {
         let src_off = (chunk_i as u64).saturating_mul(32);
         encoder.copy_buffer_to_buffer(
@@ -218,7 +252,7 @@ fn record_blendshape_deform(
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                        buffer: deltas.as_ref(),
+                        buffer: deltas,
                         offset,
                         size: Some(size_nz),
                     }),
@@ -227,7 +261,7 @@ fn record_blendshape_deform(
                     binding: 3,
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: &scratch.blendshape_weights,
-                        offset: *blend_weight_cursor,
+                        offset: blend_weight_cursor,
                         size: Some(weight_size),
                     }),
                 },
@@ -246,8 +280,6 @@ fn record_blendshape_deform(
         cpass.set_bind_group(0, &blend_bg, &[]);
         cpass.dispatch_workgroups(wg, 1, 1);
     }
-
-    *blend_weight_cursor = advance_slab_cursor(*blend_weight_cursor, weight_binding_len);
 }
 
 /// Linear blend skinning compute after optional blendshape pass.
@@ -328,6 +360,42 @@ fn record_skinning_deform(
         positions.as_ref()
     };
 
+    skinning_dispatch_with_uploaded_palette(
+        device,
+        encoder,
+        pre,
+        scratch,
+        src_for_skin,
+        bone_idx,
+        bone_wt,
+        dst,
+        src_n,
+        dst_n,
+        *bone_cursor,
+        bone_binding_size,
+        wg,
+    );
+
+    *bone_cursor = advance_slab_cursor(*bone_cursor, palette_len);
+}
+
+/// Builds skinning bind group (bone slab + attributes) and dispatches the skinning shader.
+#[allow(clippy::too_many_arguments)]
+fn skinning_dispatch_with_uploaded_palette(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    pre: &crate::backend::mesh_deform::MeshPreprocessPipelines,
+    scratch: &crate::backend::MeshDeformScratch,
+    src_positions: &wgpu::Buffer,
+    bone_idx: &wgpu::Buffer,
+    bone_wt: &wgpu::Buffer,
+    dst_pos: &wgpu::Buffer,
+    src_n: &wgpu::Buffer,
+    dst_n: &wgpu::Buffer,
+    bone_cursor: u64,
+    bone_binding_size: NonZeroU64,
+    wg: u32,
+) {
     let skin_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("skinning_bg"),
         layout: &pre.skinning_bind_group_layout,
@@ -336,13 +404,13 @@ fn record_skinning_deform(
                 binding: 0,
                 resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                     buffer: &scratch.bone_matrices,
-                    offset: *bone_cursor,
+                    offset: bone_cursor,
                     size: Some(bone_binding_size),
                 }),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
-                resource: src_for_skin.as_entire_binding(),
+                resource: src_positions.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 2,
@@ -354,7 +422,7 @@ fn record_skinning_deform(
             },
             wgpu::BindGroupEntry {
                 binding: 4,
-                resource: dst.as_entire_binding(),
+                resource: dst_pos.as_entire_binding(),
             },
             wgpu::BindGroupEntry {
                 binding: 5,
@@ -374,9 +442,6 @@ fn record_skinning_deform(
     cpass.set_pipeline(&pre.skinning_pipeline);
     cpass.set_bind_group(0, &skin_bg, &[]);
     cpass.dispatch_workgroups(wg, 1, 1);
-    drop(cpass);
-
-    *bone_cursor = advance_slab_cursor(*bone_cursor, palette_len);
 }
 
 fn workgroup_count(vertex_count: u32) -> u32 {

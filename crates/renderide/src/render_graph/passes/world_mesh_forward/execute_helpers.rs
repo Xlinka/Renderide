@@ -3,6 +3,7 @@
 //! stays a readable outline.
 
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use bytemuck::Zeroable;
 use glam::Mat4;
@@ -347,6 +348,148 @@ pub(super) fn encode_clear_only_pass(
     });
 }
 
+/// Splits draw indices into the main forward pass vs embedded intersection shader subpasses.
+fn partition_intersection_draw_indices(draws: &[WorldMeshDrawItem]) -> (Vec<usize>, Vec<usize>) {
+    let mut regular_indices = Vec::with_capacity(draws.len());
+    let mut intersect_indices = Vec::new();
+    for (draw_idx, item) in draws.iter().enumerate() {
+        if item.batch_key.embedded_requires_intersection_pass {
+            intersect_indices.push(draw_idx);
+        } else {
+            regular_indices.push(draw_idx);
+        }
+    }
+    (regular_indices, intersect_indices)
+}
+
+/// Opaque pass: clear color/depth, draw non-intersection items.
+#[allow(clippy::too_many_arguments)]
+fn encode_world_mesh_forward_opaque_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    frame: &mut FrameRenderParams<'_>,
+    queue: &wgpu::Queue,
+    draws: &[WorldMeshDrawItem],
+    regular_indices: &[usize],
+    pass_desc: &MaterialPipelineDesc,
+    shader_perm: ShaderPermutation,
+    use_multiview: bool,
+    supports_base_instance: bool,
+    bb: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    per_draw_bg: &wgpu::BindGroup,
+    frame_bg_arc: &Arc<wgpu::BindGroup>,
+    empty_bg_arc: &Arc<wgpu::BindGroup>,
+    warned_missing_embedded_bind: &mut bool,
+    offscreen_write_rt: Option<i32>,
+) {
+    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("world-mesh-forward-opaque"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: bb,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(MAIN_FORWARD_DEPTH_CLEAR),
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        multiview_mask: if use_multiview {
+            NonZeroU32::new(3)
+        } else {
+            None
+        },
+    });
+    draw_subset(
+        &mut rpass,
+        regular_indices,
+        draws,
+        frame.backend,
+        queue,
+        frame_bg_arc.as_ref(),
+        empty_bg_arc.as_ref(),
+        per_draw_bg,
+        pass_desc,
+        shader_perm,
+        warned_missing_embedded_bind,
+        offscreen_write_rt,
+        supports_base_instance,
+    );
+}
+
+/// Intersection subpass after depth snapshot (load preserved depth/color).
+#[allow(clippy::too_many_arguments)]
+fn encode_world_mesh_forward_intersection_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    frame: &mut FrameRenderParams<'_>,
+    queue: &wgpu::Queue,
+    draws: &[WorldMeshDrawItem],
+    intersect_indices: &[usize],
+    pass_desc: &MaterialPipelineDesc,
+    shader_perm: ShaderPermutation,
+    use_multiview: bool,
+    supports_base_instance: bool,
+    bb: &wgpu::TextureView,
+    depth: &wgpu::TextureView,
+    per_draw_bg: &wgpu::BindGroup,
+    frame_bg_arc: &Arc<wgpu::BindGroup>,
+    empty_bg_arc: &Arc<wgpu::BindGroup>,
+    warned_missing_embedded_bind: &mut bool,
+    offscreen_write_rt: Option<i32>,
+) {
+    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("world-mesh-forward-intersection"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: bb,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        multiview_mask: if use_multiview {
+            NonZeroU32::new(3)
+        } else {
+            None
+        },
+    });
+    draw_subset(
+        &mut rpass,
+        intersect_indices,
+        draws,
+        frame.backend,
+        queue,
+        frame_bg_arc.as_ref(),
+        empty_bg_arc.as_ref(),
+        per_draw_bg,
+        pass_desc,
+        shader_perm,
+        warned_missing_embedded_bind,
+        offscreen_write_rt,
+        supports_base_instance,
+    );
+}
+
 /// Opaque and optional intersection subpasses for mesh forward.
 ///
 /// Returns `false` if required bind groups are missing (caller returns `Ok(())`).
@@ -378,15 +521,7 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     let (vw, vh) = frame.viewport_px;
     let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
 
-    let mut regular_indices = Vec::with_capacity(draws.len());
-    let mut intersect_indices = Vec::new();
-    for (draw_idx, item) in draws.iter().enumerate() {
-        if item.batch_key.embedded_requires_intersection_pass {
-            intersect_indices.push(draw_idx);
-        } else {
-            regular_indices.push(draw_idx);
-        }
-    }
+    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(draws);
 
     let mut warned_missing_embedded_bind = false;
     let Some((frame_bg_arc, empty_bg_arc)) = frame
@@ -399,50 +534,24 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
 
     let offscreen_write_rt = frame.offscreen_write_render_texture_asset_id;
 
-    {
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("world-mesh-forward-opaque"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: bb,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(SWAPCHAIN_CLEAR_COLOR),
-                    store: wgpu::StoreOp::Store,
-                },
-                depth_slice: None,
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(MAIN_FORWARD_DEPTH_CLEAR),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            occlusion_query_set: None,
-            timestamp_writes: None,
-            multiview_mask: if use_multiview {
-                NonZeroU32::new(3)
-            } else {
-                None
-            },
-        });
-        draw_subset(
-            &mut rpass,
-            &regular_indices,
-            draws,
-            frame.backend,
-            queue,
-            frame_bg_arc.as_ref(),
-            empty_bg_arc.as_ref(),
-            per_draw_bg.as_ref(),
-            pass_desc,
-            shader_perm,
-            &mut warned_missing_embedded_bind,
-            offscreen_write_rt,
-            supports_base_instance,
-        );
-    }
+    encode_world_mesh_forward_opaque_pass(
+        encoder,
+        frame,
+        queue,
+        draws,
+        &regular_indices,
+        pass_desc,
+        shader_perm,
+        use_multiview,
+        supports_base_instance,
+        bb,
+        depth,
+        per_draw_bg.as_ref(),
+        &frame_bg_arc,
+        &empty_bg_arc,
+        &mut warned_missing_embedded_bind,
+        offscreen_write_rt,
+    );
 
     if intersect_indices.is_empty() {
         return true;
@@ -465,47 +574,23 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     else {
         return false;
     };
-    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("world-mesh-forward-intersection"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: bb,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-            depth_slice: None,
-        })],
-        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-            view: depth,
-            depth_ops: Some(wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            }),
-            stencil_ops: None,
-        }),
-        occlusion_query_set: None,
-        timestamp_writes: None,
-        multiview_mask: if use_multiview {
-            NonZeroU32::new(3)
-        } else {
-            None
-        },
-    });
-    draw_subset(
-        &mut rpass,
-        &intersect_indices,
-        draws,
-        frame.backend,
+    encode_world_mesh_forward_intersection_pass(
+        encoder,
+        frame,
         queue,
-        frame_bg_arc.as_ref(),
-        empty_bg_arc.as_ref(),
-        per_draw_bg.as_ref(),
+        draws,
+        &intersect_indices,
         pass_desc,
         shader_perm,
+        use_multiview,
+        supports_base_instance,
+        bb,
+        depth,
+        per_draw_bg.as_ref(),
+        &frame_bg_arc,
+        &empty_bg_arc,
         &mut warned_missing_embedded_bind,
         offscreen_write_rt,
-        supports_base_instance,
     );
 
     true

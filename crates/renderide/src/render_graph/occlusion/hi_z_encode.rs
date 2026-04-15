@@ -174,9 +174,9 @@ pub fn encode_hi_z_build(
     state.hi_z_encoded_slot = Some(ws);
 }
 
-/// Depth mip0 copy plus hierarchical downsample for one pyramid view chain (desktop or one array layer).
+/// Fills Hi-Z mip0 from a depth texture (desktop 2D view or one layer of a stereo depth array).
 #[allow(clippy::too_many_arguments)]
-fn dispatch_mip0_and_downsample(
+fn dispatch_hi_z_mip0_from_depth(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     encoder: &mut wgpu::CommandEncoder,
@@ -186,7 +186,6 @@ fn dispatch_mip0_and_downsample(
     pyramid_views: &[wgpu::TextureView],
     depth_bind: DepthBinding,
 ) {
-    let (bw, bh) = scratch.extent;
     match depth_bind {
         DepthBinding::D2 => {
             let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -258,7 +257,19 @@ fn dispatch_mip0_and_downsample(
             }
         }
     }
+}
 
+/// Max-reduction chain from mip0 through the rest of the R32F pyramid.
+#[allow(clippy::too_many_arguments)]
+fn dispatch_hi_z_downsample_mips(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    scratch: &HiZGpuScratch,
+    pipes: &HiZPipelines,
+    pyramid_views: &[wgpu::TextureView],
+) {
+    let (bw, bh) = scratch.extent;
     for mip in 0..scratch.mip_levels.saturating_sub(1) {
         let (sw, sh) = mip_dimensions(bw, bh, mip).unwrap_or((1, 1));
         let (dw, dh) = mip_dimensions(bw, bh, mip + 1).unwrap_or((1, 1));
@@ -297,6 +308,31 @@ fn dispatch_mip0_and_downsample(
             pass.dispatch_workgroups(dw.div_ceil(8), dh.div_ceil(8), 1);
         }
     }
+}
+
+/// Depth mip0 copy plus hierarchical downsample for one pyramid view chain (desktop or one array layer).
+#[allow(clippy::too_many_arguments)]
+fn dispatch_mip0_and_downsample(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    depth_view: &wgpu::TextureView,
+    scratch: &HiZGpuScratch,
+    pipes: &HiZPipelines,
+    pyramid_views: &[wgpu::TextureView],
+    depth_bind: DepthBinding,
+) {
+    dispatch_hi_z_mip0_from_depth(
+        device,
+        queue,
+        encoder,
+        depth_view,
+        scratch,
+        pipes,
+        pyramid_views,
+        depth_bind,
+    );
+    dispatch_hi_z_downsample_mips(device, queue, encoder, scratch, pipes, pyramid_views);
 }
 
 fn copy_pyramid_to_staging(

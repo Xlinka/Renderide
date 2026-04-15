@@ -138,6 +138,77 @@ fn apply_set_float4_array_from_batch<L: MaterialBatchBlobLoader + ?Sized>(
     }
 }
 
+/// Applies one material/property-block opcode after [`MaterialBatchTarget`] is active (excludes target switching).
+fn apply_material_batch_property_opcode<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    ty: MaterialPropertyUpdateType,
+    options: &ParseMaterialBatchOptions,
+) {
+    match ty {
+        MaterialPropertyUpdateType::SelectTarget | MaterialPropertyUpdateType::UpdateBatchEnd => {}
+        MaterialPropertyUpdateType::SetShader => match target {
+            MaterialBatchTarget::Material(material_id) => {
+                store.set_shader_asset_for_material(material_id, property_id);
+            }
+            MaterialBatchTarget::PropertyBlock(_) => {}
+        },
+        MaterialPropertyUpdateType::SetRenderQueue
+        | MaterialPropertyUpdateType::SetInstancing
+        | MaterialPropertyUpdateType::SetRenderType => {}
+        MaterialPropertyUpdateType::SetFloat => {
+            if let Some(v) = p.next_float() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Float(v),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloat4 => {
+            if let Some(v) = p.next_float4() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Float4(v),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloat4x4 => {
+            if let Some(mat) = p.next_matrix() {
+                if options.persist_extended_payloads {
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        property_id,
+                        MaterialPropertyValue::Float4x4(mat),
+                    );
+                }
+            }
+        }
+        MaterialPropertyUpdateType::SetTexture => {
+            if let Some(packed) = p.next_int() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Texture(packed),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloatArray => {
+            apply_set_float_array_from_batch(p, store, target, property_id, options);
+        }
+        MaterialPropertyUpdateType::SetFloat4Array => {
+            apply_set_float4_array_from_batch(p, store, target, property_id, options);
+        }
+    }
+}
+
 /// Applies all material updates in `batch` into `store` using `loader`.
 pub fn parse_materials_update_batch_into_store(
     loader: &mut impl MaterialBatchBlobLoader,
@@ -186,76 +257,15 @@ pub fn parse_materials_update_batch_into_store(
                     material_update_count,
                 ));
             }
-            MaterialPropertyUpdateType::SetShader => match target {
-                MaterialBatchTarget::Material(material_id) => {
-                    store.set_shader_asset_for_material(material_id, update.property_id);
-                }
-                MaterialBatchTarget::PropertyBlock(_) => {}
-            },
-            MaterialPropertyUpdateType::SetRenderQueue
-            | MaterialPropertyUpdateType::SetInstancing
-            | MaterialPropertyUpdateType::SetRenderType => {}
-            MaterialPropertyUpdateType::SetFloat => {
-                if let Some(v) = p.next_float() {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        update.property_id,
-                        MaterialPropertyValue::Float(v),
-                    );
-                }
-            }
-            MaterialPropertyUpdateType::SetFloat4 => {
-                if let Some(v) = p.next_float4() {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        update.property_id,
-                        MaterialPropertyValue::Float4(v),
-                    );
-                }
-            }
-            MaterialPropertyUpdateType::SetFloat4x4 => {
-                if let Some(mat) = p.next_matrix() {
-                    if options.persist_extended_payloads {
-                        set_property_on_batch_target(
-                            store,
-                            target,
-                            update.property_id,
-                            MaterialPropertyValue::Float4x4(mat),
-                        );
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetTexture => {
-                if let Some(packed) = p.next_int() {
-                    set_property_on_batch_target(
-                        store,
-                        target,
-                        update.property_id,
-                        MaterialPropertyValue::Texture(packed),
-                    );
-                }
-            }
-            MaterialPropertyUpdateType::SetFloatArray => {
-                apply_set_float_array_from_batch(
-                    &mut p,
-                    store,
-                    target,
-                    update.property_id,
-                    options,
-                );
-            }
-            MaterialPropertyUpdateType::SetFloat4Array => {
-                apply_set_float4_array_from_batch(
-                    &mut p,
-                    store,
-                    target,
-                    update.property_id,
-                    options,
-                );
-            }
             MaterialPropertyUpdateType::UpdateBatchEnd => break,
+            other => apply_material_batch_property_opcode(
+                &mut p,
+                store,
+                target,
+                update.property_id,
+                other,
+                options,
+            ),
         }
     }
 }

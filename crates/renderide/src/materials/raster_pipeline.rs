@@ -16,6 +16,66 @@ use crate::materials::{
 };
 use crate::render_graph::MAIN_FORWARD_DEPTH_COMPARE;
 
+/// Fixed vertex buffer layouts for embedded forward mesh draws (`@location` 0–3).
+fn mesh_forward_base_vertex_buffer_layouts() -> (
+    wgpu::VertexBufferLayout<'static>,
+    wgpu::VertexBufferLayout<'static>,
+    wgpu::VertexBufferLayout<'static>,
+    wgpu::VertexBufferLayout<'static>,
+) {
+    let pos_layout = wgpu::VertexBufferLayout {
+        array_stride: 16,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 0,
+            format: wgpu::VertexFormat::Float32x4,
+        }],
+    };
+    let nrm_layout = wgpu::VertexBufferLayout {
+        array_stride: 16,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 1,
+            format: wgpu::VertexFormat::Float32x4,
+        }],
+    };
+    let uv_layout = wgpu::VertexBufferLayout {
+        array_stride: 8,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 2,
+            format: wgpu::VertexFormat::Float32x2,
+        }],
+    };
+    let color_layout = wgpu::VertexBufferLayout {
+        array_stride: 16,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[wgpu::VertexAttribute {
+            offset: 0,
+            shader_location: 3,
+            format: wgpu::VertexFormat::Float32x4,
+        }],
+    };
+    (pos_layout, nrm_layout, uv_layout, color_layout)
+}
+
+/// Opaque: RGB-only; transparent: premultiplied-style alpha blend and full mask.
+fn mesh_forward_blend_and_color_writes(
+    use_alpha_blending: bool,
+) -> (Option<wgpu::BlendState>, wgpu::ColorWrites) {
+    if use_alpha_blending {
+        (
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::ColorWrites::ALL,
+        )
+    } else {
+        (None, wgpu::ColorWrites::COLOR)
+    }
+}
+
 /// Builds a forward mesh render pipeline from reflected WGSL (`@group(0..=2)`), with optional UV0 and color vertex streams.
 ///
 /// Vertex inputs are `@location(0)` position, `@location(1)` normal/extra, and optionally
@@ -63,42 +123,8 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
         immediate_size: 0,
     });
 
-    let pos_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 0,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let nrm_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 1,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let uv_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 2,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let color_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 3,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
+    let layouts = mesh_forward_base_vertex_buffer_layouts();
+    let (pos_layout, nrm_layout, uv_layout, color_layout) = layouts;
 
     let use_uv = include_uv_vertex_buffer && reflect_vertex_shader_needs_uv0_stream(wgsl_source);
     let use_color =
@@ -113,14 +139,7 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
     };
     // Opaque: no blending + write RGB only so destination alpha stays at the clear value (a=1). Do not use
     // `blend: Some(...)` here: float RT formats may not be blendable and pipeline creation can fail.
-    let (blend, color_writes) = if use_alpha_blending {
-        (
-            Some(wgpu::BlendState::ALPHA_BLENDING),
-            wgpu::ColorWrites::ALL,
-        )
-    } else {
-        (None, wgpu::ColorWrites::COLOR)
-    };
+    let (blend, color_writes) = mesh_forward_blend_and_color_writes(use_alpha_blending);
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),

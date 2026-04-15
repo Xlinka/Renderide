@@ -108,53 +108,28 @@ enum NextMipUploadSlice<'a> {
     },
 }
 
-/// Validates mip metadata, descriptor-relative offsets, and payload bounds for the current mip index.
+/// Resolved host payload for one mip level before GPU dimensions from [`mip_dimensions_at_level`] are merged in.
+enum HostMipPayloadResolved<'a> {
+    /// Stop iteration: truncated payload or negative offset (`stopped` flag should be set on the uploader).
+    Stopped { total_uploaded: u32 },
+    /// Host payload subslice for this mip (dimensions come from [`validate_and_resolve_next_mip_slice`]).
+    Slice { mip_src: &'a [u8] },
+}
+
+/// Resolves host `mip_starts` (relative to descriptor), rebasing, and payload bounds to a mip subslice.
 #[allow(clippy::too_many_arguments)]
-fn validate_and_resolve_next_mip_slice<'a>(
+fn resolve_mip_host_payload_slice<'a>(
     uploaded_mips: u32,
     next_i: usize,
-    start_base: u32,
-    mipmap_count: u32,
+    mip_level: u32,
+    w: u32,
+    h: u32,
     start_bias: usize,
-    tex_extent: wgpu::Extent3d,
+    valid_prefix_mips: usize,
     fmt: &SetTexture2DFormat,
     upload: &SetTexture2DData,
     payload: &'a [u8],
-) -> Result<NextMipUploadSlice<'a>, String> {
-    let (_bias_check, valid_prefix_mips) =
-        choose_mip_start_bias(fmt.format, upload, payload.len())?;
-    debug_assert_eq!(start_bias, _bias_check);
-    let _ = valid_prefix_mips;
-
-    if next_i >= upload.mip_map_sizes.len() {
-        if uploaded_mips == 0 {
-            return Err("no mip levels uploaded".into());
-        }
-        return Ok(NextMipUploadSlice::ChainDone {
-            total_uploaded: uploaded_mips,
-        });
-    }
-
-    let sz = upload.mip_map_sizes[next_i];
-    let w = sz.x.max(0) as u32;
-    let h = sz.y.max(0) as u32;
-    let mip_level = start_base + next_i as u32;
-    if mip_level >= mipmap_count {
-        return Err(format!(
-            "upload mip {mip_level} exceeds texture mips {mipmap_count}"
-        ));
-    }
-
-    let (gw, gh) = mip_dimensions_at_level(tex_extent.width, tex_extent.height, mip_level);
-    if w != gw || h != gh {
-        logger::debug!(
-            "texture {} mip {mip_level}: mip_map_sizes {w}x{h} != GPU {gw}x{gh} (using GPU dimensions; base {}x{})",
-            upload.asset_id,
-            tex_extent.width,
-            tex_extent.height
-        );
-    }
-
+) -> Result<HostMipPayloadResolved<'a>, String> {
     let start_raw = upload.mip_starts[next_i];
     if start_raw < 0 {
         if uploaded_mips == 0 {
@@ -167,7 +142,7 @@ fn validate_and_resolve_next_mip_slice<'a>(
             upload.mip_map_sizes.len(),
             next_i
         );
-        return Ok(NextMipUploadSlice::ChainStopped {
+        return Ok(HostMipPayloadResolved::Stopped {
             total_uploaded: uploaded_mips,
         });
     }
@@ -186,7 +161,7 @@ fn validate_and_resolve_next_mip_slice<'a>(
             next_i,
             start_bias
         );
-        return Ok(NextMipUploadSlice::ChainStopped {
+        return Ok(HostMipPayloadResolved::Stopped {
             total_uploaded: uploaded_mips,
         });
     }
@@ -218,18 +193,83 @@ fn validate_and_resolve_next_mip_slice<'a>(
             host_len,
             start_bias
         );
-        return Ok(NextMipUploadSlice::ChainStopped {
+        return Ok(HostMipPayloadResolved::Stopped {
             total_uploaded: uploaded_mips,
         });
     };
 
-    Ok(NextMipUploadSlice::Ready {
+    Ok(HostMipPayloadResolved::Slice { mip_src })
+}
+
+/// Validates mip metadata, descriptor-relative offsets, and payload bounds for the current mip index.
+#[allow(clippy::too_many_arguments)]
+fn validate_and_resolve_next_mip_slice<'a>(
+    uploaded_mips: u32,
+    next_i: usize,
+    start_base: u32,
+    mipmap_count: u32,
+    start_bias: usize,
+    tex_extent: wgpu::Extent3d,
+    fmt: &SetTexture2DFormat,
+    upload: &SetTexture2DData,
+    payload: &'a [u8],
+) -> Result<NextMipUploadSlice<'a>, String> {
+    let (_bias_check, valid_prefix_mips) =
+        choose_mip_start_bias(fmt.format, upload, payload.len())?;
+    debug_assert_eq!(start_bias, _bias_check);
+
+    if next_i >= upload.mip_map_sizes.len() {
+        if uploaded_mips == 0 {
+            return Err("no mip levels uploaded".into());
+        }
+        return Ok(NextMipUploadSlice::ChainDone {
+            total_uploaded: uploaded_mips,
+        });
+    }
+
+    let sz = upload.mip_map_sizes[next_i];
+    let w = sz.x.max(0) as u32;
+    let h = sz.y.max(0) as u32;
+    let mip_level = start_base + next_i as u32;
+    if mip_level >= mipmap_count {
+        return Err(format!(
+            "upload mip {mip_level} exceeds texture mips {mipmap_count}"
+        ));
+    }
+
+    let (gw, gh) = mip_dimensions_at_level(tex_extent.width, tex_extent.height, mip_level);
+    if w != gw || h != gh {
+        logger::debug!(
+            "texture {} mip {mip_level}: mip_map_sizes {w}x{h} != GPU {gw}x{gh} (using GPU dimensions; base {}x{})",
+            upload.asset_id,
+            tex_extent.width,
+            tex_extent.height
+        );
+    }
+
+    match resolve_mip_host_payload_slice(
+        uploaded_mips,
+        next_i,
         mip_level,
-        gw,
-        gh,
-        mip_index: next_i,
-        mip_src,
-    })
+        w,
+        h,
+        start_bias,
+        valid_prefix_mips,
+        fmt,
+        upload,
+        payload,
+    )? {
+        HostMipPayloadResolved::Stopped { total_uploaded } => {
+            Ok(NextMipUploadSlice::ChainStopped { total_uploaded })
+        }
+        HostMipPayloadResolved::Slice { mip_src } => Ok(NextMipUploadSlice::Ready {
+            mip_level,
+            gw,
+            gh,
+            mip_index: next_i,
+            mip_src,
+        }),
+    }
 }
 
 /// Incremental full mip-chain upload: call [`Self::upload_next_mip`] until [`MipChainAdvance::Finished`].
