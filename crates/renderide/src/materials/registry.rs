@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::pipelines::ShaderPermutation;
 
-use super::cache::MaterialPipelineCache;
+use super::cache::{MaterialPipelineCache, MaterialPipelineHandle};
 use super::embedded_shader_stem::embedded_default_stem_for_unity_name;
 use super::family::MaterialPipelineDesc;
 use super::pipeline_kind::RasterPipelineKind;
@@ -20,6 +20,52 @@ pub struct MaterialRegistry {
 }
 
 impl MaterialRegistry {
+    fn try_pipeline_with_fallback(
+        &mut self,
+        shader_asset_id: Option<i32>,
+        kind: &RasterPipelineKind,
+        desc: &MaterialPipelineDesc,
+        permutation: ShaderPermutation,
+    ) -> Option<MaterialPipelineHandle> {
+        let err = match self.cache.get_or_create(kind, desc, permutation) {
+            Ok(p) => return Some(p),
+            Err(e) => e,
+        };
+        if matches!(kind, RasterPipelineKind::DebugWorldNormals) {
+            match shader_asset_id {
+                Some(id) => {
+                    logger::error!(
+                        "DebugWorldNormals pipeline build failed (shader_asset_id={id}): {err}"
+                    );
+                }
+                None => {
+                    logger::error!("DebugWorldNormals pipeline build failed: {err}");
+                }
+            }
+            return None;
+        }
+        match shader_asset_id {
+            Some(id) => {
+                logger::warn!(
+                    "material pipeline build failed (shader_asset_id={id}, kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                );
+            }
+            None => {
+                logger::warn!(
+                    "material pipeline build failed (kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                );
+            }
+        }
+        let fallback = RasterPipelineKind::DebugWorldNormals;
+        match self.cache.get_or_create(&fallback, desc, permutation) {
+            Ok(p) => Some(p),
+            Err(e2) => {
+                logger::error!("fallback DebugWorldNormals pipeline build failed: {e2}");
+                None
+            }
+        }
+    }
+
     /// Builds a registry whose router falls back to [`RasterPipelineKind::DebugWorldNormals`] for unknown shader assets.
     pub fn with_default_families(device: Arc<wgpu::Device>) -> Self {
         Self {
@@ -74,9 +120,9 @@ impl MaterialRegistry {
         shader_asset_id: i32,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
-    ) -> Option<&wgpu::RenderPipeline> {
+    ) -> Option<MaterialPipelineHandle> {
         let kind = resolve_raster_pipeline(shader_asset_id, &self.router);
-        Some(self.cache.get_or_create(&kind, desc, permutation))
+        self.try_pipeline_with_fallback(Some(shader_asset_id), &kind, desc, permutation)
     }
 
     /// Looks up a pipeline by explicit kind (for example tests or tools that do not use a host shader id).
@@ -85,8 +131,8 @@ impl MaterialRegistry {
         kind: &RasterPipelineKind,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
-    ) -> &wgpu::RenderPipeline {
-        self.cache.get_or_create(kind, desc, permutation)
+    ) -> Option<MaterialPipelineHandle> {
+        self.try_pipeline_with_fallback(None, kind, desc, permutation)
     }
 
     /// Low-level cache access keyed by [`RasterPipelineKind`].
@@ -95,8 +141,8 @@ impl MaterialRegistry {
         kind: &RasterPipelineKind,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
-    ) -> &wgpu::RenderPipeline {
-        self.cache.get_or_create(kind, desc, permutation)
+    ) -> Option<MaterialPipelineHandle> {
+        self.try_pipeline_with_fallback(None, kind, desc, permutation)
     }
 
     /// Borrow the wgpu device held by this registry.
@@ -160,20 +206,24 @@ mod wgpu_cache_tests {
             multiview_mask: None,
         };
         let addr = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-            );
-            std::ptr::from_ref(p)
+            let p: Arc<wgpu::RenderPipeline> = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                )
+                .expect("pipeline");
+            Arc::as_ptr(&p)
         };
         let addr2 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-            );
-            std::ptr::from_ref(p)
+            let p: Arc<wgpu::RenderPipeline> = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                )
+                .expect("pipeline");
+            Arc::as_ptr(&p)
         };
         assert_eq!(addr, addr2);
     }
@@ -193,20 +243,24 @@ mod wgpu_cache_tests {
             multiview_mask: None,
         };
         let addr0 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-            );
-            std::ptr::from_ref(p)
+            let p: Arc<wgpu::RenderPipeline> = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                )
+                .expect("pipeline");
+            Arc::as_ptr(&p)
         };
         let addr1 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(1),
-            );
-            std::ptr::from_ref(p)
+            let p: Arc<wgpu::RenderPipeline> = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(1),
+                )
+                .expect("pipeline");
+            Arc::as_ptr(&p)
         };
         assert_ne!(addr0, addr1);
     }

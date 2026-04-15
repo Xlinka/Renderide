@@ -4,6 +4,7 @@ use crate::shared::{SetTexture3DData, SetTexture3DFormat};
 
 use super::super::decode::{decode_mip_to_rgba8, needs_rgba8_decode_before_upload};
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_dimensions_at_level_3d};
+use super::error::TextureUploadError;
 use super::mip_write_common::{is_rgba8_family, write_texture3d_volume_mip};
 
 /// Host mip dimensions, flat payload slice, and slice/volume byte sizes for one 3D level.
@@ -17,22 +18,22 @@ fn texture3d_chain_byte_offset_to_level(
     level: u32,
     format: crate::shared::TextureFormat,
     asset_id: i32,
-) -> Result<usize, String> {
+) -> Result<usize, TextureUploadError> {
     let mut offset = 0usize;
     for l in 0..level {
         let (lw, lh, ld) = mip_dimensions_at_level_3d(base_w, base_h, base_d, l);
         let slice = mip_byte_len(format, lw, lh).ok_or_else(|| {
-            format!(
+            TextureUploadError::from(format!(
                 "texture3d {}: mip byte size unsupported for {:?}",
                 asset_id, format
-            )
+            ))
         })? as usize;
         let vol = slice
             .checked_mul(ld as usize)
-            .ok_or_else(|| "texture3d offset overflow".to_string())?;
+            .ok_or_else(|| TextureUploadError::from("texture3d offset overflow"))?;
         offset = offset
             .checked_add(vol)
-            .ok_or_else(|| "texture3d offset overflow".to_string())?;
+            .ok_or_else(|| TextureUploadError::from("texture3d offset overflow"))?;
     }
     Ok(offset)
 }
@@ -46,7 +47,7 @@ fn texture3d_mip_volume_payload_slice<'a>(
     fmt: &SetTexture3DFormat,
     upload: &SetTexture3DData,
     payload: &'a [u8],
-) -> Result<Texture3dMipPayload<'a>, String> {
+) -> Result<Texture3dMipPayload<'a>, TextureUploadError> {
     let (w, h, d) = mip_dimensions_at_level_3d(base_w, base_h, base_d, level);
 
     let offset = texture3d_chain_byte_offset_to_level(
@@ -59,21 +60,21 @@ fn texture3d_mip_volume_payload_slice<'a>(
     )?;
 
     let slice_bytes = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
-        format!(
+        TextureUploadError::from(format!(
             "texture3d {}: mip byte size unsupported for {:?}",
             upload.asset_id, fmt.format
-        )
+        ))
     })? as usize;
     let vol_bytes = slice_bytes
         .checked_mul(d as usize)
-        .ok_or_else(|| "texture3d volume bytes overflow".to_string())?;
+        .ok_or_else(|| TextureUploadError::from("texture3d volume bytes overflow"))?;
 
     let mip_src = payload.get(offset..offset + vol_bytes).ok_or_else(|| {
-        format!(
+        TextureUploadError::from(format!(
             "texture3d {}: mip {level} slice out of range (offset {offset} len {vol_bytes} payload {})",
             upload.asset_id,
             payload.len()
-        )
+        ))
     })?;
     Ok((w, h, d, mip_src, slice_bytes, vol_bytes))
 }
@@ -91,7 +92,7 @@ fn texture3d_mip_to_upload_pixels<'a>(
     vol_bytes: usize,
     upload: &SetTexture3DData,
     mip_src: &'a [u8],
-) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+) -> Result<std::borrow::Cow<'a, [u8]>, TextureUploadError> {
     let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
             let mut out = Vec::with_capacity(vol_bytes);
@@ -99,13 +100,13 @@ fn texture3d_mip_to_upload_pixels<'a>(
             for _z in 0..d {
                 let slice_raw = mip_src
                     .get(z_off..z_off + slice_bytes)
-                    .ok_or_else(|| "texture3d slice bounds".to_string())?;
+                    .ok_or_else(|| TextureUploadError::from("texture3d slice bounds"))?;
                 let decoded =
                     decode_mip_to_rgba8(fmt.format, w, h, false, slice_raw).ok_or_else(|| {
-                        format!(
+                        TextureUploadError::from(format!(
                             "texture3d {}: RGBA decode failed mip {level}",
                             upload.asset_id
-                        )
+                        ))
                     })?;
                 out.extend_from_slice(&decoded);
                 z_off += slice_bytes;
@@ -116,10 +117,10 @@ fn texture3d_mip_to_upload_pixels<'a>(
         }
     } else {
         if needs_rgba8_decode_before_upload(fmt.format) {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "texture3d {}: host {:?} must decode to RGBA but GPU format is {:?}",
                 upload.asset_id, fmt.format, wgpu_format
-            ));
+            )));
         }
         std::borrow::Cow::Borrowed(mip_src)
     };
@@ -156,13 +157,13 @@ impl Texture3dMipChainUploader {
         fmt: &SetTexture3DFormat,
         upload: &SetTexture3DData,
         raw: &[u8],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, TextureUploadError> {
         let want = upload.data.length.max(0) as usize;
         if raw.len() < want {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "raw shorter than descriptor (need {want}, got {})",
                 raw.len()
-            ));
+            )));
         }
 
         let base_w = fmt.width.max(0) as u32;
@@ -175,7 +176,7 @@ impl Texture3dMipChainUploader {
             || tex_extent.height != base_h
             || tex_extent.depth_or_array_layers != base_d
         {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "GPU texture {}×{}×{} does not match SetTexture3DFormat {}×{}×{} for asset {}",
                 tex_extent.width,
                 tex_extent.height,
@@ -184,31 +185,31 @@ impl Texture3dMipChainUploader {
                 base_h,
                 base_d,
                 upload.asset_id
-            ));
+            )));
         }
 
         let mut total_need = 0usize;
         for level in 0..mipmap_count {
             let (w, h, d) = mip_dimensions_at_level_3d(base_w, base_h, base_d, level);
             let slice = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
-                format!(
+                TextureUploadError::from(format!(
                     "texture3d {}: mip byte size unsupported for {:?}",
                     upload.asset_id, fmt.format
-                )
+                ))
             })? as usize;
             let vol = slice
                 .checked_mul(d as usize)
-                .ok_or_else(|| "texture3d mip volume byte overflow".to_string())?;
+                .ok_or_else(|| TextureUploadError::from("texture3d mip volume byte overflow"))?;
             total_need = total_need
                 .checked_add(vol)
-                .ok_or_else(|| "texture3d mip chain total overflow".to_string())?;
+                .ok_or_else(|| TextureUploadError::from("texture3d mip chain total overflow"))?;
         }
 
         if total_need > want {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "texture3d {}: mip chain needs {total_need} B but descriptor length is {want}",
                 upload.asset_id
-            ));
+            )));
         }
 
         Ok(Self {
@@ -230,7 +231,7 @@ impl Texture3dMipChainUploader {
         wgpu_format: wgpu::TextureFormat,
         upload: &SetTexture3DData,
         payload: &[u8],
-    ) -> Result<Texture3dMipAdvance, String> {
+    ) -> Result<Texture3dMipAdvance, TextureUploadError> {
         let level = self.next_mip;
         if level >= self.mipmap_count {
             return Ok(Texture3dMipAdvance::Finished {
@@ -283,13 +284,13 @@ pub fn write_texture3d_mips(
     wgpu_format: wgpu::TextureFormat,
     upload: &SetTexture3DData,
     raw: &[u8],
-) -> Result<u32, String> {
+) -> Result<u32, TextureUploadError> {
     let want = upload.data.length.max(0) as usize;
     if raw.len() < want {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "raw shorter than descriptor (need {want}, got {})",
             raw.len()
-        ));
+        )));
     }
     let payload = &raw[..want];
     let mut uploader = Texture3dMipChainUploader::new(texture, fmt, upload, raw)?;

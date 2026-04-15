@@ -22,6 +22,7 @@ use crate::assets::material::{
 };
 use crate::resources::{CubemapPool, RenderTexturePool, Texture3dPool, TexturePool};
 
+use super::embedded_material_bind_error::EmbeddedMaterialBindError;
 use super::layout::{
     build_stem_material_layout, stem_hash, EmbeddedSharedKeywordIds, StemMaterialLayout,
 };
@@ -91,7 +92,7 @@ impl EmbeddedMaterialBindResources {
     pub fn new(
         device: Arc<wgpu::Device>,
         property_registry: Arc<PropertyIdRegistry>,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, EmbeddedMaterialBindError> {
         let white_texture = Arc::new(device.create_texture(&wgpu::TextureDescriptor {
             label: Some("embedded_default_white"),
             size: wgpu::Extent3d {
@@ -178,7 +179,7 @@ impl EmbeddedMaterialBindResources {
         render_texture_pool: &RenderTexturePool,
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
-    ) -> Result<Arc<wgpu::BindGroup>, String> {
+    ) -> Result<Arc<wgpu::BindGroup>, EmbeddedMaterialBindError> {
         self.embedded_material_bind_group_with_cache_key(
             stem,
             queue,
@@ -207,7 +208,7 @@ impl EmbeddedMaterialBindResources {
         render_texture_pool: &RenderTexturePool,
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
-    ) -> Result<(MaterialBindCacheKey, Arc<wgpu::BindGroup>), String> {
+    ) -> Result<(MaterialBindCacheKey, Arc<wgpu::BindGroup>), EmbeddedMaterialBindError> {
         let EmbeddedBindInputResolution {
             layout,
             uniform_key,
@@ -286,7 +287,7 @@ impl EmbeddedMaterialBindResources {
         render_texture_pool: &RenderTexturePool,
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
-    ) -> Result<EmbeddedBindInputResolution, String> {
+    ) -> Result<EmbeddedBindInputResolution, EmbeddedMaterialBindError> {
         let layout = self.stem_layout(stem)?;
         let sh = stem_hash(stem);
 
@@ -345,7 +346,8 @@ impl EmbeddedMaterialBindResources {
         store: &MaterialPropertyStore,
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
-    ) -> Result<(Vec<Arc<wgpu::TextureView>>, Vec<Arc<wgpu::Sampler>>), String> {
+    ) -> Result<(Vec<Arc<wgpu::TextureView>>, Vec<Arc<wgpu::Sampler>>), EmbeddedMaterialBindError>
+    {
         let mut keepalive_views: Vec<Arc<wgpu::TextureView>> = Vec::new();
         let mut keepalive_samplers: Vec<Arc<wgpu::Sampler>> = Vec::new();
         for entry in &layout.reflected.material_entries {
@@ -423,7 +425,9 @@ impl EmbeddedMaterialBindResources {
                     keepalive_samplers.push(sampler);
                 }
                 _ => {
-                    return Err(format!("unsupported binding type for @binding({b})"));
+                    return Err(EmbeddedMaterialBindError::from(format!(
+                        "unsupported binding type for @binding({b})"
+                    )));
                 }
             }
         }
@@ -442,7 +446,7 @@ impl EmbeddedMaterialBindResources {
         store: &MaterialPropertyStore,
         lookup: MaterialPropertyLookupIds,
         primary_texture_any_kind_present: bool,
-    ) -> Result<Arc<wgpu::Buffer>, String> {
+    ) -> Result<Arc<wgpu::Buffer>, EmbeddedMaterialBindError> {
         let mut uniform_cache = self.uniform_cache.borrow_mut();
         if let Some(entry) = uniform_cache.get_mut(uniform_key) {
             if entry.last_written_generation == mutation_gen {
@@ -491,7 +495,10 @@ impl EmbeddedMaterialBindResources {
         Ok(buf)
     }
 
-    fn stem_layout(&self, stem: &str) -> Result<Arc<StemMaterialLayout>, String> {
+    fn stem_layout(
+        &self,
+        stem: &str,
+    ) -> Result<Arc<StemMaterialLayout>, EmbeddedMaterialBindError> {
         let mut cache = self.stem_cache.borrow_mut();
         if let Some(s) = cache.get(stem) {
             return Ok(s.clone());
@@ -668,7 +675,7 @@ fn build_embedded_bind_group_entries<'a>(
     uniform_buf: &'a Arc<wgpu::Buffer>,
     keepalive_views: &'a [Arc<wgpu::TextureView>],
     keepalive_samplers: &'a [Arc<wgpu::Sampler>],
-) -> Result<Vec<wgpu::BindGroupEntry<'a>>, String> {
+) -> Result<Vec<wgpu::BindGroupEntry<'a>>, EmbeddedMaterialBindError> {
     let mut view_i = 0usize;
     let mut samp_i = 0usize;
     let mut entries: Vec<wgpu::BindGroupEntry<'a>> =
@@ -706,7 +713,9 @@ fn build_embedded_bind_group_entries<'a>(
                 });
             }
             _ => {
-                return Err(format!("unsupported binding type for @binding({b})"));
+                return Err(EmbeddedMaterialBindError::from(format!(
+                    "unsupported binding type for @binding({b})"
+                )));
             }
         }
     }

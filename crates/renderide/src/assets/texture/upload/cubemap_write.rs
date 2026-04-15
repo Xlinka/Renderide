@@ -6,6 +6,7 @@ use super::super::decode::{decode_mip_to_rgba8, flip_mip_rows, needs_rgba8_decod
 use super::super::layout::{
     host_format_is_compressed, mip_byte_len, mip_dimensions_at_level, mip_tight_bytes_per_texel,
 };
+use super::error::TextureUploadError;
 use super::mip_write_common::{is_rgba8_family, uncompressed_row_bytes, write_cubemap_face_mip};
 use super::write_mip_chain::MipChainAdvance;
 
@@ -20,31 +21,34 @@ fn resolve_cubemap_face_mip_slice<'a>(
     h: u32,
     start_bias: usize,
     payload: &'a [u8],
-) -> Result<&'a [u8], String> {
+) -> Result<&'a [u8], TextureUploadError> {
     let start_raw = upload.mip_starts[face][mip_i];
     if start_raw < 0 {
         return Err("negative mip_starts".into());
     }
     let start_abs = start_raw as usize;
     if start_abs < start_bias {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "mip start {} is before descriptor offset {}",
             start_abs, start_bias
-        ));
+        )));
     }
     let start = start_abs - start_bias;
 
-    let host_len = mip_byte_len(fmt.format, w, h)
-        .ok_or_else(|| format!("cubemap mip byte size unsupported for {:?}", fmt.format))?
-        as usize;
+    let host_len = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
+        TextureUploadError::from(format!(
+            "cubemap mip byte size unsupported for {:?}",
+            fmt.format
+        ))
+    })? as usize;
 
     payload
         .get(start..start + host_len)
         .ok_or_else(|| {
-            format!(
+            TextureUploadError::from(format!(
                 "cubemap {} face {} mip {mip_i}: slice out of range (start {start} len {host_len}, payload {})",
                 upload.asset_id, face, payload.len()
-            )
+            ))
         })
 }
 
@@ -60,12 +64,14 @@ fn cubemap_mip_src_to_upload_pixels<'a>(
     face: u32,
     asset_id: i32,
     mip_src: &'a [u8],
-) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+) -> Result<std::borrow::Cow<'a, [u8]>, TextureUploadError> {
     let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
             std::borrow::Cow::Owned(
                 decode_mip_to_rgba8(fmt.format, w, h, flip, mip_src).ok_or_else(|| {
-                    format!("RGBA decode failed for cubemap face {face} mip {mip_i}",)
+                    TextureUploadError::from(format!(
+                        "RGBA decode failed for cubemap face {face} mip {mip_i}"
+                    ))
                 })?,
             )
         } else if flip {
@@ -79,9 +85,9 @@ fn cubemap_mip_src_to_upload_pixels<'a>(
                 )
             })?;
             if bpp != 4 {
-                return Err(format!(
+                return Err(TextureUploadError::from(format!(
                     "cubemap mip {mip_i}: RGBA8 family expects 4 bytes per texel, got {bpp}"
-                ));
+                )));
             }
             flip_mip_rows(&mut v, w, h, bpp);
             std::borrow::Cow::Owned(v)
@@ -90,20 +96,20 @@ fn cubemap_mip_src_to_upload_pixels<'a>(
         }
     } else {
         if needs_rgba8_decode_before_upload(fmt.format) {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "host {:?} must use RGBA decode but GPU format is {:?}",
                 fmt.format, wgpu_format
-            ));
+            )));
         }
         if flip && !host_format_is_compressed(fmt.format) {
             let mut v = mip_src.to_vec();
             let bpp_host = mip_tight_bytes_per_texel(v.len(), w, h).ok_or_else(|| {
-                format!(
+                TextureUploadError::from(format!(
                     "cubemap mip {mip_i}: len {} not divisible by {}×{} texels (flip_y)",
                     v.len(),
                     w,
                     h
-                )
+                ))
             })?;
             if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
                 if bpp_host != bpp_gpu {
@@ -151,40 +157,40 @@ impl CubemapMipChainUploader {
         fmt: &SetCubemapFormat,
         upload: &SetCubemapData,
         raw: &[u8],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, TextureUploadError> {
         let want = upload.data.length.max(0) as usize;
         if raw.len() < want {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "raw shorter than descriptor (need {want}, got {})",
                 raw.len()
-            ));
+            )));
         }
 
         if upload.mip_map_sizes.is_empty() {
             return Err("cubemap: no mips in upload".into());
         }
         if upload.mip_starts.len() != 6 {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "cubemap: expected mip_starts len 6 (faces), got {}",
                 upload.mip_starts.len()
-            ));
+            )));
         }
         for (fi, starts) in upload.mip_starts.iter().enumerate() {
             if starts.len() != upload.mip_map_sizes.len() {
-                return Err(format!(
+                return Err(TextureUploadError::from(format!(
                     "cubemap: face {fi} mip_starts len {} != mip_map_sizes len {}",
                     starts.len(),
                     upload.mip_map_sizes.len()
-                ));
+                )));
             }
         }
 
         let start_base = upload.start_mip_level.max(0) as u32;
         let mipmap_count = fmt.mipmap_count.max(1) as u32;
         if start_base >= mipmap_count {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "start_mip_level {start_base} >= mipmap_count {mipmap_count}"
-            ));
+            )));
         }
 
         let tex_extent = texture.size();
@@ -193,14 +199,14 @@ impl CubemapMipChainUploader {
             || tex_extent.height != face_size
             || tex_extent.depth_or_array_layers != 6
         {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "GPU cubemap {}×{}×{} does not match format face {} (asset {})",
                 tex_extent.width,
                 tex_extent.height,
                 tex_extent.depth_or_array_layers,
                 face_size,
                 upload.asset_id
-            ));
+            )));
         }
 
         let payload_len = want;
@@ -227,7 +233,7 @@ impl CubemapMipChainUploader {
         wgpu_format: wgpu::TextureFormat,
         upload: &SetCubemapData,
         payload: &[u8],
-    ) -> Result<MipChainAdvance, String> {
+    ) -> Result<MipChainAdvance, TextureUploadError> {
         if self.face >= 6 {
             return Ok(MipChainAdvance::Finished {
                 total_uploaded: self.uploaded,
@@ -242,18 +248,18 @@ impl CubemapMipChainUploader {
         let h = sz.y.max(0) as u32;
         let mip_level = self.start_base + mip_i as u32;
         if mip_level >= self.mipmap_count {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "cubemap mip_level {mip_level} exceeds format mipmap_count {}",
                 self.mipmap_count
-            ));
+            )));
         }
 
         let (gw, gh) = mip_dimensions_at_level(self.face_size, self.face_size, mip_level);
         if w != gw || h != gh {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "cubemap {} mip {mip_level}: upload says {w}×{h} but GPU mip is {gw}×{gh}",
                 upload.asset_id
-            ));
+            )));
         }
 
         let mip_src = resolve_cubemap_face_mip_slice(
@@ -311,7 +317,7 @@ fn choose_mip_start_bias_cubemap(
     format: crate::shared::TextureFormat,
     upload: &SetCubemapData,
     payload_len: usize,
-) -> Result<(usize, usize), String> {
+) -> Result<(usize, usize), TextureUploadError> {
     let offset_bias = upload.data.offset.max(0) as usize;
     let candidates = if offset_bias > 0 {
         [0usize, offset_bias]
@@ -328,10 +334,10 @@ fn choose_mip_start_bias_cubemap(
         }
     }
     if best_prefix == 0 {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "cubemap mip region exceeds shared memory descriptor (payload_len={}, descriptor_offset={})",
             payload_len, offset_bias
-        ));
+        )));
     }
     Ok((best_bias, best_prefix))
 }
@@ -341,7 +347,7 @@ fn valid_cubemap_mip_prefix_len(
     upload: &SetCubemapData,
     payload_len: usize,
     bias: usize,
-) -> Result<usize, String> {
+) -> Result<usize, TextureUploadError> {
     let mut count = 0usize;
     'outer: for face in 0..6usize {
         for (i, sz) in upload.mip_map_sizes.iter().enumerate() {
@@ -350,16 +356,16 @@ fn valid_cubemap_mip_prefix_len(
             }
             let w = sz.x as u32;
             let h = sz.y as u32;
-            let host_len = mip_byte_len(format, w, h)
-                .ok_or_else(|| format!("mip byte size unsupported for {:?}", format))?
-                as usize;
+            let host_len = mip_byte_len(format, w, h).ok_or_else(|| {
+                TextureUploadError::from(format!("mip byte size unsupported for {:?}", format))
+            })? as usize;
             let starts = upload
                 .mip_starts
                 .get(face)
-                .ok_or_else(|| "cubemap mip_starts face missing".to_string())?;
+                .ok_or_else(|| TextureUploadError::from("cubemap mip_starts face missing"))?;
             let start_raw = *starts
                 .get(i)
-                .ok_or_else(|| "cubemap mip_starts index".to_string())?;
+                .ok_or_else(|| TextureUploadError::from("cubemap mip_starts index"))?;
             if start_raw < 0 {
                 return Err("negative mip_starts".into());
             }
@@ -370,7 +376,7 @@ fn valid_cubemap_mip_prefix_len(
             let start = start_abs - bias;
             let end = start
                 .checked_add(host_len)
-                .ok_or_else(|| "mip end overflow".to_string())?;
+                .ok_or_else(|| TextureUploadError::from("mip end overflow"))?;
             if end > payload_len {
                 break 'outer;
             }

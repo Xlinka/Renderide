@@ -90,7 +90,13 @@ impl FrameResourceManager {
             }
         };
         self.empty_material = Some(EmptyMaterialBindGroup::new(device));
-        self.per_draw = Some(PerDrawResources::new(device, limits));
+        self.per_draw = match PerDrawResources::new(device, limits) {
+            Ok(p) => Some(p),
+            Err(e) => {
+                logger::error!("PerDrawResources::new failed: {e}");
+                None
+            }
+        };
     }
 
     /// Clears the per-tick light prep coalescing flag. Call once per winit frame from

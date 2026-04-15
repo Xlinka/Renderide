@@ -9,6 +9,7 @@ mod embedded_raster_pipeline;
 mod embedded_shader_stem;
 mod family;
 mod material_property_binding;
+mod pipeline_build_error;
 mod pipeline_kind;
 pub(crate) mod raster_pipeline;
 mod registry;
@@ -18,7 +19,7 @@ mod wgsl;
 mod wgsl_reflect;
 
 /// Pipeline cache keyed by shader route / layout fingerprint.
-pub use cache::{MaterialPipelineCache, MaterialPipelineCacheKey};
+pub use cache::{MaterialPipelineCache, MaterialPipelineCacheKey, MaterialPipelineHandle};
 
 /// Unity shader names → embedded WGSL stems and permutation flags.
 pub use embedded_raster_pipeline::{
@@ -34,6 +35,7 @@ pub use embedded_shader_stem::{
 /// Pipeline family descriptors, per-property GPU layout, and raster kind flags.
 pub use family::MaterialPipelineDesc;
 pub use material_property_binding::MaterialPropertyGpuLayout;
+pub use pipeline_build_error::PipelineBuildError;
 pub use pipeline_kind::RasterPipelineKind;
 
 /// Naga reflection: composed WGSL → `wgpu` bind layouts, uniform block layout, stem fingerprints.

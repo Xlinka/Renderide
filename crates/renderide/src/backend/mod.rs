@@ -12,6 +12,7 @@ mod cluster_gpu;
 mod debug_hud_bundle;
 mod embedded;
 mod frame_gpu;
+mod frame_gpu_error;
 mod frame_resource_manager;
 mod light_gpu;
 mod material_system;
@@ -26,9 +27,10 @@ pub use cluster_gpu::{
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
 };
 pub use debug_hud_bundle::DebugHudBundle;
-pub use embedded::EmbeddedMaterialBindResources;
 pub(crate) use embedded::MaterialBindCacheKey;
+pub use embedded::{EmbeddedMaterialBindError, EmbeddedMaterialBindResources};
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
+pub use frame_gpu_error::FrameGpuInitError;
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{
     order_lights_for_clustered_shading, order_lights_for_clustered_shading_in_place, GpuLight,

@@ -1,7 +1,7 @@
 //! Renderide: host–renderer IPC, window loop, and GPU presentation (skeleton).
 //!
 //! The library exposes [`run`] for the `renderide` binary. Shared IPC types live in [`shared`] and
-//! are generated; do not edit `shared/shared.rs` by hand.
+//! are generated; regenerate from **`SharedTypeGenerator`** instead of editing by hand.
 //!
 //! ## Layering
 //!
@@ -22,6 +22,7 @@
 #![warn(missing_docs)]
 
 mod process_io;
+mod run_error;
 
 pub(crate) use process_io::fatal_crash_log;
 pub(crate) use process_io::native_stdio;
@@ -73,10 +74,13 @@ pub mod prelude {
     pub use crate::xr::{XrHostCameraSync, XrMultiviewFrameRenderer};
 }
 
+pub use run_error::RunError;
+
 /// Runs the renderer process: logging, optional IPC, winit loop, and wgpu presentation.
 ///
-/// Returns [`None`] when the event loop exits without a host-requested exit code; otherwise
-/// returns an exit code for [`std::process::exit`].
-pub fn run() -> Option<i32> {
+/// Returns [`Ok`] with [`None`] when the event loop exits without a host-requested exit code,
+/// [`Ok`] with [`Some`] when the host (or handler) sets a process exit code, and [`Err`] for
+/// fatal failures during startup (logging, IPC, event loop creation, and similar).
+pub fn run() -> Result<Option<i32>, RunError> {
     app::run()
 }

@@ -2,6 +2,7 @@
 //! **Renderide debug** ([`crate::config::DebugSettings::debug_hud_enabled`]), **Scene transforms** ([`crate::config::DebugSettings::debug_hud_transforms`]).
 
 mod debug_hud;
+mod debug_hud_encode_error;
 mod frame_diagnostics_snapshot;
 mod frame_timing_hud_snapshot;
 mod host_hud;
@@ -10,6 +11,7 @@ mod renderer_info_snapshot;
 mod scene_transforms_snapshot;
 
 pub use debug_hud::DebugHud;
+pub use debug_hud_encode_error::DebugHudEncodeError;
 pub use frame_diagnostics_snapshot::FrameDiagnosticsSnapshot;
 pub use frame_timing_hud_snapshot::FrameTimingHudSnapshot;
 pub use host_hud::HostHudGatherer;

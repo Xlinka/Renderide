@@ -162,23 +162,20 @@ impl VrMirrorBlitResources {
         gpu: &mut GpuContext,
         window: &Window,
     ) -> Result<(), PresentClearError> {
-        self.present_staging_to_surface_overlay(gpu, window, |_, _, _| Ok(()))
+        self.present_staging_to_surface_overlay(gpu, window, |_, _, _| Ok::<(), String>(()))
     }
 
     /// Same as [`Self::present_staging_to_surface`], then runs `overlay` on the same encoder and swapchain view
     /// (e.g. Dear ImGui with `LoadOp::Load` over the mirror image).
-    pub fn present_staging_to_surface_overlay<F>(
+    pub fn present_staging_to_surface_overlay<F, E>(
         &mut self,
         gpu: &mut GpuContext,
         window: &Window,
         overlay: F,
     ) -> Result<(), PresentClearError>
     where
-        F: FnOnce(
-            &mut wgpu::CommandEncoder,
-            &wgpu::TextureView,
-            &mut GpuContext,
-        ) -> Result<(), String>,
+        F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), E>,
+        E: std::fmt::Display,
     {
         if !self.staging_valid {
             return Ok(());

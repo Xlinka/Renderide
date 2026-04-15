@@ -7,6 +7,7 @@ use super::super::decode::{decode_mip_to_rgba8, flip_mip_rows, needs_rgba8_decod
 use super::super::layout::{
     host_format_is_compressed, mip_byte_len, mip_dimensions_at_level, mip_tight_bytes_per_texel,
 };
+use super::error::TextureUploadError;
 use super::mip_write_common::{
     choose_mip_start_bias, is_rgba8_family, uncompressed_row_bytes, write_one_mip,
 };
@@ -23,28 +24,31 @@ fn mip_src_to_upload_pixels<'a>(
     mip_src: &'a [u8],
     mip_index: usize,
     asset_id: i32,
-) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+) -> Result<std::borrow::Cow<'a, [u8]>, TextureUploadError> {
     let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
             std::borrow::Cow::Owned(
                 decode_mip_to_rgba8(fmt.format, gw, gh, flip, mip_src).ok_or_else(|| {
-                    format!("RGBA decode failed for mip {mip_index} ({:?})", fmt.format)
+                    TextureUploadError::from(format!(
+                        "RGBA decode failed for mip {mip_index} ({:?})",
+                        fmt.format
+                    ))
                 })?,
             )
         } else if flip {
             let mut v = mip_src.to_vec();
             let bpp = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
-                format!(
+                TextureUploadError::from(format!(
                     "mip {mip_index}: RGBA8 upload len {} not divisible by {}×{} texels",
                     v.len(),
                     gw,
                     gh
-                )
+                ))
             })?;
             if bpp != 4 {
-                return Err(format!(
+                return Err(TextureUploadError::from(format!(
                     "mip {mip_index}: RGBA8 family expects 4 bytes per texel, got {bpp}"
-                ));
+                )));
             }
             flip_mip_rows(&mut v, gw, gh, bpp);
             std::borrow::Cow::Owned(v)
@@ -52,19 +56,19 @@ fn mip_src_to_upload_pixels<'a>(
             std::borrow::Cow::Borrowed(mip_src)
         }
     } else if needs_rgba8_decode_before_upload(fmt.format) {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "host {:?} must use RGBA decode but GPU format is {:?}",
             fmt.format, wgpu_format
-        ));
+        )));
     } else if flip && !host_format_is_compressed(fmt.format) {
         let mut v = mip_src.to_vec();
         let bpp_host = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
-            format!(
+            TextureUploadError::from(format!(
                 "mip {mip_index}: len {} not divisible by {}×{} texels (cannot infer row stride for flip_y)",
                 v.len(),
                 gw,
                 gh
-            )
+            ))
         })?;
         if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
             if bpp_host != bpp_gpu {
@@ -129,7 +133,7 @@ fn resolve_mip_host_payload_slice<'a>(
     fmt: &SetTexture2DFormat,
     upload: &SetTexture2DData,
     payload: &'a [u8],
-) -> Result<HostMipPayloadResolved<'a>, String> {
+) -> Result<HostMipPayloadResolved<'a>, TextureUploadError> {
     let start_raw = upload.mip_starts[next_i];
     if start_raw < 0 {
         if uploaded_mips == 0 {
@@ -149,9 +153,9 @@ fn resolve_mip_host_payload_slice<'a>(
     let start_abs = start_raw as usize;
     if start_abs < start_bias {
         if uploaded_mips == 0 {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "mip 0 start {start_abs} is before descriptor offset {start_bias}"
-            ));
+            )));
         }
         logger::warn!(
             "texture {}: uploaded {}/{} mips; stopping at mip {} because start {start_abs} is before descriptor offset {}",
@@ -167,20 +171,20 @@ fn resolve_mip_host_payload_slice<'a>(
     }
     let start_rel = start_abs - start_bias;
     let start = host_mip_payload_byte_offset(fmt.format, start_rel).ok_or_else(|| {
-        format!(
+        TextureUploadError::from(format!(
             "texture {} mip {mip_level}: mip start offset unsupported for {:?}",
             upload.asset_id, fmt.format
-        )
+        ))
     })?;
-    let host_len = mip_byte_len(fmt.format, w, h)
-        .ok_or_else(|| format!("mip byte size unsupported for {:?}", fmt.format))?
-        as usize;
+    let host_len = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
+        TextureUploadError::from(format!("mip byte size unsupported for {:?}", fmt.format))
+    })? as usize;
     let Some(mip_src) = payload.get(start..start + host_len) else {
         if uploaded_mips == 0 {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "mip 0 slice out of range after rebasing by {start_bias} (payload_len={}, valid_prefix_mips={valid_prefix_mips})",
                 payload.len()
-            ));
+            )));
         }
         logger::warn!(
             "texture {}: uploaded {}/{} mips; stopping at mip {} because payload_len={} does not cover start={} len={} after rebasing by {}",
@@ -213,7 +217,7 @@ fn validate_and_resolve_next_mip_slice<'a>(
     fmt: &SetTexture2DFormat,
     upload: &SetTexture2DData,
     payload: &'a [u8],
-) -> Result<NextMipUploadSlice<'a>, String> {
+) -> Result<NextMipUploadSlice<'a>, TextureUploadError> {
     let (_bias_check, valid_prefix_mips) =
         choose_mip_start_bias(fmt.format, upload, payload.len())?;
     debug_assert_eq!(start_bias, _bias_check);
@@ -232,9 +236,9 @@ fn validate_and_resolve_next_mip_slice<'a>(
     let h = sz.y.max(0) as u32;
     let mip_level = start_base + next_i as u32;
     if mip_level >= mipmap_count {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "upload mip {mip_level} exceeds texture mips {mipmap_count}"
-        ));
+        )));
     }
 
     let (gw, gh) = mip_dimensions_at_level(tex_extent.width, tex_extent.height, mip_level);
@@ -304,21 +308,21 @@ impl TextureMipChainUploader {
         fmt: &SetTexture2DFormat,
         upload: &SetTexture2DData,
         raw: &[u8],
-    ) -> Result<Self, String> {
+    ) -> Result<Self, TextureUploadError> {
         let want = upload.data.length.max(0) as usize;
         if raw.len() < want {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "raw shorter than descriptor (need {want}, got {})",
                 raw.len()
-            ));
+            )));
         }
 
         let start_base = upload.start_mip_level.max(0) as u32;
         let mipmap_count = fmt.mipmap_count.max(1) as u32;
         if start_base >= mipmap_count {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "start_mip_level {start_base} >= mipmap_count {mipmap_count}"
-            ));
+            )));
         }
 
         let flip = upload.flip_y;
@@ -327,10 +331,10 @@ impl TextureMipChainUploader {
         let fmt_w = fmt.width.max(0) as u32;
         let fmt_h = fmt.height.max(0) as u32;
         if tex_extent.width != fmt_w || tex_extent.height != fmt_h {
-            return Err(format!(
+            return Err(TextureUploadError::from(format!(
                 "GPU texture {}x{} does not match SetTexture2DFormat {}x{} for asset {}",
                 tex_extent.width, tex_extent.height, fmt_w, fmt_h, upload.asset_id
-            ));
+            )));
         }
 
         if upload.mip_map_sizes.len() != upload.mip_starts.len() {
@@ -372,7 +376,7 @@ impl TextureMipChainUploader {
         wgpu_format: wgpu::TextureFormat,
         upload: &SetTexture2DData,
         payload: &[u8],
-    ) -> Result<MipChainAdvance, String> {
+    ) -> Result<MipChainAdvance, TextureUploadError> {
         if self.stopped {
             return Ok(MipChainAdvance::Finished {
                 total_uploaded: self.uploaded_mips,
@@ -472,7 +476,7 @@ pub fn texture_upload_start(
     wgpu_format: wgpu::TextureFormat,
     upload: &SetTexture2DData,
     raw: &[u8],
-) -> Result<TextureDataStart, String> {
+) -> Result<TextureDataStart, TextureUploadError> {
     if upload.hint.has_region != 0 {
         if hint_region_is_empty(&upload.hint) {
             logger::trace!(
@@ -512,13 +516,13 @@ pub fn write_texture2d_mips(
     wgpu_format: wgpu::TextureFormat,
     upload: &SetTexture2DData,
     raw: &[u8],
-) -> Result<u32, String> {
+) -> Result<u32, TextureUploadError> {
     let want = upload.data.length.max(0) as usize;
     if raw.len() < want {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "raw shorter than descriptor (need {want}, got {})",
             raw.len()
-        ));
+        )));
     }
     let payload = &raw[..want];
 

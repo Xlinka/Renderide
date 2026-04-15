@@ -16,7 +16,7 @@ use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQu
 use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
-use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
+use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::GpuLimits;
 use crate::render_graph::WorldMeshDrawStats;
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
@@ -302,7 +302,7 @@ impl RenderBackend {
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
         extent: (u32, u32),
-    ) -> Result<(), String> {
+    ) -> Result<(), DebugHudEncodeError> {
         self.debug_hud
             .encode_overlay(device, queue, encoder, backbuffer, extent)
     }

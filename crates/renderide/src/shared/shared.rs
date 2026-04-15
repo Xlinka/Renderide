@@ -9,6 +9,7 @@ use super::packing::memory_packable::MemoryPackable;
 use super::packing::memory_packer::MemoryPacker;
 use super::packing::memory_packer_entity_pool::MemoryPackerEntityPool;
 use super::packing::memory_unpacker::MemoryUnpacker;
+use super::packing::polymorphic_decode_error::PolymorphicDecodeError;
 use super::packing::polymorphic_memory_packable_entity::PolymorphicEncode;
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -476,380 +477,383 @@ impl PolymorphicEncode for RendererCommand {
 
 pub fn decode_renderer_command<P: MemoryPackerEntityPool>(
     unpacker: &mut MemoryUnpacker<'_, '_, P>,
-) -> RendererCommand {
+) -> Result<RendererCommand, PolymorphicDecodeError> {
     let tag = unpacker.read::<i32>();
     match tag {
-        0 => RendererCommand::RendererInitData({
+        0 => Ok(RendererCommand::RendererInitData({
             let mut x = RendererInitData::default();
             x.unpack(unpacker);
             x
-        }),
-        1 => RendererCommand::RendererInitResult({
+        })),
+        1 => Ok(RendererCommand::RendererInitResult({
             let mut x = RendererInitResult::default();
             x.unpack(unpacker);
             x
-        }),
-        2 => RendererCommand::RendererInitProgressUpdate({
+        })),
+        2 => Ok(RendererCommand::RendererInitProgressUpdate({
             let mut x = RendererInitProgressUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        3 => RendererCommand::RendererInitFinalizeData({
+        })),
+        3 => Ok(RendererCommand::RendererInitFinalizeData({
             let mut x = RendererInitFinalizeData::default();
             x.unpack(unpacker);
             x
-        }),
-        4 => RendererCommand::RendererEngineReady({
+        })),
+        4 => Ok(RendererCommand::RendererEngineReady({
             let mut x = RendererEngineReady::default();
             x.unpack(unpacker);
             x
-        }),
-        5 => RendererCommand::RendererShutdownRequest({
+        })),
+        5 => Ok(RendererCommand::RendererShutdownRequest({
             let mut x = RendererShutdownRequest::default();
             x.unpack(unpacker);
             x
-        }),
-        6 => RendererCommand::RendererShutdown({
+        })),
+        6 => Ok(RendererCommand::RendererShutdown({
             let mut x = RendererShutdown::default();
             x.unpack(unpacker);
             x
-        }),
-        7 => RendererCommand::KeepAlive({
+        })),
+        7 => Ok(RendererCommand::KeepAlive({
             let mut x = KeepAlive::default();
             x.unpack(unpacker);
             x
-        }),
-        8 => RendererCommand::RendererParentWindow({
+        })),
+        8 => Ok(RendererCommand::RendererParentWindow({
             let mut x = RendererParentWindow::default();
             x.unpack(unpacker);
             x
-        }),
-        9 => RendererCommand::FreeSharedMemoryView({
+        })),
+        9 => Ok(RendererCommand::FreeSharedMemoryView({
             let mut x = FreeSharedMemoryView::default();
             x.unpack(unpacker);
             x
-        }),
-        10 => RendererCommand::SetWindowIcon({
+        })),
+        10 => Ok(RendererCommand::SetWindowIcon({
             let mut x = SetWindowIcon::default();
             x.unpack(unpacker);
             x
-        }),
-        11 => RendererCommand::SetWindowIconResult({
+        })),
+        11 => Ok(RendererCommand::SetWindowIconResult({
             let mut x = SetWindowIconResult::default();
             x.unpack(unpacker);
             x
-        }),
-        12 => RendererCommand::SetTaskbarProgress({
+        })),
+        12 => Ok(RendererCommand::SetTaskbarProgress({
             let mut x = SetTaskbarProgress::default();
             x.unpack(unpacker);
             x
-        }),
-        13 => RendererCommand::FrameStartData({
+        })),
+        13 => Ok(RendererCommand::FrameStartData({
             let mut x = FrameStartData::default();
             x.unpack(unpacker);
             x
-        }),
-        14 => RendererCommand::FrameSubmitData({
+        })),
+        14 => Ok(RendererCommand::FrameSubmitData({
             let mut x = FrameSubmitData::default();
             x.unpack(unpacker);
             x
-        }),
-        15 => RendererCommand::PostProcessingConfig({
+        })),
+        15 => Ok(RendererCommand::PostProcessingConfig({
             let mut x = PostProcessingConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        16 => RendererCommand::QualityConfig({
+        })),
+        16 => Ok(RendererCommand::QualityConfig({
             let mut x = QualityConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        17 => RendererCommand::ResolutionConfig({
+        })),
+        17 => Ok(RendererCommand::ResolutionConfig({
             let mut x = ResolutionConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        18 => RendererCommand::DesktopConfig({
+        })),
+        18 => Ok(RendererCommand::DesktopConfig({
             let mut x = DesktopConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        19 => RendererCommand::GaussianSplatConfig({
+        })),
+        19 => Ok(RendererCommand::GaussianSplatConfig({
             let mut x = GaussianSplatConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        20 => RendererCommand::RenderDecouplingConfig({
+        })),
+        20 => Ok(RendererCommand::RenderDecouplingConfig({
             let mut x = RenderDecouplingConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        21 => RendererCommand::MeshUploadData({
+        })),
+        21 => Ok(RendererCommand::MeshUploadData({
             let mut x = MeshUploadData::default();
             x.unpack(unpacker);
             x
-        }),
-        22 => RendererCommand::MeshUnload({
+        })),
+        22 => Ok(RendererCommand::MeshUnload({
             let mut x = MeshUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        23 => RendererCommand::MeshUploadResult({
+        })),
+        23 => Ok(RendererCommand::MeshUploadResult({
             let mut x = MeshUploadResult::default();
             x.unpack(unpacker);
             x
-        }),
-        24 => RendererCommand::ShaderUpload({
+        })),
+        24 => Ok(RendererCommand::ShaderUpload({
             let mut x = ShaderUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        25 => RendererCommand::ShaderUnload({
+        })),
+        25 => Ok(RendererCommand::ShaderUnload({
             let mut x = ShaderUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        26 => RendererCommand::ShaderUploadResult({
+        })),
+        26 => Ok(RendererCommand::ShaderUploadResult({
             let mut x = ShaderUploadResult::default();
             x.unpack(unpacker);
             x
-        }),
-        27 => RendererCommand::MaterialPropertyIdRequest({
+        })),
+        27 => Ok(RendererCommand::MaterialPropertyIdRequest({
             let mut x = MaterialPropertyIdRequest::default();
             x.unpack(unpacker);
             x
-        }),
-        28 => RendererCommand::MaterialPropertyIdResult({
+        })),
+        28 => Ok(RendererCommand::MaterialPropertyIdResult({
             let mut x = MaterialPropertyIdResult::default();
             x.unpack(unpacker);
             x
-        }),
-        29 => RendererCommand::MaterialsUpdateBatch({
+        })),
+        29 => Ok(RendererCommand::MaterialsUpdateBatch({
             let mut x = MaterialsUpdateBatch::default();
             x.unpack(unpacker);
             x
-        }),
-        30 => RendererCommand::MaterialsUpdateBatchResult({
+        })),
+        30 => Ok(RendererCommand::MaterialsUpdateBatchResult({
             let mut x = MaterialsUpdateBatchResult::default();
             x.unpack(unpacker);
             x
-        }),
-        31 => RendererCommand::UnloadMaterial({
+        })),
+        31 => Ok(RendererCommand::UnloadMaterial({
             let mut x = UnloadMaterial::default();
             x.unpack(unpacker);
             x
-        }),
-        32 => RendererCommand::UnloadMaterialPropertyBlock({
+        })),
+        32 => Ok(RendererCommand::UnloadMaterialPropertyBlock({
             let mut x = UnloadMaterialPropertyBlock::default();
             x.unpack(unpacker);
             x
-        }),
-        33 => RendererCommand::SetTexture2DFormat({
+        })),
+        33 => Ok(RendererCommand::SetTexture2DFormat({
             let mut x = SetTexture2DFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        34 => RendererCommand::SetTexture2DProperties({
+        })),
+        34 => Ok(RendererCommand::SetTexture2DProperties({
             let mut x = SetTexture2DProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        35 => RendererCommand::SetTexture2DData({
+        })),
+        35 => Ok(RendererCommand::SetTexture2DData({
             let mut x = SetTexture2DData::default();
             x.unpack(unpacker);
             x
-        }),
-        36 => RendererCommand::SetTexture2DResult({
+        })),
+        36 => Ok(RendererCommand::SetTexture2DResult({
             let mut x = SetTexture2DResult::default();
             x.unpack(unpacker);
             x
-        }),
-        37 => RendererCommand::UnloadTexture2D({
+        })),
+        37 => Ok(RendererCommand::UnloadTexture2D({
             let mut x = UnloadTexture2D::default();
             x.unpack(unpacker);
             x
-        }),
-        38 => RendererCommand::SetTexture3DFormat({
+        })),
+        38 => Ok(RendererCommand::SetTexture3DFormat({
             let mut x = SetTexture3DFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        39 => RendererCommand::SetTexture3DProperties({
+        })),
+        39 => Ok(RendererCommand::SetTexture3DProperties({
             let mut x = SetTexture3DProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        40 => RendererCommand::SetTexture3DData({
+        })),
+        40 => Ok(RendererCommand::SetTexture3DData({
             let mut x = SetTexture3DData::default();
             x.unpack(unpacker);
             x
-        }),
-        41 => RendererCommand::SetTexture3DResult({
+        })),
+        41 => Ok(RendererCommand::SetTexture3DResult({
             let mut x = SetTexture3DResult::default();
             x.unpack(unpacker);
             x
-        }),
-        42 => RendererCommand::UnloadTexture3D({
+        })),
+        42 => Ok(RendererCommand::UnloadTexture3D({
             let mut x = UnloadTexture3D::default();
             x.unpack(unpacker);
             x
-        }),
-        43 => RendererCommand::SetCubemapFormat({
+        })),
+        43 => Ok(RendererCommand::SetCubemapFormat({
             let mut x = SetCubemapFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        44 => RendererCommand::SetCubemapProperties({
+        })),
+        44 => Ok(RendererCommand::SetCubemapProperties({
             let mut x = SetCubemapProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        45 => RendererCommand::SetCubemapData({
+        })),
+        45 => Ok(RendererCommand::SetCubemapData({
             let mut x = SetCubemapData::default();
             x.unpack(unpacker);
             x
-        }),
-        46 => RendererCommand::SetCubemapResult({
+        })),
+        46 => Ok(RendererCommand::SetCubemapResult({
             let mut x = SetCubemapResult::default();
             x.unpack(unpacker);
             x
-        }),
-        47 => RendererCommand::UnloadCubemap({
+        })),
+        47 => Ok(RendererCommand::UnloadCubemap({
             let mut x = UnloadCubemap::default();
             x.unpack(unpacker);
             x
-        }),
-        48 => RendererCommand::SetRenderTextureFormat({
+        })),
+        48 => Ok(RendererCommand::SetRenderTextureFormat({
             let mut x = SetRenderTextureFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        49 => RendererCommand::RenderTextureResult({
+        })),
+        49 => Ok(RendererCommand::RenderTextureResult({
             let mut x = RenderTextureResult::default();
             x.unpack(unpacker);
             x
-        }),
-        50 => RendererCommand::UnloadRenderTexture({
+        })),
+        50 => Ok(RendererCommand::UnloadRenderTexture({
             let mut x = UnloadRenderTexture::default();
             x.unpack(unpacker);
             x
-        }),
-        51 => RendererCommand::SetDesktopTextureProperties({
+        })),
+        51 => Ok(RendererCommand::SetDesktopTextureProperties({
             let mut x = SetDesktopTextureProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        52 => RendererCommand::DesktopTexturePropertiesUpdate({
+        })),
+        52 => Ok(RendererCommand::DesktopTexturePropertiesUpdate({
             let mut x = DesktopTexturePropertiesUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        53 => RendererCommand::UnloadDesktopTexture({
+        })),
+        53 => Ok(RendererCommand::UnloadDesktopTexture({
             let mut x = UnloadDesktopTexture::default();
             x.unpack(unpacker);
             x
-        }),
-        54 => RendererCommand::PointRenderBufferUpload({
+        })),
+        54 => Ok(RendererCommand::PointRenderBufferUpload({
             let mut x = PointRenderBufferUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        55 => RendererCommand::PointRenderBufferConsumed({
+        })),
+        55 => Ok(RendererCommand::PointRenderBufferConsumed({
             let mut x = PointRenderBufferConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        56 => RendererCommand::PointRenderBufferUnload({
+        })),
+        56 => Ok(RendererCommand::PointRenderBufferUnload({
             let mut x = PointRenderBufferUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        57 => RendererCommand::TrailRenderBufferUpload({
+        })),
+        57 => Ok(RendererCommand::TrailRenderBufferUpload({
             let mut x = TrailRenderBufferUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        58 => RendererCommand::TrailRenderBufferConsumed({
+        })),
+        58 => Ok(RendererCommand::TrailRenderBufferConsumed({
             let mut x = TrailRenderBufferConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        59 => RendererCommand::TrailRenderBufferUnload({
+        })),
+        59 => Ok(RendererCommand::TrailRenderBufferUnload({
             let mut x = TrailRenderBufferUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        60 => RendererCommand::GaussianSplatUploadRaw({
+        })),
+        60 => Ok(RendererCommand::GaussianSplatUploadRaw({
             let mut x = GaussianSplatUploadRaw::default();
             x.unpack(unpacker);
             x
-        }),
-        61 => RendererCommand::GaussianSplatUploadEncoded({
+        })),
+        61 => Ok(RendererCommand::GaussianSplatUploadEncoded({
             let mut x = GaussianSplatUploadEncoded::default();
             x.unpack(unpacker);
             x
-        }),
-        62 => RendererCommand::GaussianSplatResult({
+        })),
+        62 => Ok(RendererCommand::GaussianSplatResult({
             let mut x = GaussianSplatResult::default();
             x.unpack(unpacker);
             x
-        }),
-        63 => RendererCommand::UnloadGaussianSplat({
+        })),
+        63 => Ok(RendererCommand::UnloadGaussianSplat({
             let mut x = UnloadGaussianSplat::default();
             x.unpack(unpacker);
             x
-        }),
-        64 => RendererCommand::LightsBufferRendererSubmission({
+        })),
+        64 => Ok(RendererCommand::LightsBufferRendererSubmission({
             let mut x = LightsBufferRendererSubmission::default();
             x.unpack(unpacker);
             x
-        }),
-        65 => RendererCommand::LightsBufferRendererConsumed({
+        })),
+        65 => Ok(RendererCommand::LightsBufferRendererConsumed({
             let mut x = LightsBufferRendererConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        66 => RendererCommand::ReflectionProbeRenderResult({
+        })),
+        66 => Ok(RendererCommand::ReflectionProbeRenderResult({
             let mut x = ReflectionProbeRenderResult::default();
             x.unpack(unpacker);
             x
-        }),
-        67 => RendererCommand::VideoTextureLoad({
+        })),
+        67 => Ok(RendererCommand::VideoTextureLoad({
             let mut x = VideoTextureLoad::default();
             x.unpack(unpacker);
             x
-        }),
-        68 => RendererCommand::VideoTextureUpdate({
+        })),
+        68 => Ok(RendererCommand::VideoTextureUpdate({
             let mut x = VideoTextureUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        69 => RendererCommand::VideoTextureReady({
+        })),
+        69 => Ok(RendererCommand::VideoTextureReady({
             let mut x = VideoTextureReady::default();
             x.unpack(unpacker);
             x
-        }),
-        70 => RendererCommand::VideoTextureChanged({
+        })),
+        70 => Ok(RendererCommand::VideoTextureChanged({
             let mut x = VideoTextureChanged::default();
             x.unpack(unpacker);
             x
-        }),
-        71 => RendererCommand::VideoTextureProperties({
+        })),
+        71 => Ok(RendererCommand::VideoTextureProperties({
             let mut x = VideoTextureProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        72 => RendererCommand::VideoTextureStartAudioTrack({
+        })),
+        72 => Ok(RendererCommand::VideoTextureStartAudioTrack({
             let mut x = VideoTextureStartAudioTrack::default();
             x.unpack(unpacker);
             x
-        }),
-        73 => RendererCommand::UnloadVideoTexture({
+        })),
+        73 => Ok(RendererCommand::UnloadVideoTexture({
             let mut x = UnloadVideoTexture::default();
             x.unpack(unpacker);
             x
+        })),
+        _ => Err(PolymorphicDecodeError {
+            discriminator: tag,
+            union: "RendererCommand",
         }),
-        _ => panic!("Invalid polymorphic tag: {:?}", tag),
     }
 }
 
@@ -6014,7 +6018,15 @@ pub fn decode_vr_controller_state<P: MemoryPackerEntityPool>(
             x.unpack(unpacker);
             x
         }),
-        _ => panic!("Invalid polymorphic tag: {:?}", tag),
+        _ => {
+            warn!(
+                "Invalid VRControllerState polymorphic tag {}; decoding remainder as GenericControllerState (host contract violation)",
+                tag
+            );
+            let mut x = GenericControllerState::default();
+            x.unpack(unpacker);
+            VRControllerState::GenericControllerState(x)
+        }
     }
 }
 

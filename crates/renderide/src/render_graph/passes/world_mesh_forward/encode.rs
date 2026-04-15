@@ -34,7 +34,7 @@ fn set_world_mesh_pipeline_for_item(
         None => false,
         Some(reg) => match reg.pipeline_for_shader_asset(shader_asset_id, pass_desc, shader_perm) {
             Some(pipeline) => {
-                rpass.set_pipeline(pipeline);
+                rpass.set_pipeline(pipeline.as_ref());
                 true
             }
             None => {

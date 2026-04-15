@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::embedded_shaders;
+use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipeline;
 use crate::materials::MaterialPipelineDesc;
 use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
@@ -118,13 +119,14 @@ pub fn embedded_composed_stem_for_permutation(
     base_stem.to_string()
 }
 
-pub(crate) fn build_embedded_wgsl(stem: &Arc<str>, permutation: ShaderPermutation) -> String {
+pub(crate) fn build_embedded_wgsl(
+    stem: &Arc<str>,
+    permutation: ShaderPermutation,
+) -> Result<String, PipelineBuildError> {
     let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
-    embedded_shaders::embedded_target_wgsl(&composed)
-        .unwrap_or_else(|| {
-            panic!("composed shader missing for stem {composed} (run build with shaders/source)")
-        })
-        .to_string()
+    let wgsl = embedded_shaders::embedded_target_wgsl(&composed)
+        .ok_or_else(|| PipelineBuildError::MissingEmbeddedShader(composed.clone()))?;
+    Ok(wgsl.to_string())
 }
 
 pub(crate) fn create_embedded_render_pipeline(
@@ -133,7 +135,7 @@ pub(crate) fn create_embedded_render_pipeline(
     module: &wgpu::ShaderModule,
     desc: &MaterialPipelineDesc,
     wgsl_source: &str,
-) -> wgpu::RenderPipeline {
+) -> Result<wgpu::RenderPipeline, PipelineBuildError> {
     let alpha_ui = embedded_stem_uses_alpha_blending(stem.as_ref());
     create_reflective_raster_mesh_forward_pipeline(
         device,

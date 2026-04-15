@@ -9,7 +9,7 @@ use crate::connection::{publisher_queue_name, subscriber_queue_name, ConnectionP
 use crate::shared::{
     decode_renderer_command, default_entity_pool::DefaultEntityPool, memory_packer::MemoryPacker,
     memory_unpacker::MemoryUnpacker, polymorphic_memory_packable_entity::PolymorphicEncode,
-    RendererCommand,
+    PolymorphicDecodeError, RendererCommand,
 };
 
 const SEND_BUFFER_CAP: usize = 65536;
@@ -122,13 +122,15 @@ fn drain_subscriber(sub: &mut Subscriber, out: &mut Vec<RendererCommand>) {
     while let Some(msg) = sub.try_dequeue() {
         let mut pool = DefaultEntityPool;
         let mut unpacker = MemoryUnpacker::new(&msg, &mut pool);
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            decode_renderer_command(&mut unpacker)
-        })) {
+        match decode_renderer_command(&mut unpacker) {
             Ok(cmd) => out.push(cmd),
-            Err(e) => logger::log_panic_payload(e, "IPC decode panic"),
+            Err(e) => log_invalid_renderer_command(e),
         }
     }
+}
+
+fn log_invalid_renderer_command(err: PolymorphicDecodeError) {
+    logger::warn!("IPC: dropped message ({err})");
 }
 
 fn open_subscriber(

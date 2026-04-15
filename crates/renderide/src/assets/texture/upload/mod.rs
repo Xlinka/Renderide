@@ -8,6 +8,7 @@
 //! The [`wgpu::TextureFormat`] must match the texture’s creation format (see [`format_resolve::resolve_texture2d_wgpu_format`]).
 
 mod cubemap_write;
+mod error;
 mod format_resolve;
 mod mip_write_common;
 mod subregion;
@@ -15,6 +16,7 @@ mod texture3d_write;
 mod write_mip_chain;
 
 pub use cubemap_write::CubemapMipChainUploader;
+pub use error::TextureUploadError;
 pub use format_resolve::{
     resolve_cubemap_wgpu_format, resolve_texture2d_wgpu_format, resolve_texture3d_wgpu_format,
 };

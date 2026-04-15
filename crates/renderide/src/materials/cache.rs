@@ -22,6 +22,7 @@ use crate::pipelines::raster::debug_world_normals::{
 use crate::pipelines::ShaderPermutation;
 
 use super::family::MaterialPipelineDesc;
+use super::pipeline_build_error::PipelineBuildError;
 
 /// Maximum raster pipelines retained (LRU eviction).
 const MAX_CACHED_PIPELINES: usize = 512;
@@ -43,11 +44,14 @@ pub struct MaterialPipelineCacheKey {
     pub multiview_mask: Option<NonZeroU32>,
 }
 
+/// Owned handle to a cached [`wgpu::RenderPipeline`] (an [`Arc`] clone from [`MaterialPipelineCache`]).
+pub type MaterialPipelineHandle = Arc<wgpu::RenderPipeline>;
+
 /// Lazily built pipelines; LRU-evicted when over [`MAX_CACHED_PIPELINES`].
 #[derive(Debug)]
 pub struct MaterialPipelineCache {
     device: Arc<wgpu::Device>,
-    pipelines: LruCache<MaterialPipelineCacheKey, wgpu::RenderPipeline>,
+    pipelines: LruCache<MaterialPipelineCacheKey, MaterialPipelineHandle>,
 }
 
 impl MaterialPipelineCache {
@@ -74,7 +78,7 @@ impl MaterialPipelineCache {
         kind: &RasterPipelineKind,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
-    ) -> &wgpu::RenderPipeline {
+    ) -> Result<MaterialPipelineHandle, PipelineBuildError> {
         let key = MaterialPipelineCacheKey {
             kind: kind.clone(),
             permutation,
@@ -83,31 +87,30 @@ impl MaterialPipelineCache {
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
         };
-        let device = self.device.clone();
-        let cache = &mut self.pipelines;
-        if cache.peek(&key).is_some() {
-            return cache.get(&key).expect("pipeline cache peek hit");
+        if let Some(hit) = self.pipelines.peek(&key) {
+            return Ok(Arc::clone(hit));
         }
         let wgsl = match kind {
-            RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation),
-            RasterPipelineKind::DebugWorldNormals => build_debug_world_normals_wgsl(permutation),
+            RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation)?,
+            RasterPipelineKind::DebugWorldNormals => build_debug_world_normals_wgsl(permutation)?,
         };
+        let device = self.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raster_material_shader"),
             source: wgpu::ShaderSource::Wgsl(wgsl.clone().into()),
         });
-        let pipeline = match kind {
+        let pipeline = Arc::new(match kind {
             RasterPipelineKind::EmbeddedStem(stem) => {
-                create_embedded_render_pipeline(stem, &device, &module, desc, &wgsl)
+                create_embedded_render_pipeline(stem, &device, &module, desc, &wgsl)?
             }
             RasterPipelineKind::DebugWorldNormals => {
-                create_debug_world_normals_render_pipeline(&device, &module, desc, &wgsl)
+                create_debug_world_normals_render_pipeline(&device, &module, desc, &wgsl)?
             }
-        };
-        if let Some(evicted) = cache.put(key.clone(), pipeline) {
+        });
+        if let Some(evicted) = self.pipelines.put(key, Arc::clone(&pipeline)) {
             drop(evicted);
             logger::trace!("MaterialPipelineCache: evicted LRU pipeline entry");
         }
-        cache.get(&key).expect("pipeline just inserted")
+        Ok(pipeline)
     }
 }

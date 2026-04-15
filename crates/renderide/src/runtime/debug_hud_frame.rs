@@ -1,5 +1,6 @@
 //! Per-tick wiring from [`super::RendererRuntime`] to the backend [`crate::backend::RenderBackend`] debug HUD.
 
+use crate::diagnostics::DebugHudEncodeError;
 use crate::gpu::GpuContext;
 
 use super::RendererRuntime;
@@ -76,13 +77,13 @@ impl RendererRuntime {
         gpu: &GpuContext,
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
-    ) -> Result<(), String> {
+    ) -> Result<(), DebugHudEncodeError> {
         let device = gpu.device().as_ref();
         let extent = gpu.surface_extent_px();
         let q = gpu
             .queue()
             .lock()
-            .map_err(|e| format!("queue mutex poisoned: {e}"))?;
+            .map_err(|_| DebugHudEncodeError::QueueMutexPoisoned)?;
         self.backend
             .encode_debug_hud_overlay(device, &q, encoder, backbuffer, extent)
     }

@@ -18,6 +18,7 @@ use crate::config::RendererSettingsHandle;
 use imgui::{Condition, Context, FontConfig, FontSource, WindowFlags};
 use imgui_wgpu::{Renderer as ImguiWgpuRenderer, RendererConfig};
 
+use super::debug_hud_encode_error::DebugHudEncodeError;
 use super::frame_diagnostics_snapshot::FrameDiagnosticsSnapshot;
 use super::frame_timing_hud_snapshot::FrameTimingHudSnapshot;
 use super::hud_input::DebugHudInput;
@@ -214,7 +215,7 @@ impl DebugHud {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
-    ) -> Result<(bool, bool), String> {
+    ) -> Result<(bool, bool), DebugHudEncodeError> {
         let draw_data = self.imgui.render();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -235,7 +236,7 @@ impl DebugHud {
             });
             self.renderer
                 .render(draw_data, queue, device, &mut pass)
-                .map_err(|e| format!("imgui-wgpu render: {e}"))?;
+                .map_err(|e| DebugHudEncodeError::ImguiWgpu(e.to_string()))?;
         }
         let io = self.imgui.io();
         Ok((io.want_capture_mouse, io.want_capture_keyboard))
@@ -250,7 +251,7 @@ impl DebugHud {
         backbuffer: &wgpu::TextureView,
         (width, height): (u32, u32),
         input: &DebugHudInput,
-    ) -> Result<(bool, bool), String> {
+    ) -> Result<(bool, bool), DebugHudEncodeError> {
         self.apply_overlay_frame_io((width, height), input);
 
         let (frame_timing_hud, main_hud, transforms_hud, any_debug_content) =

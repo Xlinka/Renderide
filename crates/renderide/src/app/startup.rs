@@ -11,6 +11,7 @@ use winit::event_loop::EventLoop;
 use crate::config::{load_renderer_settings, log_config_resolve_trace, settings_handle_from};
 use crate::connection::{get_connection_parameters, try_claim_renderer_singleton};
 use crate::frontend::InitState;
+use crate::run_error::RunError;
 use crate::runtime::RendererRuntime;
 use crate::shared::{HeadOutputDevice, RendererInitData};
 
@@ -37,23 +38,13 @@ pub(super) fn effective_renderer_log_level(cli: Option<LogLevel>, log_verbose: b
 }
 
 /// Runs the winit event loop until exit or window close.
-pub fn run() -> Option<i32> {
-    if let Err(e) = try_claim_renderer_singleton() {
-        eprintln!("{e}");
-        return Some(1);
-    }
+pub fn run() -> Result<Option<i32>, RunError> {
+    try_claim_renderer_singleton()?;
 
     let timestamp = logger::log_filename_timestamp();
     let log_level_cli = logger::parse_log_level_from_args();
     let initial_log_level = log_level_cli.unwrap_or(LogLevel::Debug);
-    let log_path =
-        match logger::init_for(LogComponent::Renderer, &timestamp, initial_log_level, false) {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("Failed to initialize logging: {e}");
-                return Some(1);
-            }
-        };
+    let log_path = logger::init_for(LogComponent::Renderer, &timestamp, initial_log_level, false)?;
 
     logger::info!("Logging to {}", log_path.display());
 
@@ -92,28 +83,23 @@ pub fn run() -> Option<i32> {
     if let Err(e) = runtime.connect_ipc() {
         if params.is_some() {
             logger::error!("IPC connect failed: {e}");
-            return Some(1);
+            return Err(e.into());
         }
     }
 
     if params.is_some() && runtime.is_ipc_connected() {
         logger::info!("IPC connected (Primary/Background)");
-        if wait_for_renderer_init_data(&mut runtime).is_err() {
-            return Some(1);
-        }
+        wait_for_renderer_init_data(&mut runtime)?;
     } else if params.is_some() {
         logger::warn!("IPC params present but connection state unexpected");
     } else {
         logger::info!("Standalone mode (no -QueueName/-QueueCapacity; desktop GPU, no host init)");
     }
 
-    let event_loop = match EventLoop::new() {
-        Ok(el) => el,
-        Err(e) => {
-            logger::error!("EventLoop::new failed: {e}");
-            return Some(1);
-        }
-    };
+    let event_loop = EventLoop::new().map_err(|e| {
+        logger::error!("EventLoop::new failed: {e}");
+        e
+    })?;
 
     let mut app = RenderideApp::new(
         runtime,
@@ -123,21 +109,21 @@ pub fn run() -> Option<i32> {
     );
 
     let _ = event_loop.run_app(&mut app);
-    app.exit_code
+    Ok(app.exit_code)
 }
 
 /// Blocks until [`RendererInitData`] arrives or IPC fails (non-standalone only).
-fn wait_for_renderer_init_data(runtime: &mut RendererRuntime) -> Result<(), ()> {
+fn wait_for_renderer_init_data(runtime: &mut RendererRuntime) -> Result<(), RunError> {
     let deadline = Instant::now() + IPC_INIT_WAIT_TIMEOUT;
     while runtime.init_state() == InitState::Uninitialized {
         if Instant::now() > deadline {
             logger::error!("Timed out waiting for RendererInitData from host");
-            return Err(());
+            return Err(RunError::RendererInitDataTimeout);
         }
         runtime.poll_ipc();
         if runtime.fatal_error() {
             logger::error!("Fatal IPC error while waiting for RendererInitData");
-            return Err(());
+            return Err(RunError::RendererInitDataFatalIpc);
         }
         thread::sleep(Duration::from_millis(1));
     }

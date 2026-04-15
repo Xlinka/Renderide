@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::assets::texture::{
     texture_upload_start, MipChainAdvance, TextureDataStart, TextureMipChainUploader,
+    TextureUploadError,
 };
 use crate::gpu::GpuLimits;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
@@ -115,10 +116,10 @@ impl TextureUploadTask {
                 let want = upload.data.length.max(0) as usize;
                 let mip_out = shm.with_read_bytes(&upload.data, |raw| {
                     if raw.len() < want {
-                        return Some(Err(format!(
+                        return Some(Err(TextureUploadError::from(format!(
                             "raw shorter than descriptor (need {want}, got {})",
                             raw.len()
-                        )));
+                        ))));
                     }
                     let payload = &raw[..want];
                     Some(uploader.upload_next_mip(

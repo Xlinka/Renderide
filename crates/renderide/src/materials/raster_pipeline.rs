@@ -9,6 +9,7 @@
 //! Unity-style blend from uniforms is a cross-cutting follow-up—not per-shader logic in the mesh pass.
 
 use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
+use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::MaterialPipelineDesc;
 use crate::materials::{
     reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
@@ -95,13 +96,9 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
     include_color_vertex_buffer: bool,
     use_alpha_blending: bool,
     depth_write_enabled: bool,
-) -> wgpu::RenderPipeline {
-    let reflected = reflect_raster_material_wgsl(wgsl_source).unwrap_or_else(|e| {
-        panic!("reflect {label} (must match frame globals + per-draw contract): {e}");
-    });
-    validate_per_draw_group2(&reflected.per_draw_entries).unwrap_or_else(|e| {
-        panic!("{label} per_draw group2: {e}");
-    });
+) -> Result<wgpu::RenderPipeline, PipelineBuildError> {
+    let reflected = reflect_raster_material_wgsl(wgsl_source)?;
+    validate_per_draw_group2(&reflected.per_draw_entries)?;
 
     let frame_bgl = FrameGpuResources::bind_group_layout(device);
     let material_bgl = if reflected.material_entries.is_empty() {
@@ -141,44 +138,46 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
     // `blend: Some(...)` here: float RT formats may not be blendable and pipeline creation can fail.
     let (blend, color_writes) = mesh_forward_blend_and_color_writes(use_alpha_blending);
 
-    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(label),
-        layout: Some(&layout),
-        vertex: wgpu::VertexState {
-            module,
-            entry_point: Some("vs_main"),
-            compilation_options: Default::default(),
-            buffers: vertex_buffers,
-        },
-        fragment: Some(wgpu::FragmentState {
-            module,
-            entry_point: Some("fs_main"),
-            compilation_options: Default::default(),
-            targets: &[Some(wgpu::ColorTargetState {
-                format: desc.surface_format,
-                blend,
-                write_mask: color_writes,
-            })],
-        }),
-        primitive: wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            ..Default::default()
-        },
-        depth_stencil: desc
-            .depth_stencil_format
-            .map(|format| wgpu::DepthStencilState {
-                format,
-                depth_write_enabled: Some(depth_write_enabled),
-                depth_compare: Some(MAIN_FORWARD_DEPTH_COMPARE),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
+    Ok(
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(label),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: vertex_buffers,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: desc.surface_format,
+                    blend,
+                    write_mask: color_writes,
+                })],
             }),
-        multisample: wgpu::MultisampleState {
-            count: desc.sample_count,
-            mask: !0,
-            alpha_to_coverage_enabled: false,
-        },
-        multiview_mask: desc.multiview_mask,
-        cache: None,
-    })
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: desc
+                .depth_stencil_format
+                .map(|format| wgpu::DepthStencilState {
+                    format,
+                    depth_write_enabled: Some(depth_write_enabled),
+                    depth_compare: Some(MAIN_FORWARD_DEPTH_COMPARE),
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+            multisample: wgpu::MultisampleState {
+                count: desc.sample_count,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            multiview_mask: desc.multiview_mask,
+            cache: None,
+        }),
+    )
 }
