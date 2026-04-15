@@ -2,7 +2,7 @@
 //!
 //! The **Frame timing** window shows FPS and CPU/GPU submit-interval metrics (wall-clock splits around submits).
 //! **[`crate::config::DebugSettings::debug_hud_frame_timing`]** toggles the **Frame timing** window (default on).
-//! **[`crate::config::DebugSettings::debug_hud_enabled`]** toggles **Renderide debug** (Stats / Shader routes).
+//! **[`crate::config::DebugSettings::debug_hud_enabled`]** toggles **Renderide debug** (Stats / Shader routes / GPU memory).
 //! **[`crate::config::DebugSettings::debug_hud_transforms`]** toggles the **Scene transforms** window.
 //!
 //! Window bodies live in [`mod@windows`].
@@ -65,6 +65,9 @@ fn build_overlay_hud_windows(
                     if let Some(_tab) = ui.tab_item("Shader routes") {
                         DebugHud::shader_mappings_tab(ui, frame_diagnostics);
                     }
+                    if let Some(_tab) = ui.tab_item("GPU memory") {
+                        DebugHud::gpu_memory_tab(ui, frame_diagnostics);
+                    }
                 }
             });
     }
@@ -82,7 +85,7 @@ pub struct DebugHud {
     /// Lightweight FPS / wall / CPU–submit / GPU-idle metrics ([`FrameTimingHudSnapshot`]).
     frame_timing: Option<FrameTimingHudSnapshot>,
     latest: Option<RendererInfoSnapshot>,
-    /// Per-frame timing, draws, host metrics, and shader-route strings ([`FrameDiagnosticsSnapshot`]).
+    /// Per-frame timing, draws, host metrics, shader routes, and GPU allocator detail ([`FrameDiagnosticsSnapshot`]).
     frame_diagnostics: Option<FrameDiagnosticsSnapshot>,
     /// Per-frame world transform listing for the **Scene transforms** window.
     scene_transforms: SceneTransformsSnapshot,
@@ -146,7 +149,7 @@ impl DebugHud {
         self.latest = Some(sample);
     }
 
-    /// Stores [`FrameDiagnosticsSnapshot`] for timing, host/allocator, draws, textures, and shader routes.
+    /// Stores [`FrameDiagnosticsSnapshot`] for timing, host/allocator, draws, textures, shader routes, and GPU memory tab data.
     pub fn set_frame_diagnostics(&mut self, sample: FrameDiagnosticsSnapshot) {
         self.frame_diagnostics = Some(sample);
     }

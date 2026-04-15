@@ -59,6 +59,10 @@ pub struct RendererRuntime {
     host_hud: crate::diagnostics::HostHudGatherer,
     /// [`FrameSubmitData::render_tasks`] length from the last applied frame submit (HUD).
     last_submit_render_task_count: usize,
+    /// Cached full [`wgpu::AllocatorReport`] for the **GPU memory** HUD tab (refreshed on a timer).
+    allocator_report_hud: Option<crate::diagnostics::GpuAllocatorReportHud>,
+    /// Wall clock when a **GPU memory** tab refresh was last attempted (typically every 2s while the main debug HUD runs).
+    allocator_report_last_refresh: Option<Instant>,
 }
 
 impl RendererRuntime {
@@ -77,6 +81,8 @@ impl RendererRuntime {
             config_save_path,
             host_hud: crate::diagnostics::HostHudGatherer::default(),
             last_submit_render_task_count: 0,
+            allocator_report_hud: None,
+            allocator_report_last_refresh: None,
         }
     }
 

@@ -1,9 +1,16 @@
 //! Per-tick wiring from [`super::RendererRuntime`] to the backend [`crate::backend::RenderBackend`] debug HUD.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use crate::diagnostics::DebugHudEncodeError;
+use crate::diagnostics::GpuAllocatorReportHud;
 use crate::gpu::GpuContext;
 
 use super::RendererRuntime;
+
+/// How often [`wgpu::Device::generate_allocator_report`] replaces the **GPU memory** tab payload.
+const GPU_ALLOCATOR_FULL_REPORT_INTERVAL: Duration = Duration::from_secs(2);
 
 impl RendererRuntime {
     /// Copies [`crate::config::DebugSettings::debug_hud_enabled`] into the backend before the render graph runs.
@@ -32,12 +39,39 @@ impl RendererRuntime {
 
         if main_hud {
             let host = self.host_hud.snapshot();
+            let now = Instant::now();
+            let should_refresh_allocator_report = self
+                .allocator_report_last_refresh
+                .map(|t| now.duration_since(t) >= GPU_ALLOCATOR_FULL_REPORT_INTERVAL)
+                .unwrap_or(true);
+            if should_refresh_allocator_report {
+                self.allocator_report_last_refresh = Some(now);
+                if let Some(rep) = gpu.device().generate_allocator_report() {
+                    let mut order: Vec<usize> = (0..rep.allocations.len()).collect();
+                    order.sort_by_key(|&i| std::cmp::Reverse(rep.allocations[i].size));
+                    self.allocator_report_hud = Some(GpuAllocatorReportHud {
+                        report: Arc::new(rep),
+                        allocation_indices_by_size: order.into(),
+                    });
+                }
+            }
+            let next_refresh_in_secs = self
+                .allocator_report_last_refresh
+                .map(|t| {
+                    let elapsed = now.saturating_duration_since(t);
+                    GPU_ALLOCATOR_FULL_REPORT_INTERVAL
+                        .saturating_sub(elapsed)
+                        .as_secs_f32()
+                })
+                .unwrap_or(GPU_ALLOCATOR_FULL_REPORT_INTERVAL.as_secs_f32());
             let frame_diag = crate::diagnostics::FrameDiagnosticsSnapshot::capture(
                 gpu,
                 self.backend.debug_frame_time_ms(),
                 host,
                 self.last_submit_render_task_count,
                 &self.backend,
+                self.allocator_report_hud.clone(),
+                next_refresh_in_secs,
             );
             let snapshot = crate::diagnostics::RendererInfoSnapshot::capture(
                 self.is_ipc_connected(),
@@ -56,6 +90,8 @@ impl RendererRuntime {
             self.backend.set_debug_hud_frame_diagnostics(frame_diag);
         } else {
             self.backend.clear_debug_hud_stats_snapshots();
+            self.allocator_report_hud = None;
+            self.allocator_report_last_refresh = None;
         }
 
         if transforms_hud {

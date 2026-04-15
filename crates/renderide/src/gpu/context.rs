@@ -327,6 +327,8 @@ impl GpuContext {
     /// [`wgpu::Device::generate_allocator_report`].
     ///
     /// Returns `(allocated_bytes, reserved_bytes)`, or `(None, None)` when the backend does not report.
+    /// The **Stats** debug HUD tab uses these totals every capture; the **GPU memory** tab uses a
+    /// throttled full [`wgpu::AllocatorReport`] via [`crate::runtime::RendererRuntime`].
     pub fn gpu_allocator_bytes(&self) -> (Option<u64>, Option<u64>) {
         self.device
             .generate_allocator_report()

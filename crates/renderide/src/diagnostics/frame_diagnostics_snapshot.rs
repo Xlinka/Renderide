@@ -1,8 +1,24 @@
-//! Per-frame diagnostics for the **Frame** debug HUD tab (CPU/GPU timing, allocator, draws).
+//! Per-frame diagnostics for the **Frame** debug HUD tab (CPU/GPU timing, allocator, draws)
+//! and the **GPU memory** tab (throttled full [`wgpu::AllocatorReport`]).
+
+use std::sync::Arc;
 
 use crate::backend::RenderBackend;
 use crate::gpu::GpuContext;
 use crate::render_graph::WorldMeshDrawStats;
+
+/// Full GPU allocator report plus sort order for the **GPU memory** HUD tab.
+///
+/// The report is refreshed on a timer in [`crate::runtime::RendererRuntime`] (not every frame);
+/// [`GpuAllocatorHud`] totals on the **Stats** tab are still sampled each capture via
+/// [`GpuContext::gpu_allocator_bytes`].
+#[derive(Clone, Debug)]
+pub struct GpuAllocatorReportHud {
+    /// Live [`wgpu::Device::generate_allocator_report`] payload when the backend supports it.
+    pub report: Arc<wgpu::AllocatorReport>,
+    /// Indices into [`wgpu::AllocatorReport::allocations`], sorted by descending allocation size.
+    pub allocation_indices_by_size: Arc<[usize]>,
+}
 
 /// Host CPU model and memory usage (from `sysinfo`, refreshed periodically).
 #[derive(Clone, Debug, Default)]
@@ -41,6 +57,15 @@ pub struct FrameDiagnosticsSnapshot {
     pub gpu_frame_after_submit_ms: Option<f64>,
     /// Optional wgpu allocator byte totals when exposed by the device.
     pub gpu_allocator: GpuAllocatorHud,
+    /// Throttled full allocator report for the **GPU memory** tab (`None` if unsupported or before first refresh).
+    ///
+    /// Allocation names reflect wgpu resource `label` values where set.
+    pub gpu_allocator_report: Option<GpuAllocatorReportHud>,
+    /// Seconds until [`crate::runtime::RendererRuntime`] replaces [`Self::gpu_allocator_report`] on the next capture.
+    ///
+    /// **Stats** tab totals ([`GpuAllocatorHud`]) are still updated every capture via [`GpuContext::gpu_allocator_bytes`];
+    /// this field only governs the heavy full report used by the **GPU memory** tab.
+    pub gpu_allocator_report_next_refresh_in_secs: f32,
     /// Host CPU model and memory usage for the HUD.
     pub host: HostCpuMemoryHud,
     /// World mesh forward pass draw batching stats for the frame.
@@ -70,6 +95,8 @@ impl FrameDiagnosticsSnapshot {
         host: HostCpuMemoryHud,
         last_submit_render_task_count: usize,
         backend: &RenderBackend,
+        gpu_allocator_report: Option<GpuAllocatorReportHud>,
+        gpu_allocator_report_next_refresh_in_secs: f32,
     ) -> Self {
         let (cpu_frame_until_submit_ms, gpu_frame_after_submit_ms) = gpu.frame_cpu_gpu_ms_for_hud();
         let (alloc, resv) = gpu.gpu_allocator_bytes();
@@ -102,6 +129,8 @@ impl FrameDiagnosticsSnapshot {
             cpu_frame_until_submit_ms,
             gpu_frame_after_submit_ms,
             gpu_allocator,
+            gpu_allocator_report,
+            gpu_allocator_report_next_refresh_in_secs,
             host,
             mesh_draw: backend.last_world_mesh_draw_stats(),
             last_submit_render_task_count,
@@ -135,6 +164,8 @@ mod tests {
             cpu_frame_until_submit_ms: Some(2.0),
             gpu_frame_after_submit_ms: Some(1.0),
             gpu_allocator: Default::default(),
+            gpu_allocator_report: None,
+            gpu_allocator_report_next_refresh_in_secs: 0.0,
             host: Default::default(),
             mesh_draw: Default::default(),
             last_submit_render_task_count: 0,
@@ -155,6 +186,8 @@ mod tests {
             cpu_frame_until_submit_ms: None,
             gpu_frame_after_submit_ms: None,
             gpu_allocator: Default::default(),
+            gpu_allocator_report: None,
+            gpu_allocator_report_next_refresh_in_secs: 0.0,
             host: Default::default(),
             mesh_draw: Default::default(),
             last_submit_render_task_count: 0,
