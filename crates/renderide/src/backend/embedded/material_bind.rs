@@ -77,6 +77,15 @@ struct CachedUniformEntry {
     last_written_generation: u64,
 }
 
+/// Stem layout, uniform/bind cache keys, and resolved primary texture ids for embedded `@group(1)` wiring.
+struct EmbeddedBindInputResolution {
+    layout: Arc<StemMaterialLayout>,
+    uniform_key: MaterialUniformCacheKey,
+    bind_key: MaterialBindCacheKey,
+    texture_2d_asset_id: i32,
+    primary_texture_any_kind_present: bool,
+}
+
 impl EmbeddedMaterialBindResources {
     /// Builds layouts and placeholder texture.
     pub fn new(
@@ -199,6 +208,85 @@ impl EmbeddedMaterialBindResources {
         lookup: MaterialPropertyLookupIds,
         offscreen_write_render_texture_asset_id: Option<i32>,
     ) -> Result<(MaterialBindCacheKey, Arc<wgpu::BindGroup>), String> {
+        let EmbeddedBindInputResolution {
+            layout,
+            uniform_key,
+            bind_key,
+            texture_2d_asset_id,
+            primary_texture_any_kind_present,
+        } = self.resolve_embedded_bind_inputs(
+            stem,
+            store,
+            texture_pool,
+            texture3d_pool,
+            cubemap_pool,
+            render_texture_pool,
+            lookup,
+            offscreen_write_render_texture_asset_id,
+        )?;
+
+        let mutation_gen = store.mutation_generation(lookup);
+
+        let uniform_buf = self.get_or_create_embedded_uniform_buffer(
+            queue,
+            stem,
+            &layout,
+            &uniform_key,
+            mutation_gen,
+            store,
+            lookup,
+            primary_texture_any_kind_present,
+        )?;
+
+        let mut cache = self.bind_cache.borrow_mut();
+        if let Some(bg) = cache.get(&bind_key) {
+            return Ok((bind_key, bg.clone()));
+        }
+
+        let (keepalive_views, keepalive_samplers) = self.resolve_group1_textures_and_samplers(
+            &layout,
+            texture_2d_asset_id,
+            texture_pool,
+            texture3d_pool,
+            cubemap_pool,
+            render_texture_pool,
+            store,
+            lookup,
+            offscreen_write_render_texture_asset_id,
+        )?;
+
+        let entries = build_embedded_bind_group_entries(
+            &layout,
+            &uniform_buf,
+            &keepalive_views,
+            &keepalive_samplers,
+        )?;
+
+        let bind_group = Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("embedded_material_bind"),
+            layout: &layout.bind_group_layout,
+            entries: &entries,
+        }));
+        if let Some(evicted) = cache.put(bind_key, bind_group.clone()) {
+            drop(evicted);
+            logger::trace!("EmbeddedMaterialBindResources: evicted LRU bind group cache entry");
+        }
+        Ok((bind_key, bind_group))
+    }
+
+    /// Resolves stem layout, primary texture ids, texture signature, and LRU cache keys for embedded binds.
+    #[allow(clippy::too_many_arguments)]
+    fn resolve_embedded_bind_inputs(
+        &self,
+        stem: &str,
+        store: &MaterialPropertyStore,
+        texture_pool: &TexturePool,
+        texture3d_pool: &Texture3dPool,
+        cubemap_pool: &CubemapPool,
+        render_texture_pool: &RenderTexturePool,
+        lookup: MaterialPropertyLookupIds,
+        offscreen_write_render_texture_asset_id: Option<i32>,
+    ) -> Result<EmbeddedBindInputResolution, String> {
         let layout = self.stem_layout(stem)?;
         let sh = stem_hash(stem);
 
@@ -234,67 +322,30 @@ impl EmbeddedMaterialBindResources {
             offscreen_write_render_texture_asset_id,
         };
 
-        let mutation_gen = store.mutation_generation(lookup);
+        Ok(EmbeddedBindInputResolution {
+            layout,
+            uniform_key,
+            bind_key,
+            texture_2d_asset_id,
+            primary_texture_any_kind_present,
+        })
+    }
 
-        let uniform_buf = {
-            let mut uniform_cache = self.uniform_cache.borrow_mut();
-            if let Some(entry) = uniform_cache.get_mut(&uniform_key) {
-                if entry.last_written_generation == mutation_gen {
-                    entry.buffer.clone()
-                } else {
-                    let uniform_bytes = build_embedded_uniform_bytes(
-                        &layout.reflected,
-                        layout.ids.as_ref(),
-                        store,
-                        lookup,
-                        primary_texture_any_kind_present,
-                    )
-                    .ok_or_else(|| {
-                        format!(
-                            "stem {stem}: uniform block missing (shader has no material uniform)"
-                        )
-                    })?;
-                    queue.write_buffer(entry.buffer.as_ref(), 0, &uniform_bytes);
-                    entry.last_written_generation = mutation_gen;
-                    entry.buffer.clone()
-                }
-            } else {
-                let uniform_bytes = build_embedded_uniform_bytes(
-                    &layout.reflected,
-                    layout.ids.as_ref(),
-                    store,
-                    lookup,
-                    primary_texture_any_kind_present,
-                )
-                .ok_or_else(|| {
-                    format!("stem {stem}: uniform block missing (shader has no material uniform)")
-                })?;
-                let buf = Arc::new(self.device.create_buffer_init(
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some("embedded_material_uniform"),
-                        contents: &uniform_bytes,
-                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                    },
-                ));
-                let entry = CachedUniformEntry {
-                    buffer: buf.clone(),
-                    last_written_generation: mutation_gen,
-                };
-                if let Some(evicted) = uniform_cache.put(uniform_key, entry) {
-                    drop(evicted);
-                    logger::trace!(
-                        "EmbeddedMaterialBindResources: evicted LRU uniform cache entry"
-                    );
-                }
-                buf
-            }
-        };
-
-        let mut cache = self.bind_cache.borrow_mut();
-        if let Some(bg) = cache.get(&bind_key) {
-            return Ok((bind_key, bg.clone()));
-        }
-
+    /// Resolves every non-uniform `@group(1)` texture view and sampler in reflection order.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::type_complexity)]
+    fn resolve_group1_textures_and_samplers(
+        &self,
+        layout: &Arc<StemMaterialLayout>,
+        texture_2d_asset_id: i32,
+        texture_pool: &TexturePool,
+        texture3d_pool: &Texture3dPool,
+        cubemap_pool: &CubemapPool,
+        render_texture_pool: &RenderTexturePool,
+        store: &MaterialPropertyStore,
+        lookup: MaterialPropertyLookupIds,
+        offscreen_write_render_texture_asset_id: Option<i32>,
+    ) -> Result<(Vec<Arc<wgpu::TextureView>>, Vec<Arc<wgpu::Sampler>>), String> {
         let mut keepalive_views: Vec<Arc<wgpu::TextureView>> = Vec::new();
         let mut keepalive_samplers: Vec<Arc<wgpu::Sampler>> = Vec::new();
         for entry in &layout.reflected.material_entries {
@@ -376,59 +427,68 @@ impl EmbeddedMaterialBindResources {
                 }
             }
         }
+        Ok((keepalive_views, keepalive_samplers))
+    }
 
-        let mut view_i = 0usize;
-        let mut samp_i = 0usize;
-        let mut entries: Vec<wgpu::BindGroupEntry<'_>> =
-            Vec::with_capacity(layout.reflected.material_entries.len());
-        for entry in &layout.reflected.material_entries {
-            let b = entry.binding;
-            match entry.ty {
-                wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    ..
-                } => {
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: b,
-                        resource: uniform_buf.as_entire_binding(),
-                    });
-                }
-                wgpu::BindingType::Texture { .. } => {
-                    let tv = keepalive_views
-                        .get(view_i)
-                        .ok_or_else(|| format!("internal: texture view index {view_i}"))?;
-                    view_i += 1;
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: b,
-                        resource: wgpu::BindingResource::TextureView(tv.as_ref()),
-                    });
-                }
-                wgpu::BindingType::Sampler(_) => {
-                    let s = keepalive_samplers
-                        .get(samp_i)
-                        .ok_or_else(|| format!("internal: sampler index {samp_i}"))?;
-                    samp_i += 1;
-                    entries.push(wgpu::BindGroupEntry {
-                        binding: b,
-                        resource: wgpu::BindingResource::Sampler(s.as_ref()),
-                    });
-                }
-                _ => {
-                    return Err(format!("unsupported binding type for @binding({b})"));
-                }
+    /// LRU uniform buffer for embedded `@group(1)`; refreshes bytes when [`MaterialPropertyStore`] mutates.
+    #[allow(clippy::too_many_arguments)]
+    fn get_or_create_embedded_uniform_buffer(
+        &self,
+        queue: &wgpu::Queue,
+        stem: &str,
+        layout: &Arc<StemMaterialLayout>,
+        uniform_key: &MaterialUniformCacheKey,
+        mutation_gen: u64,
+        store: &MaterialPropertyStore,
+        lookup: MaterialPropertyLookupIds,
+        primary_texture_any_kind_present: bool,
+    ) -> Result<Arc<wgpu::Buffer>, String> {
+        let mut uniform_cache = self.uniform_cache.borrow_mut();
+        if let Some(entry) = uniform_cache.get_mut(uniform_key) {
+            if entry.last_written_generation == mutation_gen {
+                return Ok(entry.buffer.clone());
             }
+            let uniform_bytes = build_embedded_uniform_bytes(
+                &layout.reflected,
+                layout.ids.as_ref(),
+                store,
+                lookup,
+                primary_texture_any_kind_present,
+            )
+            .ok_or_else(|| {
+                format!("stem {stem}: uniform block missing (shader has no material uniform)")
+            })?;
+            queue.write_buffer(entry.buffer.as_ref(), 0, &uniform_bytes);
+            entry.last_written_generation = mutation_gen;
+            return Ok(entry.buffer.clone());
         }
-
-        let bind_group = Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("embedded_material_bind"),
-            layout: &layout.bind_group_layout,
-            entries: &entries,
-        }));
-        if let Some(evicted) = cache.put(bind_key, bind_group.clone()) {
+        let uniform_bytes = build_embedded_uniform_bytes(
+            &layout.reflected,
+            layout.ids.as_ref(),
+            store,
+            lookup,
+            primary_texture_any_kind_present,
+        )
+        .ok_or_else(|| {
+            format!("stem {stem}: uniform block missing (shader has no material uniform)")
+        })?;
+        let buf = Arc::new(
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("embedded_material_uniform"),
+                    contents: &uniform_bytes,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                }),
+        );
+        let entry = CachedUniformEntry {
+            buffer: buf.clone(),
+            last_written_generation: mutation_gen,
+        };
+        if let Some(evicted) = uniform_cache.put(*uniform_key, entry) {
             drop(evicted);
-            logger::trace!("EmbeddedMaterialBindResources: evicted LRU bind group cache entry");
+            logger::trace!("EmbeddedMaterialBindResources: evicted LRU uniform cache entry");
         }
-        Ok((bind_key, bind_group))
+        Ok(buf)
     }
 
     fn stem_layout(&self, stem: &str) -> Result<Arc<StemMaterialLayout>, String> {
@@ -600,6 +660,57 @@ impl EmbeddedMaterialBindResources {
             }
         }
     }
+}
+
+/// Second pass: assemble [`wgpu::BindGroupEntry`] list matching reflected material entry order.
+fn build_embedded_bind_group_entries<'a>(
+    layout: &'a Arc<StemMaterialLayout>,
+    uniform_buf: &'a Arc<wgpu::Buffer>,
+    keepalive_views: &'a [Arc<wgpu::TextureView>],
+    keepalive_samplers: &'a [Arc<wgpu::Sampler>],
+) -> Result<Vec<wgpu::BindGroupEntry<'a>>, String> {
+    let mut view_i = 0usize;
+    let mut samp_i = 0usize;
+    let mut entries: Vec<wgpu::BindGroupEntry<'a>> =
+        Vec::with_capacity(layout.reflected.material_entries.len());
+    for entry in &layout.reflected.material_entries {
+        let b = entry.binding;
+        match entry.ty {
+            wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                ..
+            } => {
+                entries.push(wgpu::BindGroupEntry {
+                    binding: b,
+                    resource: uniform_buf.as_entire_binding(),
+                });
+            }
+            wgpu::BindingType::Texture { .. } => {
+                let tv = keepalive_views
+                    .get(view_i)
+                    .ok_or_else(|| format!("internal: texture view index {view_i}"))?;
+                view_i += 1;
+                entries.push(wgpu::BindGroupEntry {
+                    binding: b,
+                    resource: wgpu::BindingResource::TextureView(tv.as_ref()),
+                });
+            }
+            wgpu::BindingType::Sampler(_) => {
+                let s = keepalive_samplers
+                    .get(samp_i)
+                    .ok_or_else(|| format!("internal: sampler index {samp_i}"))?;
+                samp_i += 1;
+                entries.push(wgpu::BindGroupEntry {
+                    binding: b,
+                    resource: wgpu::BindingResource::Sampler(s.as_ref()),
+                });
+            }
+            _ => {
+                return Err(format!("unsupported binding type for @binding({b})"));
+            }
+        }
+    }
+    Ok(entries)
 }
 
 #[inline]

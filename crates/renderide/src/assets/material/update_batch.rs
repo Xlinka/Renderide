@@ -41,6 +41,19 @@ enum MaterialBatchTarget {
     PropertyBlock(i32),
 }
 
+/// Routes a parsed [`MaterialPropertyValue`] to the active material or property block.
+fn set_property_on_batch_target(
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    value: MaterialPropertyValue,
+) {
+    match target {
+        MaterialBatchTarget::Material(id) => store.set_material(id, property_id, value),
+        MaterialBatchTarget::PropertyBlock(id) => store.set_property_block(id, property_id, value),
+    }
+}
+
 fn select_target_kind(
     property_id: i32,
     select_target_index: &mut usize,
@@ -114,70 +127,44 @@ pub fn parse_materials_update_batch_into_store(
             | MaterialPropertyUpdateType::SetRenderType => {}
             MaterialPropertyUpdateType::SetFloat => {
                 if let Some(v) = p.next_float() {
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float(v),
-                            );
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float(v),
-                            );
-                        }
-                    }
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        update.property_id,
+                        MaterialPropertyValue::Float(v),
+                    );
                 }
             }
             MaterialPropertyUpdateType::SetFloat4 => {
                 if let Some(v) = p.next_float4() {
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float4(v),
-                            );
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float4(v),
-                            );
-                        }
-                    }
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        update.property_id,
+                        MaterialPropertyValue::Float4(v),
+                    );
                 }
             }
             MaterialPropertyUpdateType::SetFloat4x4 => {
                 if let Some(mat) = p.next_matrix() {
                     if options.persist_extended_payloads {
-                        let v = MaterialPropertyValue::Float4x4(mat);
-                        match target {
-                            MaterialBatchTarget::Material(id) => {
-                                store.set_material(id, update.property_id, v);
-                            }
-                            MaterialBatchTarget::PropertyBlock(id) => {
-                                store.set_property_block(id, update.property_id, v);
-                            }
-                        }
+                        set_property_on_batch_target(
+                            store,
+                            target,
+                            update.property_id,
+                            MaterialPropertyValue::Float4x4(mat),
+                        );
                     }
                 }
             }
             MaterialPropertyUpdateType::SetTexture => {
                 if let Some(packed) = p.next_int() {
-                    let v = MaterialPropertyValue::Texture(packed);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        update.property_id,
+                        MaterialPropertyValue::Texture(packed),
+                    );
                 }
             }
             MaterialPropertyUpdateType::SetFloatArray => {
@@ -201,15 +188,12 @@ pub fn parse_materials_update_batch_into_store(
                     }
                 }
                 if options.persist_extended_payloads && !out.is_empty() {
-                    let v = MaterialPropertyValue::FloatArray(out);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        update.property_id,
+                        MaterialPropertyValue::FloatArray(out),
+                    );
                 }
             }
             MaterialPropertyUpdateType::SetFloat4Array => {
@@ -233,15 +217,12 @@ pub fn parse_materials_update_batch_into_store(
                     }
                 }
                 if options.persist_extended_payloads && !out.is_empty() {
-                    let v = MaterialPropertyValue::Float4Array(out);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        update.property_id,
+                        MaterialPropertyValue::Float4Array(out),
+                    );
                 }
             }
             MaterialPropertyUpdateType::UpdateBatchEnd => break,

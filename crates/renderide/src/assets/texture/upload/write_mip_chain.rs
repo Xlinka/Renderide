@@ -12,6 +12,226 @@ use super::mip_write_common::{
 };
 use super::subregion::{hint_region_is_empty, try_write_texture2d_subregion};
 
+/// Converts host mip bytes into a buffer suitable for [`write_one_mip`] (decode, optional row flip).
+#[allow(clippy::too_many_arguments)]
+fn mip_src_to_upload_pixels<'a>(
+    fmt: &SetTexture2DFormat,
+    wgpu_format: wgpu::TextureFormat,
+    gw: u32,
+    gh: u32,
+    flip: bool,
+    mip_src: &'a [u8],
+    mip_index: usize,
+    asset_id: i32,
+) -> Result<std::borrow::Cow<'a, [u8]>, String> {
+    let pixels: std::borrow::Cow<'a, [u8]> = if is_rgba8_family(wgpu_format) {
+        if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format) {
+            std::borrow::Cow::Owned(
+                decode_mip_to_rgba8(fmt.format, gw, gh, flip, mip_src).ok_or_else(|| {
+                    format!("RGBA decode failed for mip {mip_index} ({:?})", fmt.format)
+                })?,
+            )
+        } else if flip {
+            let mut v = mip_src.to_vec();
+            let bpp = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
+                format!(
+                    "mip {mip_index}: RGBA8 upload len {} not divisible by {}×{} texels",
+                    v.len(),
+                    gw,
+                    gh
+                )
+            })?;
+            if bpp != 4 {
+                return Err(format!(
+                    "mip {mip_index}: RGBA8 family expects 4 bytes per texel, got {bpp}"
+                ));
+            }
+            flip_mip_rows(&mut v, gw, gh, bpp);
+            std::borrow::Cow::Owned(v)
+        } else {
+            std::borrow::Cow::Borrowed(mip_src)
+        }
+    } else if needs_rgba8_decode_before_upload(fmt.format) {
+        return Err(format!(
+            "host {:?} must use RGBA decode but GPU format is {:?}",
+            fmt.format, wgpu_format
+        ));
+    } else if flip && !host_format_is_compressed(fmt.format) {
+        let mut v = mip_src.to_vec();
+        let bpp_host = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
+            format!(
+                "mip {mip_index}: len {} not divisible by {}×{} texels (cannot infer row stride for flip_y)",
+                v.len(),
+                gw,
+                gh
+            )
+        })?;
+        if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
+            if bpp_host != bpp_gpu {
+                logger::warn!(
+                    "texture {} mip {mip_index}: host texel stride {} B != GPU {:?} stride {} B; flip_y uses host packing",
+                    asset_id,
+                    bpp_host,
+                    wgpu_format,
+                    bpp_gpu
+                );
+            }
+        }
+        flip_mip_rows(&mut v, gw, gh, bpp_host);
+        std::borrow::Cow::Owned(v)
+    } else {
+        if flip && host_format_is_compressed(fmt.format) {
+            logger::warn!(
+                "texture {} mip {mip_index}: flip_y skipped for compressed {:?} GPU upload",
+                asset_id,
+                wgpu_format
+            );
+        }
+        std::borrow::Cow::Borrowed(mip_src)
+    };
+    Ok(pixels)
+}
+
+/// Outcome of [`validate_and_resolve_next_mip_slice`] for one [`TextureMipChainUploader`] step.
+enum NextMipUploadSlice<'a> {
+    /// Stop iteration: chain finished normally (`uploaded_mips` may be zero only when no mip was ever uploaded — caller treats as error in that case).
+    ChainDone { total_uploaded: u32 },
+    /// Stop iteration: truncated payload or negative offset (`stopped` flag should be set on the uploader).
+    ChainStopped { total_uploaded: u32 },
+    /// GPU dimensions and source bytes for this mip level.
+    Ready {
+        mip_level: u32,
+        gw: u32,
+        gh: u32,
+        mip_index: usize,
+        mip_src: &'a [u8],
+    },
+}
+
+/// Validates mip metadata, descriptor-relative offsets, and payload bounds for the current mip index.
+#[allow(clippy::too_many_arguments)]
+fn validate_and_resolve_next_mip_slice<'a>(
+    uploaded_mips: u32,
+    next_i: usize,
+    start_base: u32,
+    mipmap_count: u32,
+    start_bias: usize,
+    tex_extent: wgpu::Extent3d,
+    fmt: &SetTexture2DFormat,
+    upload: &SetTexture2DData,
+    payload: &'a [u8],
+) -> Result<NextMipUploadSlice<'a>, String> {
+    let (_bias_check, valid_prefix_mips) =
+        choose_mip_start_bias(fmt.format, upload, payload.len())?;
+    debug_assert_eq!(start_bias, _bias_check);
+    let _ = valid_prefix_mips;
+
+    if next_i >= upload.mip_map_sizes.len() {
+        if uploaded_mips == 0 {
+            return Err("no mip levels uploaded".into());
+        }
+        return Ok(NextMipUploadSlice::ChainDone {
+            total_uploaded: uploaded_mips,
+        });
+    }
+
+    let sz = upload.mip_map_sizes[next_i];
+    let w = sz.x.max(0) as u32;
+    let h = sz.y.max(0) as u32;
+    let mip_level = start_base + next_i as u32;
+    if mip_level >= mipmap_count {
+        return Err(format!(
+            "upload mip {mip_level} exceeds texture mips {mipmap_count}"
+        ));
+    }
+
+    let (gw, gh) = mip_dimensions_at_level(tex_extent.width, tex_extent.height, mip_level);
+    if w != gw || h != gh {
+        logger::debug!(
+            "texture {} mip {mip_level}: mip_map_sizes {w}x{h} != GPU {gw}x{gh} (using GPU dimensions; base {}x{})",
+            upload.asset_id,
+            tex_extent.width,
+            tex_extent.height
+        );
+    }
+
+    let start_raw = upload.mip_starts[next_i];
+    if start_raw < 0 {
+        if uploaded_mips == 0 {
+            return Err("negative mip_starts".into());
+        }
+        logger::warn!(
+            "texture {}: uploaded {}/{} mips; stopping at mip {} because mip_starts is negative",
+            upload.asset_id,
+            uploaded_mips,
+            upload.mip_map_sizes.len(),
+            next_i
+        );
+        return Ok(NextMipUploadSlice::ChainStopped {
+            total_uploaded: uploaded_mips,
+        });
+    }
+    let start_abs = start_raw as usize;
+    if start_abs < start_bias {
+        if uploaded_mips == 0 {
+            return Err(format!(
+                "mip 0 start {start_abs} is before descriptor offset {start_bias}"
+            ));
+        }
+        logger::warn!(
+            "texture {}: uploaded {}/{} mips; stopping at mip {} because start {start_abs} is before descriptor offset {}",
+            upload.asset_id,
+            uploaded_mips,
+            upload.mip_map_sizes.len(),
+            next_i,
+            start_bias
+        );
+        return Ok(NextMipUploadSlice::ChainStopped {
+            total_uploaded: uploaded_mips,
+        });
+    }
+    let start_rel = start_abs - start_bias;
+    let start = host_mip_payload_byte_offset(fmt.format, start_rel).ok_or_else(|| {
+        format!(
+            "texture {} mip {mip_level}: mip start offset unsupported for {:?}",
+            upload.asset_id, fmt.format
+        )
+    })?;
+    let host_len = mip_byte_len(fmt.format, w, h)
+        .ok_or_else(|| format!("mip byte size unsupported for {:?}", fmt.format))?
+        as usize;
+    let Some(mip_src) = payload.get(start..start + host_len) else {
+        if uploaded_mips == 0 {
+            return Err(format!(
+                "mip 0 slice out of range after rebasing by {start_bias} (payload_len={}, valid_prefix_mips={valid_prefix_mips})",
+                payload.len()
+            ));
+        }
+        logger::warn!(
+            "texture {}: uploaded {}/{} mips; stopping at mip {} because payload_len={} does not cover start={} len={} after rebasing by {}",
+            upload.asset_id,
+            uploaded_mips,
+            upload.mip_map_sizes.len(),
+            next_i,
+            payload.len(),
+            start,
+            host_len,
+            start_bias
+        );
+        return Ok(NextMipUploadSlice::ChainStopped {
+            total_uploaded: uploaded_mips,
+        });
+    };
+
+    Ok(NextMipUploadSlice::Ready {
+        mip_level,
+        gw,
+        gh,
+        mip_index: next_i,
+        mip_src,
+    })
+}
+
 /// Incremental full mip-chain upload: call [`Self::upload_next_mip`] until [`MipChainAdvance::Finished`].
 #[derive(Debug)]
 pub struct TextureMipChainUploader {
@@ -132,182 +352,46 @@ impl TextureMipChainUploader {
         let start_base = self.start_base;
         let mipmap_count = self.mipmap_count;
         let start_bias = self.start_bias;
-        let (_bias_check, valid_prefix_mips) =
-            choose_mip_start_bias(fmt.format, upload, payload.len())?;
-        debug_assert_eq!(start_bias, _bias_check);
-
         let i = self.next_i;
-        if i >= upload.mip_map_sizes.len() {
-            if self.uploaded_mips == 0 {
-                return Err("no mip levels uploaded".into());
-            }
-            return Ok(MipChainAdvance::Finished {
-                total_uploaded: self.uploaded_mips,
-            });
-        }
 
-        let sz = upload.mip_map_sizes[i];
-        let w = sz.x.max(0) as u32;
-        let h = sz.y.max(0) as u32;
-        let mip_level = start_base + i as u32;
-        if mip_level >= mipmap_count {
-            return Err(format!(
-                "upload mip {mip_level} exceeds texture mips {mipmap_count}"
-            ));
-        }
-
-        let (gw, gh) = mip_dimensions_at_level(tex_extent.width, tex_extent.height, mip_level);
-        if w != gw || h != gh {
-            logger::debug!(
-                "texture {} mip {mip_level}: mip_map_sizes {w}x{h} != GPU {gw}x{gh} (using GPU dimensions; base {}x{})",
-                upload.asset_id,
-                tex_extent.width,
-                tex_extent.height
-            );
-        }
-
-        let start_raw = upload.mip_starts[i];
-        if start_raw < 0 {
-            if self.uploaded_mips == 0 {
-                return Err("negative mip_starts".into());
+        let slice = validate_and_resolve_next_mip_slice(
+            self.uploaded_mips,
+            i,
+            start_base,
+            mipmap_count,
+            start_bias,
+            tex_extent,
+            fmt,
+            upload,
+            payload,
+        )?;
+        let (mip_level, gw, gh, mip_index, mip_src) = match slice {
+            NextMipUploadSlice::ChainDone { total_uploaded } => {
+                return Ok(MipChainAdvance::Finished { total_uploaded });
             }
-            logger::warn!(
-                "texture {}: uploaded {}/{} mips; stopping at mip {} because mip_starts is negative",
-                upload.asset_id,
-                self.uploaded_mips,
-                upload.mip_map_sizes.len(),
-                i
-            );
-            self.stopped = true;
-            return Ok(MipChainAdvance::Finished {
-                total_uploaded: self.uploaded_mips,
-            });
-        }
-        let start_abs = start_raw as usize;
-        if start_abs < start_bias {
-            if self.uploaded_mips == 0 {
-                return Err(format!(
-                    "mip 0 start {} is before descriptor offset {}",
-                    start_abs, start_bias
-                ));
+            NextMipUploadSlice::ChainStopped { total_uploaded } => {
+                self.stopped = true;
+                return Ok(MipChainAdvance::Finished { total_uploaded });
             }
-            logger::warn!(
-                "texture {}: uploaded {}/{} mips; stopping at mip {} because start {} is before descriptor offset {}",
-                upload.asset_id,
-                self.uploaded_mips,
-                upload.mip_map_sizes.len(),
-                i,
-                start_abs,
-                start_bias
-            );
-            self.stopped = true;
-            return Ok(MipChainAdvance::Finished {
-                total_uploaded: self.uploaded_mips,
-            });
-        }
-        let start_rel = start_abs - start_bias;
-        let start = host_mip_payload_byte_offset(fmt.format, start_rel).ok_or_else(|| {
-            format!(
-                "texture {} mip {mip_level}: mip start offset unsupported for {:?}",
-                upload.asset_id, fmt.format
-            )
-        })?;
-        let host_len = mip_byte_len(fmt.format, w, h)
-            .ok_or_else(|| format!("mip byte size unsupported for {:?}", fmt.format))?
-            as usize;
-        let Some(mip_src) = payload.get(start..start + host_len) else {
-            if self.uploaded_mips == 0 {
-                return Err(format!(
-                    "mip 0 slice out of range after rebasing by {start_bias} (payload_len={}, valid_prefix_mips={valid_prefix_mips})",
-                    payload.len()
-                ));
-            }
-            logger::warn!(
-                "texture {}: uploaded {}/{} mips; stopping at mip {} because payload_len={} does not cover start={} len={} after rebasing by {}",
-                upload.asset_id,
-                self.uploaded_mips,
-                upload.mip_map_sizes.len(),
-                i,
-                payload.len(),
-                start,
-                host_len,
-                start_bias
-            );
-            self.stopped = true;
-            return Ok(MipChainAdvance::Finished {
-                total_uploaded: self.uploaded_mips,
-            });
+            NextMipUploadSlice::Ready {
+                mip_level,
+                gw,
+                gh,
+                mip_index,
+                mip_src,
+            } => (mip_level, gw, gh, mip_index, mip_src),
         };
 
-        let pixels: std::borrow::Cow<'_, [u8]> = if is_rgba8_family(wgpu_format) {
-            if needs_rgba8_decode_before_upload(fmt.format) || host_format_is_compressed(fmt.format)
-            {
-                std::borrow::Cow::Owned(
-                    decode_mip_to_rgba8(fmt.format, gw, gh, flip, mip_src).ok_or_else(|| {
-                        format!("RGBA decode failed for mip {i} ({:?})", fmt.format)
-                    })?,
-                )
-            } else if flip {
-                let mut v = mip_src.to_vec();
-                let bpp = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
-                    format!(
-                        "mip {i}: RGBA8 upload len {} not divisible by {}×{} texels",
-                        v.len(),
-                        gw,
-                        gh
-                    )
-                })?;
-                if bpp != 4 {
-                    return Err(format!(
-                        "mip {i}: RGBA8 family expects 4 bytes per texel, got {bpp}"
-                    ));
-                }
-                flip_mip_rows(&mut v, gw, gh, bpp);
-                std::borrow::Cow::Owned(v)
-            } else {
-                std::borrow::Cow::Borrowed(mip_src)
-            }
-        } else {
-            if needs_rgba8_decode_before_upload(fmt.format) {
-                return Err(format!(
-                    "host {:?} must use RGBA decode but GPU format is {:?}",
-                    fmt.format, wgpu_format
-                ));
-            }
-            if flip && !host_format_is_compressed(fmt.format) {
-                let mut v = mip_src.to_vec();
-                let bpp_host = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {
-                    format!(
-                        "mip {i}: len {} not divisible by {}×{} texels (cannot infer row stride for flip_y)",
-                        v.len(),
-                        gw,
-                        gh
-                    )
-                })?;
-                if let Ok(bpp_gpu) = uncompressed_row_bytes(wgpu_format) {
-                    if bpp_host != bpp_gpu {
-                        logger::warn!(
-                            "texture {} mip {i}: host texel stride {} B != GPU {:?} stride {} B; flip_y uses host packing",
-                            upload.asset_id,
-                            bpp_host,
-                            wgpu_format,
-                            bpp_gpu
-                        );
-                    }
-                }
-                flip_mip_rows(&mut v, gw, gh, bpp_host);
-                std::borrow::Cow::Owned(v)
-            } else {
-                if flip && host_format_is_compressed(fmt.format) {
-                    logger::warn!(
-                        "texture {} mip {i}: flip_y skipped for compressed {:?} GPU upload",
-                        upload.asset_id,
-                        wgpu_format
-                    );
-                }
-                std::borrow::Cow::Borrowed(mip_src)
-            }
-        };
+        let pixels = mip_src_to_upload_pixels(
+            fmt,
+            wgpu_format,
+            gw,
+            gh,
+            flip,
+            mip_src,
+            mip_index,
+            upload.asset_id,
+        )?;
 
         write_one_mip(
             queue,

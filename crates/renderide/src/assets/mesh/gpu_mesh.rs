@@ -2,10 +2,8 @@
 
 use std::sync::Arc;
 
-use glam::Mat4;
-use wgpu::util::DeviceExt;
-
 use crate::shared::{MeshUploadData, MeshUploadHintFlag, RenderBoundingBox};
+use glam::Mat4;
 
 use super::layout::{
     color_float4_stream_bytes, compute_index_count, compute_vertex_stride, extract_bind_poses,
@@ -14,8 +12,13 @@ use super::layout::{
     uv0_float2_stream_bytes, MeshBufferLayout, BLENDSHAPE_OFFSET_GPU_STRIDE,
 };
 
-use crate::backend::mesh_deform::plan_blendshape_bind_chunks;
 use crate::gpu::GpuLimits;
+
+use super::upload_impl::{
+    allocate_deform_outputs, create_core_vertex_index_buffers, extract_derived_vertex_streams,
+    resident_bytes_for_mesh_upload, upload_blendshape_buffer, upload_bone_and_skin_buffers,
+    validate_mesh_upload_layout,
+};
 
 use super::gpu_mesh_hints::{
     blendshape_descriptor_count, derived_streams_compatible_for_in_place,
@@ -96,379 +99,74 @@ impl GpuMesh {
         data: &MeshUploadData,
         layout: &MeshBufferLayout,
     ) -> Option<Self> {
-        if raw.len() < layout.total_buffer_length {
-            logger::error!(
-                "mesh {}: raw too short (need {}, got {})",
-                data.asset_id,
-                layout.total_buffer_length,
-                raw.len()
-            );
-            return None;
-        }
-
         let max_buf = gpu_limits.max_buffer_size();
-        if layout.vertex_size as u64 > max_buf
-            || layout.index_buffer_length as u64 > max_buf
-            || layout.total_buffer_length as u64 > max_buf
-        {
-            logger::warn!(
-                "mesh {}: buffer layout exceeds max_buffer_size ({})",
-                data.asset_id,
-                max_buf
-            );
+        if !validate_mesh_upload_layout(raw, data, layout, max_buf) {
             return None;
         }
 
-        let vertex_stride = compute_vertex_stride(&data.vertex_attributes).max(1) as u32;
-        let vertex_stride_us = vertex_stride as usize;
-        let index_count = compute_index_count(&data.submeshes);
-        let index_count_u32 = index_count.max(0) as u32;
         let use_blendshapes =
             data.upload_hint.flags.blendshapes() && !data.blendshape_buffers.is_empty();
 
-        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("mesh {} vertices", data.asset_id)),
-            contents: &raw[..layout.vertex_size],
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let ib_slice =
-            &raw[layout.index_buffer_start..layout.index_buffer_start + layout.index_buffer_length];
-        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("mesh {} indices", data.asset_id)),
-            contents: ib_slice,
-            usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
-        });
-
-        let index_format = wgpu_index_format(data.index_buffer_format);
+        let core = create_core_vertex_index_buffers(device, raw, data, layout);
         let vc_usize = data.vertex_count.max(0) as usize;
 
-        let vertex_slice = &raw[..layout.vertex_size];
-        let (positions_buffer, normals_buffer) =
-            match extract_float3_position_normal_as_vec4_streams(
-                vertex_slice,
-                vc_usize,
-                vertex_stride_us,
-                &data.vertex_attributes,
-            ) {
-                Some((pb, nb)) => {
-                    let usage = wgpu::BufferUsages::STORAGE
-                        | wgpu::BufferUsages::VERTEX
-                        | wgpu::BufferUsages::COPY_DST;
-                    let pbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} positions_stream", data.asset_id)),
-                        contents: &pb,
-                        usage,
-                    });
-                    let nbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} normals_stream", data.asset_id)),
-                        contents: &nb,
-                        usage,
-                    });
-                    (Some(Arc::new(pbuf)), Some(Arc::new(nbuf)))
-                }
-                None => {
-                    logger::warn!(
-                        "mesh {}: missing float3 position+normal attributes — debug/deform path disabled",
-                        data.asset_id
-                    );
-                    (None, None)
-                }
-            };
+        let derived = extract_derived_vertex_streams(device, raw, data, layout, &core);
 
-        let uv0_buffer = uv0_float2_stream_bytes(
-            vertex_slice,
-            vc_usize,
-            vertex_stride_us,
-            &data.vertex_attributes,
-        )
-        .map(|uv_bytes| {
-            Arc::new(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("mesh {} uv0_stream", data.asset_id)),
-                    contents: &uv_bytes,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }),
-            )
-        });
-        let color_buffer = color_float4_stream_bytes(
-            vertex_slice,
-            vc_usize,
-            vertex_stride_us,
-            &data.vertex_attributes,
-        )
-        .map(|color_bytes| {
-            Arc::new(
-                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("mesh {} color_stream", data.asset_id)),
-                    contents: &color_bytes,
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                }),
-            )
-        });
+        let bone_skin =
+            upload_bone_and_skin_buffers(device, raw, data, layout, use_blendshapes, vc_usize)?;
 
-        let (
-            bone_counts_buffer,
-            bone_indices_buffer,
-            bone_weights_vec4_buffer,
-            bind_poses_buffer,
-            skinning_bind_matrices,
-        ) = if data.bone_count > 0 {
-            let bp_raw =
-                &raw[layout.bind_poses_start..layout.bind_poses_start + layout.bind_poses_length];
-            let bind_poses_arr = extract_bind_poses(bp_raw, data.bone_count as usize)?;
-            let bp_bytes: Vec<u8> = bind_poses_arr
-                .iter()
-                .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
-                .collect();
-            let skinning: Vec<Mat4> = bind_poses_arr
-                .iter()
-                .map(Mat4::from_cols_array_2d)
-                .collect();
-
-            let bc = &raw
-                [layout.bone_counts_start..layout.bone_counts_start + layout.bone_counts_length];
-            let bw = &raw
-                [layout.bone_weights_start..layout.bone_weights_start + layout.bone_weights_length];
-            let (bi_buf, bw_buf) = match split_bone_weights_tail_for_gpu(bw, vc_usize) {
-                Some((ib, wb)) => {
-                    let bi = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} bone_indices", data.asset_id)),
-                        contents: &ib,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    let bwt = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} bone_weights_vec4", data.asset_id)),
-                        contents: &wb,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    (Some(Arc::new(bi)), Some(Arc::new(bwt)))
-                }
-                None => {
-                    logger::warn!(
-                        "mesh {}: bone weight tail could not be repacked for GPU skinning",
-                        data.asset_id
-                    );
-                    (None, None)
-                }
-            };
-
-            let bc_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("mesh {} bone_counts", data.asset_id)),
-                contents: bc,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            let bp_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("mesh {} bind_poses", data.asset_id)),
-                contents: &bp_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            (
-                Some(Arc::new(bc_buf)),
-                bi_buf,
-                bw_buf,
-                Some(Arc::new(bp_buf)),
-                skinning,
-            )
-        } else if use_blendshapes && data.vertex_count > 0 {
-            let (bind_poses_arr, bone_counts, bone_weights) =
-                synthetic_bone_data_for_blendshape_only(data.vertex_count);
-            let bp_bytes: Vec<u8> = bind_poses_arr
-                .iter()
-                .flat_map(|m| bytemuck::bytes_of(m).iter().copied())
-                .collect();
-            let skinning: Vec<Mat4> = bind_poses_arr
-                .iter()
-                .map(Mat4::from_cols_array_2d)
-                .collect();
-            let (bi_buf, bw_buf) = split_bone_weights_tail_for_gpu(&bone_weights, vc_usize)
-                .map(|(ib, wb)| {
-                    let bi = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} bone_indices synth", data.asset_id)),
-                        contents: &ib,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    let bwt = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some(&format!("mesh {} bone_weights_vec4 synth", data.asset_id)),
-                        contents: &wb,
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-                    (Some(Arc::new(bi)), Some(Arc::new(bwt)))
-                })
-                .unwrap_or((None, None));
-            let bc_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("mesh {} bone_counts synth", data.asset_id)),
-                contents: &bone_counts,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            let bp_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("mesh {} bind_poses synth", data.asset_id)),
-                contents: &bp_bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            (
-                Some(Arc::new(bc_buf)),
-                bi_buf,
-                bw_buf,
-                Some(Arc::new(bp_buf)),
-                skinning,
-            )
-        } else {
-            (None, None, None, None, Vec::new())
-        };
-
-        let (blendshape_buffer, num_blendshapes) = if use_blendshapes {
-            match extract_blendshape_offsets(
-                raw,
-                layout,
-                &data.blendshape_buffers,
-                data.vertex_count,
-            ) {
-                Some((pack, n)) if !pack.is_empty() => {
-                    let vc_u32 = data.vertex_count.max(0) as u32;
-                    let n_u32 = n.max(0) as u32;
-                    let pack_len = pack.len() as u64;
-                    if pack_len > max_buf {
-                        logger::warn!(
-                            "mesh {}: blendshapes dropped (packed size {} bytes exceeds device max_buffer_size {})",
-                            data.asset_id,
-                            pack_len,
-                            max_buf
-                        );
-                        (None, 0)
-                    } else if plan_blendshape_bind_chunks(
-                        n_u32,
-                        vc_u32,
-                        gpu_limits.wgpu.max_storage_buffer_binding_size,
-                        gpu_limits.wgpu.min_storage_buffer_offset_alignment,
-                    )
-                    .is_none()
-                    {
-                        logger::warn!(
-                            "mesh {}: blendshapes dropped ({} shapes × {} verts exceed binding limit {} or offset alignment)",
-                            data.asset_id,
-                            n_u32,
-                            vc_u32,
-                            gpu_limits.wgpu.max_storage_buffer_binding_size
-                        );
-                        (None, 0)
-                    } else {
-                        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some(&format!("mesh {} blendshapes", data.asset_id)),
-                            contents: &pack,
-                            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                        });
-                        (Some(Arc::new(buf)), n_u32)
-                    }
-                }
-                _ => (None, 0),
-            }
-        } else {
-            (None, 0)
-        };
+        let (blendshape_buffer, num_blendshapes) = upload_blendshape_buffer(
+            device,
+            gpu_limits,
+            raw,
+            data,
+            layout,
+            use_blendshapes,
+            max_buf,
+        );
 
         let has_skeleton = data.bone_count > 0;
         let needs_blend_compute = num_blendshapes > 0;
         let needs_skin_compute = has_skeleton;
 
-        let deform_usage =
-            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST;
-        let deform_temp_buffer = if needs_blend_compute {
-            let len = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
-            Some(Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("mesh {} deform_temp", data.asset_id)),
-                size: len,
-                usage: deform_usage,
-                mapped_at_creation: false,
-            })))
-        } else {
-            None
-        };
+        let deform = allocate_deform_outputs(device, data, needs_blend_compute, needs_skin_compute);
 
-        let (deformed_positions_buffer, deformed_normals_buffer) = if needs_skin_compute {
-            let len = (data.vertex_count.max(0) as u64).saturating_mul(16).max(16);
-            let pos = Some(Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("mesh {} deformed_positions", data.asset_id)),
-                size: len,
-                usage: deform_usage,
-                mapped_at_creation: false,
-            })));
-            let nrm = Some(Arc::new(device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some(&format!("mesh {} deformed_normals", data.asset_id)),
-                size: len,
-                usage: deform_usage,
-                mapped_at_creation: false,
-            })));
-            (pos, nrm)
-        } else {
-            (None, None)
-        };
+        let submeshes = validated_submesh_ranges(&data.submeshes, core.index_count_u32);
 
-        let submeshes = validated_submesh_ranges(&data.submeshes, index_count_u32);
-
-        let mut resident_bytes = vb.size() + ib.size();
-        if let Some(ref b) = bone_counts_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = bone_indices_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = bone_weights_vec4_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = bind_poses_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = blendshape_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = positions_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = normals_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = deform_temp_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = deformed_positions_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = deformed_normals_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = uv0_buffer {
-            resident_bytes += b.size();
-        }
-        if let Some(ref b) = color_buffer {
-            resident_bytes += b.size();
-        }
+        let resident_bytes = resident_bytes_for_mesh_upload(
+            &core.vb,
+            &core.ib,
+            &derived,
+            &bone_skin,
+            &blendshape_buffer,
+            &deform,
+        );
 
         Some(Self {
             asset_id: data.asset_id,
-            vertex_buffer: Arc::new(vb),
-            index_buffer: Arc::new(ib),
-            index_format,
-            index_count: index_count_u32,
+            vertex_buffer: Arc::new(core.vb),
+            index_buffer: Arc::new(core.ib),
+            index_format: core.index_format,
+            index_count: core.index_count_u32,
             submeshes,
             vertex_count: data.vertex_count.max(0) as u32,
-            vertex_stride,
+            vertex_stride: core.vertex_stride,
             bounds: data.bounds,
-            bone_counts_buffer,
-            bone_indices_buffer,
-            bone_weights_vec4_buffer,
-            bind_poses_buffer,
+            bone_counts_buffer: bone_skin.bone_counts_buffer,
+            bone_indices_buffer: bone_skin.bone_indices_buffer,
+            bone_weights_vec4_buffer: bone_skin.bone_weights_vec4_buffer,
+            bind_poses_buffer: bone_skin.bind_poses_buffer,
             blendshape_buffer,
             num_blendshapes,
-            positions_buffer,
-            normals_buffer,
-            deform_temp_buffer,
-            deformed_positions_buffer,
-            deformed_normals_buffer,
-            uv0_buffer,
-            color_buffer,
+            positions_buffer: derived.positions_buffer,
+            normals_buffer: derived.normals_buffer,
+            deform_temp_buffer: deform.deform_temp_buffer,
+            deformed_positions_buffer: deform.deformed_positions_buffer,
+            deformed_normals_buffer: deform.deformed_normals_buffer,
+            uv0_buffer: derived.uv0_buffer,
+            color_buffer: derived.color_buffer,
             has_skeleton,
-            skinning_bind_matrices,
+            skinning_bind_matrices: bone_skin.skinning_bind_matrices,
             resident_bytes,
         })
     }

@@ -326,7 +326,8 @@ mod tests {
         let mut upload = SetTexture2DData::default();
         upload.data.length = 80;
         upload.mip_map_sizes = vec![IVec2::new(4, 4), IVec2::new(2, 2)];
-        upload.mip_starts = vec![0, 64];
+        // `mip_starts` are linear **texel** indices into the chain; texel 16 begins the 2×2 mip (byte 64).
+        upload.mip_starts = vec![0, 16];
 
         let (bias, prefix) = choose_mip_start_bias(TextureFormat::RGBA32, &upload, 80).unwrap();
         assert_eq!(bias, 0);
@@ -339,7 +340,8 @@ mod tests {
         upload.data.offset = 128;
         upload.data.length = 80;
         upload.mip_map_sizes = vec![IVec2::new(4, 4), IVec2::new(2, 2)];
-        upload.mip_starts = vec![128, 192];
+        // Absolute SHM indices: base mip at descriptor offset; second mip at texel 144 (= 128 + 16).
+        upload.mip_starts = vec![128, 144];
 
         let (bias, prefix) = choose_mip_start_bias(TextureFormat::RGBA32, &upload, 80).unwrap();
         assert_eq!(bias, 128);

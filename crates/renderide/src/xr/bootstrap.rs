@@ -150,16 +150,15 @@ fn load_xr_entry() -> Result<xr::Entry, xr::LoadError> {
     }
 }
 
-/// Builds a Vulkan instance through OpenXR and wraps it as wgpu [`wgpu::Instance`] / [`wgpu::Device`].
-///
-/// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env overrides,
-/// matching [`crate::gpu::instance_flags_for_gpu_init`] and desktop [`crate::gpu::GpuContext::new`].
-pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, XrBootstrapError> {
-    // Runtimes often log with printf/stderr; ensure stdio forwarding (idempotent; usually already done in `run`).
-    crate::native_stdio::ensure_stdio_forwarded_to_logger();
+/// Result of [`create_openxr_instance`] for [`init_wgpu_openxr`].
+struct OpenxrInstanceBundle {
+    xr_instance: xr::Instance,
+    khr_generic_controller: bool,
+    runtime_supports_bd_controller: bool,
+}
 
-    let xr_entry = load_xr_entry()
-        .map_err(|e| XrBootstrapError::Message(format!("OpenXR loader not found: {e}")))?;
+/// Loads extension flags, validates `XR_KHR_vulkan_enable2`, and creates the OpenXR [`xr::Instance`].
+fn create_openxr_instance(xr_entry: xr::Entry) -> Result<OpenxrInstanceBundle, XrBootstrapError> {
     let available_extensions = xr_entry
         .enumerate_extensions()
         .map_err(|e| XrBootstrapError::Message(format!("enumerate_extensions: {e}")))?;
@@ -197,6 +196,30 @@ pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, Xr
         &enabled_extensions,
         &[],
     )?;
+
+    Ok(OpenxrInstanceBundle {
+        xr_instance,
+        khr_generic_controller: available_extensions.khr_generic_controller,
+        runtime_supports_bd_controller,
+    })
+}
+
+/// Builds a Vulkan instance through OpenXR and wraps it as wgpu [`wgpu::Instance`] / [`wgpu::Device`].
+///
+/// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env overrides,
+/// matching [`crate::gpu::instance_flags_for_gpu_init`] and desktop [`crate::gpu::GpuContext::new`].
+pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, XrBootstrapError> {
+    // Runtimes often log with printf/stderr; ensure stdio forwarding (idempotent; usually already done in `run`).
+    crate::native_stdio::ensure_stdio_forwarded_to_logger();
+
+    let xr_entry = load_xr_entry()
+        .map_err(|e| XrBootstrapError::Message(format!("OpenXR loader not found: {e}")))?;
+
+    let OpenxrInstanceBundle {
+        xr_instance,
+        khr_generic_controller,
+        runtime_supports_bd_controller,
+    } = create_openxr_instance(xr_entry)?;
 
     let openxr_debug_messenger =
         super::debug_utils::OpenxrDebugUtilsMessenger::try_create(&xr_instance);
@@ -382,7 +405,7 @@ pub fn init_wgpu_openxr(gpu_validation_layers: bool) -> Result<XrWgpuHandles, Xr
     let openxr_input = match OpenxrInput::new(
         &xr_instance,
         &session,
-        available_extensions.khr_generic_controller,
+        khr_generic_controller,
         runtime_supports_bd_controller,
     ) {
         Ok(i) => Some(i),

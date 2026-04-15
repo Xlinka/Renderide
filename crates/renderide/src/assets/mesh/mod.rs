@@ -5,6 +5,7 @@ mod gpu_mesh_fingerprint;
 mod gpu_mesh_hints;
 mod gpu_mesh_validation;
 mod layout;
+mod upload_impl;
 
 pub use gpu_mesh::GpuMesh;
 pub use gpu_mesh_fingerprint::{mesh_layout_fingerprint, mesh_upload_input_fingerprint};
