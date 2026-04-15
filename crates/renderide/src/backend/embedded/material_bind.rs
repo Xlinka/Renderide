@@ -28,7 +28,8 @@ use super::layout::{
 use super::texture_resolve::{
     primary_texture_2d_asset_id, primary_texture_any_kind_present,
     resolved_texture_binding_for_host, sampler_from_cubemap_state, sampler_from_state,
-    sampler_from_texture3d_state, texture_bind_signature, ResolvedTextureBinding,
+    sampler_from_texture3d_state, texture_bind_signature, texture_property_ids_for_binding,
+    ResolvedTextureBinding,
 };
 use super::uniform_pack::build_embedded_uniform_bytes;
 
@@ -313,18 +314,16 @@ impl EmbeddedMaterialBindResources {
                         .ok_or_else(|| {
                             format!("reflection: no WGSL name for texture @binding({b})")
                         })?;
-                    let tex_pid = layout
-                        .ids
-                        .texture_binding_to_property_id
-                        .get(&b)
-                        .copied()
-                        .ok_or_else(|| {
-                            format!("reflection: missing property id for texture @binding({b})")
-                        })?;
+                    let tex_pids = texture_property_ids_for_binding(layout.ids.as_ref(), b);
+                    if tex_pids.is_empty() {
+                        return Err(format!(
+                            "reflection: missing property id for texture @binding({b})"
+                        ));
+                    }
                     let tex_view = self
                         .resolve_texture_view_for_host(
                             host_name,
-                            tex_pid,
+                            &tex_pids,
                             texture_2d_asset_id,
                             texture_pool,
                             texture3d_pool,
@@ -347,19 +346,16 @@ impl EmbeddedMaterialBindResources {
                         .ok_or_else(|| {
                             format!("reflection: no texture global for sampler @binding({b})")
                         })?;
-                    let tex_pid = layout
-                        .ids
-                        .texture_binding_to_property_id
-                        .get(&tex_binding)
-                        .copied()
-                        .ok_or_else(|| {
-                            format!(
-                                "reflection: missing property id for texture @binding({tex_binding})"
-                            )
-                        })?;
+                    let tex_pids =
+                        texture_property_ids_for_binding(layout.ids.as_ref(), tex_binding);
+                    if tex_pids.is_empty() {
+                        return Err(format!(
+                            "reflection: missing property id for texture @binding({tex_binding})"
+                        ));
+                    }
                     let sampler = self.resolve_sampler_for_host(
                         host_name,
-                        tex_pid,
+                        &tex_pids,
                         texture_2d_asset_id,
                         texture_pool,
                         texture3d_pool,
@@ -471,14 +467,14 @@ impl EmbeddedMaterialBindResources {
             else {
                 continue;
             };
-            let Some(texture_pid) = layout.ids.texture_binding_to_property_id.get(&b).copied()
-            else {
+            let texture_pids = texture_property_ids_for_binding(layout.ids.as_ref(), b);
+            if texture_pids.is_empty() {
                 continue;
-            };
+            }
             if let ResolvedTextureBinding::Texture2D { asset_id } =
                 resolved_texture_binding_for_host(
                     host_name,
-                    texture_pid,
+                    &texture_pids,
                     primary_texture_2d,
                     store,
                     lookup,
@@ -498,7 +494,7 @@ impl EmbeddedMaterialBindResources {
     fn resolve_texture_view_for_host(
         &self,
         host_name: &str,
-        texture_property_id: i32,
+        texture_property_ids: &[i32],
         primary_texture_2d: i32,
         texture_pool: &TexturePool,
         texture3d_pool: &Texture3dPool,
@@ -510,7 +506,7 @@ impl EmbeddedMaterialBindResources {
     ) -> Option<Arc<wgpu::TextureView>> {
         let binding = resolved_texture_binding_for_host(
             host_name,
-            texture_property_id,
+            texture_property_ids,
             primary_texture_2d,
             store,
             lookup,
@@ -529,7 +525,7 @@ impl EmbeddedMaterialBindResources {
     fn resolve_sampler_for_host(
         &self,
         host_name: &str,
-        texture_property_id: i32,
+        texture_property_ids: &[i32],
         primary_texture_2d: i32,
         texture_pool: &TexturePool,
         texture3d_pool: &Texture3dPool,
@@ -541,7 +537,7 @@ impl EmbeddedMaterialBindResources {
     ) -> Arc<wgpu::Sampler> {
         let binding = resolved_texture_binding_for_host(
             host_name,
-            texture_property_id,
+            texture_property_ids,
             primary_texture_2d,
             store,
             lookup,

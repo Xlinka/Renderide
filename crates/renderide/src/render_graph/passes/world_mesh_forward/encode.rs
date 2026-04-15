@@ -1,7 +1,11 @@
 //! Encode indexed draws and material bind groups for [`super::WorldMeshForwardPass`].
 
+use crate::assets::material::MaterialDictionary;
 use crate::backend::MaterialBindCacheKey;
-use crate::materials::{MaterialPipelineDesc, RasterPipelineKind};
+use crate::materials::{
+    material_blend_mode_for_lookup, MaterialPipelineDesc, MaterialPipelinePropertyIds,
+    MaterialPipelineSet, RasterPipelineKind,
+};
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::world_mesh_draw_prep::build_instance_batches;
 use crate::render_graph::MaterialDrawBatchKey;
@@ -33,11 +37,13 @@ pub(crate) fn draw_subset(
 ) {
     let mut last_batch_key: Option<MaterialDrawBatchKey> = None;
     let mut last_material_bind_key: Option<LastMaterialBindGroup1Key> = None;
+    let mut current_pipelines: Option<MaterialPipelineSet> = None;
     let mut pipeline_ok = false;
 
     rpass.set_bind_group(0, frame_bg, &[]);
 
     let batches = build_instance_batches(draws, draw_indices, supports_base_instance);
+    let pipeline_property_ids = MaterialPipelinePropertyIds::new(backend.property_id_registry());
 
     for batch in batches {
         let first_idx = batch.first_draw_index;
@@ -46,15 +52,34 @@ pub(crate) fn draw_subset(
         if last_batch_key.as_ref() != Some(&item.batch_key) {
             last_batch_key = Some(item.batch_key.clone());
             let shader_asset_id = item.batch_key.shader_asset_id;
+            let material_blend_mode = {
+                let dict = MaterialDictionary::new(backend.material_property_store());
+                material_blend_mode_for_lookup(&dict, item.lookup_ids, &pipeline_property_ids)
+            };
             pipeline_ok = match backend.materials.material_registry.as_mut() {
                 None => false,
                 Some(reg) => {
-                    match reg.pipeline_for_shader_asset(shader_asset_id, pass_desc, shader_perm) {
-                        Some(pipeline) => {
-                            rpass.set_pipeline(pipeline);
+                    match reg.pipeline_for_shader_asset(
+                        shader_asset_id,
+                        pass_desc,
+                        shader_perm,
+                        material_blend_mode,
+                    ) {
+                        Some(pipelines) if !pipelines.is_empty() => {
+                            current_pipelines = Some(pipelines);
                             true
                         }
+                        Some(_) => {
+                            current_pipelines = None;
+                            logger::trace!(
+                                "WorldMeshForward: empty pipeline set for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
+                                shader_asset_id,
+                                item.batch_key.pipeline
+                            );
+                            false
+                        }
                         None => {
+                            current_pipelines = None;
                             logger::trace!(
                             "WorldMeshForward: no pipeline for shader_asset_id {:?} pipeline {:?}, skipping draws until registered",
                             shader_asset_id,
@@ -136,15 +161,21 @@ pub(crate) fn draw_subset(
         let inst_start = first_idx as u32;
         let inst_range = inst_start..inst_start + batch.instance_count;
 
-        draw_mesh_submesh_instanced(
-            rpass,
-            item,
-            backend.mesh_pool(),
-            item.batch_key.embedded_needs_uv0,
-            item.batch_key.embedded_needs_color,
-            item.batch_key.embedded_needs_extended_vertex_streams,
-            inst_range,
-        );
+        let Some(pipelines) = current_pipelines.as_ref() else {
+            continue;
+        };
+        for pipeline in pipelines.iter() {
+            rpass.set_pipeline(pipeline);
+            draw_mesh_submesh_instanced(
+                rpass,
+                item,
+                backend.mesh_pool(),
+                item.batch_key.embedded_needs_uv0,
+                item.batch_key.embedded_needs_color,
+                item.batch_key.embedded_needs_extended_vertex_streams,
+                inst_range.clone(),
+            );
+        }
     }
 }
 

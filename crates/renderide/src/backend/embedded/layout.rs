@@ -36,6 +36,12 @@ pub(crate) struct EmbeddedSharedKeywordIds {
     pub(crate) mask_texture_mul_alt: i32,
     pub(crate) mask_texture_clip: i32,
     pub(crate) mask_texture_clip_alt: i32,
+    pub(crate) mask_mode: i32,
+    pub(crate) mask_mode_alt: i32,
+    pub(crate) blend_mode: i32,
+    pub(crate) blend_mode_alt: i32,
+    pub(crate) alpha_cutoff: i32,
+    pub(crate) alpha_cutoff_alt: i32,
     pub(crate) mul_rgb_by_alpha: i32,
     pub(crate) mul_rgb_by_alpha_alt: i32,
     pub(crate) mul_alpha_intensity: i32,
@@ -79,6 +85,12 @@ impl EmbeddedSharedKeywordIds {
             mask_texture_mul_alt: registry.intern("_MaskTextureMul"),
             mask_texture_clip: registry.intern("_MASK_TEXTURE_CLIP"),
             mask_texture_clip_alt: registry.intern("_MaskTextureClip"),
+            mask_mode: registry.intern("_MaskMode"),
+            mask_mode_alt: registry.intern("MaskMode"),
+            blend_mode: registry.intern("_BlendMode"),
+            blend_mode_alt: registry.intern("BlendMode"),
+            alpha_cutoff: registry.intern("_AlphaCutoff"),
+            alpha_cutoff_alt: registry.intern("AlphaCutoff"),
             mul_rgb_by_alpha: registry.intern("_MUL_RGB_BY_ALPHA"),
             mul_rgb_by_alpha_alt: registry.intern("_MulRgbByAlpha"),
             mul_alpha_intensity: registry.intern("_MUL_ALPHA_INTENSITY"),
@@ -109,7 +121,18 @@ pub(crate) struct StemEmbeddedPropertyIds {
     pub(crate) shared: Arc<EmbeddedSharedKeywordIds>,
     pub(crate) uniform_field_ids: HashMap<String, i32>,
     pub(crate) texture_binding_to_property_id: HashMap<u32, i32>,
+    pub(crate) texture_binding_alias_property_ids: HashMap<u32, Vec<i32>>,
     pub(crate) keyword_field_probe_ids: HashMap<String, [i32; 3]>,
+}
+
+fn texture_property_aliases(name: &str) -> &'static [&'static str] {
+    match name {
+        "_Tex" => &["Texture", "_MainTex"],
+        "_MaskTex" => &["MaskTexture"],
+        "_OffsetTex" => &["OffsetTexture"],
+        "_MainTex" => &["Texture", "_Tex"],
+        _ => &[],
+    }
 }
 
 impl StemEmbeddedPropertyIds {
@@ -133,11 +156,19 @@ impl StemEmbeddedPropertyIds {
         }
 
         let mut texture_binding_to_property_id = HashMap::new();
+        let mut texture_binding_alias_property_ids = HashMap::new();
         for entry in &reflected.material_entries {
             if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
                 if let Some(name) = reflected.material_group1_names.get(&entry.binding) {
                     texture_binding_to_property_id
                         .insert(entry.binding, registry.intern(name.as_str()));
+                    let aliases = texture_property_aliases(name.as_str())
+                        .iter()
+                        .map(|alias| registry.intern(alias))
+                        .collect::<Vec<_>>();
+                    if !aliases.is_empty() {
+                        texture_binding_alias_property_ids.insert(entry.binding, aliases);
+                    }
                 }
             }
         }
@@ -146,6 +177,7 @@ impl StemEmbeddedPropertyIds {
             shared,
             uniform_field_ids,
             texture_binding_to_property_id,
+            texture_binding_alias_property_ids,
             keyword_field_probe_ids,
         }
     }
@@ -159,6 +191,7 @@ impl StemEmbeddedPropertyIds {
             shared: Arc::new(EmbeddedSharedKeywordIds::new(registry)),
             uniform_field_ids: HashMap::new(),
             texture_binding_to_property_id: HashMap::new(),
+            texture_binding_alias_property_ids: HashMap::new(),
             keyword_field_probe_ids: HashMap::new(),
         }
     }

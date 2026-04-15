@@ -7,7 +7,7 @@ use rayon::prelude::*;
 use crate::assets::material::MaterialDictionary;
 use crate::backend::OcclusionSystem;
 use crate::gpu::GpuContext;
-use crate::materials::{MaterialRouter, RasterPipelineKind};
+use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind};
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::{
     build_world_mesh_cull_proj_params, camera_state_enabled, collect_and_sort_world_mesh_draws,
@@ -57,6 +57,8 @@ impl RendererRuntime {
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
         let property_store = self.backend.material_property_store();
+        let pipeline_property_ids =
+            MaterialPipelinePropertyIds::new(self.backend.property_id_registry());
         let mesh_pool = self.backend.mesh_pool();
         let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
         let router_ref = self
@@ -96,6 +98,7 @@ impl RendererRuntime {
                     mesh_pool,
                     &dict,
                     router_ref,
+                    &pipeline_property_ids,
                     ShaderPermutation(0),
                     render_context,
                     prep.host_camera.head_output_transform,
@@ -145,6 +148,8 @@ impl RendererRuntime {
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
         let property_store = self.backend.material_property_store();
+        let pipeline_property_ids =
+            MaterialPipelinePropertyIds::new(self.backend.property_id_registry());
         let mesh_pool = self.backend.mesh_pool();
         let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
         let router_ref = self
@@ -183,6 +188,7 @@ impl RendererRuntime {
                     mesh_pool,
                     &dict,
                     router_ref,
+                    &pipeline_property_ids,
                     ShaderPermutation(0),
                     render_context,
                     prep.host_camera.head_output_transform,
@@ -214,6 +220,7 @@ impl RendererRuntime {
             mesh_pool,
             &dict,
             router_ref,
+            &pipeline_property_ids,
             ShaderPermutation(0),
             render_context,
             hc.head_output_transform,

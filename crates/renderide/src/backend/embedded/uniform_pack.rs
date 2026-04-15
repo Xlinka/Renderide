@@ -29,6 +29,19 @@ fn keyword_float_enabled_any_pids(
         .any(|&pid| keyword_float_enabled_by_pid(store, lookup, pid))
 }
 
+fn first_float_by_pids(
+    store: &MaterialPropertyStore,
+    lookup: MaterialPropertyLookupIds,
+    pids: &[i32],
+) -> Option<f32> {
+    pids.iter()
+        .find_map(|&pid| match store.get_merged(lookup, pid) {
+            Some(MaterialPropertyValue::Float(f)) => Some(*f),
+            Some(MaterialPropertyValue::Float4(v)) => Some(v[0]),
+            _ => None,
+        })
+}
+
 fn default_vec4_for_field(field_name: &str) -> [f32; 4] {
     if field_name.ends_with("_ST") {
         return [1.0, 1.0, 0.0, 0.0];
@@ -39,6 +52,7 @@ fn default_vec4_for_field(field_name: &str) -> [f32; 4] {
         "_EmissionColor" | "_EmissionColor1" | "_IntersectEmissionColor" | "_OutsideColor" => {
             [0.0, 0.0, 0.0, 0.0]
         }
+        "_BehindFarColor" | "_FrontFarColor" => [0.0, 0.0, 0.0, 1.0],
         "_SpecularColor" | "_SpecularColor1" => [1.0, 1.0, 1.0, 0.5],
         _ => [1.0, 1.0, 1.0, 1.0],
     }
@@ -141,6 +155,8 @@ fn default_f32_for_field(
         | "_Exposure"
         | "_Gamma"
         | "_ZWrite" => 1.0,
+        "_Exp" | "_PolarPow" => 1.0,
+        "_GammaCurve" => 2.2,
         "_SrcBlend" => 1.0,
         "_DstBlend" => 0.0,
         "_ZTest" | "_Cull" => 2.0,
@@ -244,6 +260,24 @@ fn pack_flags_u32(
     {
         flags |= 0x10;
     }
+    if let Some(mask_mode) = first_float_by_pids(store, lookup, &[kw.mask_mode, kw.mask_mode_alt]) {
+        match mask_mode.round() as i32 {
+            // Resonite MaskTextureMode: MultiplyAlpha = 0, Cutoff = 1.
+            0 => flags |= 0x08,
+            1 => flags |= 0x10,
+            // Tolerate future/combined modes by enabling both paths.
+            v if v > 1 => flags |= 0x18,
+            _ => {}
+        }
+    }
+    if let Some(blend_mode) =
+        first_float_by_pids(store, lookup, &[kw.blend_mode, kw.blend_mode_alt])
+    {
+        // Resonite BlendMode.Cutout = 1.
+        if blend_mode.round() as i32 == 1 {
+            flags |= 0x02;
+        }
+    }
     if keyword_float_enabled_by_pid(store, lookup, kw.mul_rgb_by_alpha)
         || keyword_float_enabled_by_pid(store, lookup, kw.mul_rgb_by_alpha_alt)
     {
@@ -313,6 +347,13 @@ pub(crate) fn build_embedded_uniform_bytes(
                 } else if let Some(MaterialPropertyValue::Float(f)) = store.get_merged(lookup, pid)
                 {
                     *f
+                } else if field_name == "_Cutoff" {
+                    first_float_by_pids(
+                        store,
+                        lookup,
+                        &[ids.shared.alpha_cutoff, ids.shared.alpha_cutoff_alt],
+                    )
+                    .unwrap_or_else(|| default_f32_for_field(field_name, store, lookup, ids))
                 } else {
                     default_f32_for_field(field_name, store, lookup, ids)
                 };
@@ -400,6 +441,39 @@ mod text_uniform_packing_tests {
     }
 
     #[test]
+    fn unlit_mask_mode_derives_mask_flags() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let kw = EmbeddedSharedKeywordIds::new(&reg);
+        let pid = reg.intern("MaskMode");
+
+        store.set_material(7, pid, MaterialPropertyValue::Float(0.0));
+        assert_eq!(
+            pack_flags_u32("flags", &store, lookup(7), &kw, false, 0.5) & 0x18,
+            0x08
+        );
+
+        store.set_material(7, pid, MaterialPropertyValue::Float(1.0));
+        assert_eq!(
+            pack_flags_u32("flags", &store, lookup(7), &kw, false, 0.5) & 0x18,
+            0x10
+        );
+    }
+
+    #[test]
+    fn unlit_blend_mode_cutout_enables_alpha_test_flag() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let kw = EmbeddedSharedKeywordIds::new(&reg);
+        let pid = reg.intern("BlendMode");
+        store.set_material(8, pid, MaterialPropertyValue::Float(1.0));
+        assert_ne!(
+            pack_flags_u32("flags", &store, lookup(8), &kw, false, 0.5) & 0x02,
+            0
+        );
+    }
+
+    #[test]
     fn inferred_pbs_keyword_enables_from_texture_presence() {
         let mut store = MaterialPropertyStore::new();
         let reg = PropertyIdRegistry::new();
@@ -438,8 +512,17 @@ mod text_uniform_packing_tests {
         assert_eq!(default_vec4_for_field("_Rect"), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(default_vec4_for_field("_OverlayTint"), [1.0, 1.0, 1.0, 0.5]);
         assert_eq!(
+            default_vec4_for_field("_BehindFarColor"),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
             default_f32_for_field("_ZTest", &store, lookup(5), &ids),
             2.0
+        );
+        assert_eq!(default_f32_for_field("_Exp", &store, lookup(5), &ids), 1.0);
+        assert_eq!(
+            default_f32_for_field("_GammaCurve", &store, lookup(5), &ids),
+            2.2
         );
         assert_eq!(
             default_f32_for_field("_StencilComp", &store, lookup(5), &ids),

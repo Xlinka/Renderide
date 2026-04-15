@@ -58,6 +58,31 @@ impl ResolvedTextureBinding {
     }
 }
 
+/// Property ids to try for one reflected texture binding, in priority order:
+/// the exact WGSL global name first, followed by host-side aliases such as
+/// `_MaskTex` -> `MaskTexture`.
+pub(crate) fn texture_property_ids_for_binding(
+    ids: &StemEmbeddedPropertyIds,
+    binding: u32,
+) -> Vec<i32> {
+    let alias_count = ids
+        .texture_binding_alias_property_ids
+        .get(&binding)
+        .map_or(0, Vec::len);
+    let mut out = Vec::with_capacity(1 + alias_count);
+    if let Some(&pid) = ids.texture_binding_to_property_id.get(&binding) {
+        out.push(pid);
+    }
+    if let Some(aliases) = ids.texture_binding_alias_property_ids.get(&binding) {
+        for &pid in aliases {
+            if !out.contains(&pid) {
+                out.push(pid);
+            }
+        }
+    }
+    out
+}
+
 /// Resolves primary 2D texture asset id from reflected material entries.
 pub(crate) fn primary_texture_2d_asset_id(
     reflected: &ReflectedRasterLayout,
@@ -67,11 +92,11 @@ pub(crate) fn primary_texture_2d_asset_id(
 ) -> i32 {
     for entry in &reflected.material_entries {
         if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-            let Some(pid) = ids.texture_binding_to_property_id.get(&entry.binding) else {
-                continue;
-            };
-            if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, *pid) {
-                return texture2d_asset_id_from_packed(*packed).unwrap_or(-1);
+            for pid in texture_property_ids_for_binding(ids, entry.binding) {
+                if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid)
+                {
+                    return texture2d_asset_id_from_packed(*packed).unwrap_or(-1);
+                }
             }
         }
     }
@@ -91,11 +116,11 @@ pub(crate) fn primary_texture_any_kind_present(
 ) -> bool {
     for entry in &reflected.material_entries {
         if matches!(entry.ty, wgpu::BindingType::Texture { .. }) {
-            let Some(pid) = ids.texture_binding_to_property_id.get(&entry.binding) else {
-                continue;
-            };
-            if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, *pid) {
-                return unpack_host_texture_packed(*packed).is_some();
+            for pid in texture_property_ids_for_binding(ids, entry.binding) {
+                if let Some(MaterialPropertyValue::Texture(packed)) = store.get_merged(lookup, pid)
+                {
+                    return unpack_host_texture_packed(*packed).is_some();
+                }
             }
         }
     }
@@ -103,7 +128,7 @@ pub(crate) fn primary_texture_any_kind_present(
 }
 
 pub(crate) fn should_fallback_to_primary_texture(host_name: &str) -> bool {
-    matches!(host_name, "_MainTex" | "_Tex" | "_TEXTURE")
+    matches!(host_name, "_MainTex" | "_Tex" | "_TEXTURE" | "Texture")
 }
 
 fn texture_property_binding(
@@ -134,14 +159,16 @@ fn texture_property_binding(
 /// Resolves resident texture binding for a host property name, with primary-texture fallback for 2D-only slots.
 pub(crate) fn resolved_texture_binding_for_host(
     host_name: &str,
-    texture_property_id: i32,
+    texture_property_ids: &[i32],
     primary_texture_2d: i32,
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
 ) -> ResolvedTextureBinding {
-    let b = texture_property_binding(store, lookup, texture_property_id);
-    if !matches!(b, ResolvedTextureBinding::None) {
-        return b;
+    for &texture_property_id in texture_property_ids {
+        let b = texture_property_binding(store, lookup, texture_property_id);
+        if !matches!(b, ResolvedTextureBinding::None) {
+            return b;
+        }
     }
     if should_fallback_to_primary_texture(host_name) && primary_texture_2d >= 0 {
         return ResolvedTextureBinding::Texture2D {
@@ -202,12 +229,13 @@ pub(crate) fn texture_bind_signature(
         let Some(name) = reflected.material_group1_names.get(&entry.binding) else {
             continue;
         };
-        let Some(&texture_pid) = ids.texture_binding_to_property_id.get(&entry.binding) else {
+        let texture_pids = texture_property_ids_for_binding(ids, entry.binding);
+        if texture_pids.is_empty() {
             continue;
-        };
+        }
         let binding = resolved_texture_binding_for_host(
             name.as_str(),
-            texture_pid,
+            &texture_pids,
             primary_texture_2d,
             store,
             lookup,
@@ -372,4 +400,59 @@ pub(crate) fn sampler_from_state(
         anisotropy_clamp,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn lookup(material_id: i32) -> MaterialPropertyLookupIds {
+        MaterialPropertyLookupIds {
+            material_asset_id: material_id,
+            mesh_property_block_slot0: None,
+        }
+    }
+
+    #[test]
+    fn resolved_texture_binding_uses_alias_property_id() {
+        let mut store = MaterialPropertyStore::new();
+        let exact_mask_tex_pid = 10;
+        let alias_mask_texture_pid = 11;
+        store.set_material(
+            4,
+            alias_mask_texture_pid,
+            MaterialPropertyValue::Texture(123),
+        );
+
+        assert_eq!(
+            resolved_texture_binding_for_host(
+                "_MaskTex",
+                &[exact_mask_tex_pid, alias_mask_texture_pid],
+                -1,
+                &store,
+                lookup(4),
+            ),
+            ResolvedTextureBinding::Texture2D { asset_id: 123 }
+        );
+    }
+
+    #[test]
+    fn resolved_texture_binding_prefers_exact_property_id_over_alias() {
+        let mut store = MaterialPropertyStore::new();
+        let exact_tex_pid = 20;
+        let alias_texture_pid = 21;
+        store.set_material(5, exact_tex_pid, MaterialPropertyValue::Texture(200));
+        store.set_material(5, alias_texture_pid, MaterialPropertyValue::Texture(201));
+
+        assert_eq!(
+            resolved_texture_binding_for_host(
+                "_Tex",
+                &[exact_tex_pid, alias_texture_pid],
+                -1,
+                &store,
+                lookup(5),
+            ),
+            ResolvedTextureBinding::Texture2D { asset_id: 200 }
+        );
+    }
 }

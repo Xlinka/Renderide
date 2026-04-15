@@ -113,6 +113,14 @@ mod tests {
     }
 
     #[test]
+    fn resolves_overlay_fresnel_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("OverlayFresnel").as_deref(),
+            Some("overlayfresnel_default")
+        );
+    }
+
+    #[test]
     fn resolves_fresnel_from_unity_name() {
         assert_eq!(
             embedded_default_stem_for_unity_name("Fresnel").as_deref(),

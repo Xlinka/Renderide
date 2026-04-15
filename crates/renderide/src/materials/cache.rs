@@ -13,9 +13,9 @@ use std::sync::Arc;
 use lru::LruCache;
 
 use crate::materials::embedded_raster_pipeline::{
-    build_embedded_wgsl, create_embedded_render_pipeline,
+    build_embedded_wgsl, create_embedded_render_pipelines,
 };
-use crate::materials::RasterPipelineKind;
+use crate::materials::{MaterialBlendMode, RasterPipelineKind};
 use crate::pipelines::raster::debug_world_normals::{
     build_debug_world_normals_wgsl, create_debug_world_normals_render_pipeline,
 };
@@ -41,13 +41,21 @@ pub struct MaterialPipelineCacheKey {
     pub sample_count: u32,
     /// OpenXR / multiview view mask when compiling multiview pipelines.
     pub multiview_mask: Option<NonZeroU32>,
+    /// Material-level blend override for stems without explicit pass directives.
+    pub blend_mode: MaterialBlendMode,
 }
 
-/// Lazily built pipelines; LRU-evicted when over [`MAX_CACHED_PIPELINES`].
+/// One or more pipelines for a material entry (one per declared `//#pass`).
+///
+/// Materials without pass directives have `len == 1`; OverlayFresnel and other multi-pass shaders
+/// have `len >= 2`. The forward encode loop dispatches every pipeline in order for each draw.
+pub type MaterialPipelineSet = Arc<[wgpu::RenderPipeline]>;
+
+/// Lazily built pipeline sets; LRU-evicted when over [`MAX_CACHED_PIPELINES`].
 #[derive(Debug)]
 pub struct MaterialPipelineCache {
     device: Arc<wgpu::Device>,
-    pipelines: LruCache<MaterialPipelineCacheKey, wgpu::RenderPipeline>,
+    pipelines: LruCache<MaterialPipelineCacheKey, MaterialPipelineSet>,
 }
 
 impl MaterialPipelineCache {
@@ -66,7 +74,7 @@ impl MaterialPipelineCache {
         &self.device
     }
 
-    /// Returns or builds a pipeline for `kind`, `desc`, and `permutation`.
+    /// Returns or builds the pipeline set for `kind`, `desc`, and `permutation`.
     ///
     /// On a cache hit, does not compose WGSL or run reflection; those run only when inserting a new entry.
     pub fn get_or_create(
@@ -74,7 +82,8 @@ impl MaterialPipelineCache {
         kind: &RasterPipelineKind,
         desc: &MaterialPipelineDesc,
         permutation: ShaderPermutation,
-    ) -> &wgpu::RenderPipeline {
+        blend_mode: MaterialBlendMode,
+    ) -> MaterialPipelineSet {
         let key = MaterialPipelineCacheKey {
             kind: kind.clone(),
             permutation,
@@ -82,11 +91,12 @@ impl MaterialPipelineCache {
             depth_stencil_format: desc.depth_stencil_format,
             sample_count: desc.sample_count,
             multiview_mask: desc.multiview_mask,
+            blend_mode,
         };
         let device = self.device.clone();
         let cache = &mut self.pipelines;
-        if cache.peek(&key).is_some() {
-            return cache.get(&key).expect("pipeline cache peek hit");
+        if let Some(set) = cache.get(&key) {
+            return set.clone();
         }
         let wgsl = match kind {
             RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation),
@@ -96,18 +106,27 @@ impl MaterialPipelineCache {
             label: Some("raster_material_shader"),
             source: wgpu::ShaderSource::Wgsl(wgsl.clone().into()),
         });
-        let pipeline = match kind {
-            RasterPipelineKind::EmbeddedStem(stem) => {
-                create_embedded_render_pipeline(stem, &device, &module, desc, &wgsl)
-            }
+        let pipelines: Vec<wgpu::RenderPipeline> = match kind {
+            RasterPipelineKind::EmbeddedStem(stem) => create_embedded_render_pipelines(
+                stem,
+                &device,
+                &module,
+                desc,
+                &wgsl,
+                permutation,
+                blend_mode,
+            ),
             RasterPipelineKind::DebugWorldNormals => {
-                create_debug_world_normals_render_pipeline(&device, &module, desc, &wgsl)
+                vec![create_debug_world_normals_render_pipeline(
+                    &device, &module, desc, &wgsl,
+                )]
             }
         };
-        if let Some(evicted) = cache.put(key.clone(), pipeline) {
+        let set: MaterialPipelineSet = Arc::from(pipelines.into_boxed_slice());
+        if let Some(evicted) = cache.put(key, set.clone()) {
             drop(evicted);
             logger::trace!("MaterialPipelineCache: evicted LRU pipeline entry");
         }
-        cache.get(&key).expect("pipeline just inserted")
+        set
     }
 }

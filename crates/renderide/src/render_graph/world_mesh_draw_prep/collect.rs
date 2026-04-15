@@ -10,7 +10,7 @@ use rayon::prelude::*;
 
 use crate::assets::material::{MaterialDictionary, MaterialPropertyLookupIds};
 use crate::assets::mesh::GpuMesh;
-use crate::materials::MaterialRouter;
+use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter};
 use crate::pipelines::ShaderPermutation;
 use crate::resources::MeshPool;
 use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer};
@@ -49,6 +49,7 @@ fn push_draws_for_renderer(
     submeshes: &[(u32, u32)],
     dict: &MaterialDictionary<'_>,
     router: &MaterialRouter,
+    pipeline_property_ids: &MaterialPipelinePropertyIds,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
     head_output_transform: Mat4,
@@ -139,6 +140,7 @@ fn push_draws_for_renderer(
             skinned,
             dict,
             router,
+            pipeline_property_ids,
             shader_perm,
         );
         out.push(WorldMeshDrawItem {
@@ -168,6 +170,7 @@ fn collect_draws_for_one_space(
     mesh_pool: &MeshPool,
     dict: &MaterialDictionary<'_>,
     router: &MaterialRouter,
+    pipeline_property_ids: &MaterialPipelinePropertyIds,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
     head_output_transform: Mat4,
@@ -207,6 +210,7 @@ fn collect_draws_for_one_space(
             &mesh.submeshes,
             dict,
             router,
+            pipeline_property_ids,
             shader_perm,
             context,
             head_output_transform,
@@ -239,6 +243,7 @@ fn collect_draws_for_one_space(
             &mesh.submeshes,
             dict,
             router,
+            pipeline_property_ids,
             shader_perm,
             context,
             head_output_transform,
@@ -265,6 +270,7 @@ pub fn collect_and_sort_world_mesh_draws(
     mesh_pool: &MeshPool,
     dict: &MaterialDictionary<'_>,
     router: &MaterialRouter,
+    pipeline_property_ids: &MaterialPipelinePropertyIds,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
     head_output_transform: Mat4,
@@ -276,6 +282,7 @@ pub fn collect_and_sort_world_mesh_draws(
         mesh_pool,
         dict,
         router,
+        pipeline_property_ids,
         shader_perm,
         context,
         head_output_transform,
@@ -292,6 +299,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
     mesh_pool: &MeshPool,
     dict: &MaterialDictionary<'_>,
     router: &MaterialRouter,
+    pipeline_property_ids: &MaterialPipelinePropertyIds,
     shader_perm: ShaderPermutation,
     context: RenderingContext,
     head_output_transform: Mat4,
@@ -324,6 +332,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
                     mesh_pool,
                     dict,
                     router,
+                    pipeline_property_ids,
                     shader_perm,
                     context,
                     head_output_transform,
@@ -342,6 +351,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
                     mesh_pool,
                     dict,
                     router,
+                    pipeline_property_ids,
                     shader_perm,
                     context,
                     head_output_transform,

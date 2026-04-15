@@ -37,7 +37,9 @@ use crate::backend::mesh_deform::{
     write_per_draw_uniform_slab, PaddedPerDrawUniforms, PER_DRAW_UNIFORM_STRIDE,
 };
 use crate::gpu::frame_globals::FrameGpuUniforms;
-use crate::materials::{MaterialPipelineDesc, MaterialRouter, RasterPipelineKind};
+use crate::materials::{
+    MaterialPipelineDesc, MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind,
+};
 use crate::pipelines::ShaderPermutation;
 use crate::pipelines::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::present::SWAPCHAIN_CLEAR_COLOR;
@@ -190,11 +192,14 @@ impl RenderPass for WorldMeshForwardPass {
                 .map(|r| &r.router)
                 .unwrap_or(&fallback_router);
             let dict = MaterialDictionary::new(backend.material_property_store());
+            let pipeline_property_ids =
+                MaterialPipelinePropertyIds::new(backend.property_id_registry());
             collect_and_sort_world_mesh_draws(
                 frame.scene,
                 backend.mesh_pool(),
                 &dict,
                 router_ref,
+                &pipeline_property_ids,
                 shader_perm,
                 render_context,
                 hc.head_output_transform,

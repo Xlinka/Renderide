@@ -67,25 +67,311 @@ fn multiview_shader_defs(enable: bool) -> HashMap<String, ShaderDefValue> {
     defs
 }
 
+#[derive(Clone, Debug)]
+struct BuildBlendComponent {
+    src_factor: &'static str,
+    dst_factor: &'static str,
+    operation: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct BuildPassDirective {
+    name: String,
+    vertex_entry: String,
+    fragment_entry: String,
+    depth_compare: &'static str,
+    depth_write: bool,
+    cull_mode: &'static str,
+    blend: Option<(BuildBlendComponent, BuildBlendComponent)>,
+    write_mask: &'static str,
+    depth_bias_slope_scale: f32,
+    depth_bias_constant: i32,
+}
+
+impl BuildPassDirective {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            vertex_entry: "vs_main".to_string(),
+            fragment_entry: "fs_main".to_string(),
+            depth_compare: "wgpu::CompareFunction::GreaterEqual",
+            depth_write: true,
+            cull_mode: "None",
+            blend: None,
+            write_mask: "wgpu::ColorWrites::COLOR",
+            depth_bias_slope_scale: 0.0,
+            depth_bias_constant: 0,
+        }
+    }
+}
+
+fn parse_bool_like(value: &str, label: &str, file: &str, line: usize) -> bool {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "on" | "yes" => true,
+        "0" | "false" | "off" | "no" => false,
+        _ => panic!("{file}:{line}: invalid {label} value `{value}`"),
+    }
+}
+
+fn compare_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "never" => "wgpu::CompareFunction::Never",
+        "less" => "wgpu::CompareFunction::Less",
+        "equal" => "wgpu::CompareFunction::Equal",
+        "less_equal" | "lessequal" | "lequal" => "wgpu::CompareFunction::LessEqual",
+        "greater" => "wgpu::CompareFunction::Greater",
+        "not_equal" | "notequal" => "wgpu::CompareFunction::NotEqual",
+        "greater_equal" | "greaterequal" | "gequal" => "wgpu::CompareFunction::GreaterEqual",
+        "always" => "wgpu::CompareFunction::Always",
+        _ => panic!("{file}:{line}: invalid depth compare `{value}`"),
+    }
+}
+
+fn cull_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "none" | "off" | "0" => "None",
+        "front" => "Some(wgpu::Face::Front)",
+        "back" => "Some(wgpu::Face::Back)",
+        _ => panic!("{file}:{line}: invalid cull mode `{value}`"),
+    }
+}
+
+fn color_writes_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "all" | "rgba" => "wgpu::ColorWrites::ALL",
+        "color" | "rgb" => "wgpu::ColorWrites::COLOR",
+        "none" | "off" => "wgpu::ColorWrites::empty()",
+        _ => panic!("{file}:{line}: invalid color write mask `{value}`"),
+    }
+}
+
+fn blend_factor_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "zero" | "0" => "wgpu::BlendFactor::Zero",
+        "one" | "1" => "wgpu::BlendFactor::One",
+        "src" | "src_color" | "srccolor" => "wgpu::BlendFactor::Src",
+        "one_minus_src" | "one_minus_src_color" | "oneminussrc" | "oneminussrccolor" => {
+            "wgpu::BlendFactor::OneMinusSrc"
+        }
+        "dst" | "dst_color" | "dstcolor" => "wgpu::BlendFactor::Dst",
+        "one_minus_dst" | "one_minus_dst_color" | "oneminusdst" | "oneminusdstcolor" => {
+            "wgpu::BlendFactor::OneMinusDst"
+        }
+        "src_alpha" | "srcalpha" => "wgpu::BlendFactor::SrcAlpha",
+        "one_minus_src_alpha" | "oneminussrcalpha" => "wgpu::BlendFactor::OneMinusSrcAlpha",
+        "dst_alpha" | "dstalpha" => "wgpu::BlendFactor::DstAlpha",
+        "one_minus_dst_alpha" | "oneminusdstalpha" => "wgpu::BlendFactor::OneMinusDstAlpha",
+        "constant" | "constant_color" | "constantcolor" => "wgpu::BlendFactor::Constant",
+        "one_minus_constant" | "one_minus_constant_color" | "oneminusconstant" => {
+            "wgpu::BlendFactor::OneMinusConstant"
+        }
+        "src_alpha_saturated" | "srcalphasaturated" => "wgpu::BlendFactor::SrcAlphaSaturated",
+        _ => panic!("{file}:{line}: invalid blend factor `{value}`"),
+    }
+}
+
+fn blend_operation_token(value: &str, file: &str, line: usize) -> &'static str {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "add" => "wgpu::BlendOperation::Add",
+        "subtract" | "sub" => "wgpu::BlendOperation::Subtract",
+        "reverse_subtract" | "revsub" => "wgpu::BlendOperation::ReverseSubtract",
+        "min" => "wgpu::BlendOperation::Min",
+        "max" => "wgpu::BlendOperation::Max",
+        _ => panic!("{file}:{line}: invalid blend operation `{value}`"),
+    }
+}
+
+fn parse_blend_component(
+    parts: &[&str],
+    index: &mut usize,
+    first_value: &str,
+    file: &str,
+    line: usize,
+) -> BuildBlendComponent {
+    if *index + 2 >= parts.len() {
+        panic!("{file}:{line}: blend component needs src,dst,op");
+    }
+    let src = blend_factor_token(first_value, file, line);
+    *index += 1;
+    let dst = blend_factor_token(parts[*index], file, line);
+    *index += 1;
+    let op = blend_operation_token(parts[*index], file, line);
+    BuildBlendComponent {
+        src_factor: src,
+        dst_factor: dst,
+        operation: op,
+    }
+}
+
+fn parse_pass_directives(source: &str, file: &str) -> Vec<BuildPassDirective> {
+    let mut passes = Vec::new();
+    for (line_idx, line) in source.lines().enumerate() {
+        let line_no = line_idx + 1;
+        let Some(rest) = line.trim_start().strip_prefix("//#pass") else {
+            continue;
+        };
+        let rest = rest.trim();
+        let (name, body) = rest.split_once(':').unwrap_or_else(|| {
+            panic!("{file}:{line_no}: pass directive must be `//#pass name: key=value`")
+        });
+        let mut pass = BuildPassDirective::new(name.trim().to_string());
+        let mut color_blend: Option<BuildBlendComponent> = None;
+        let mut alpha_blend: Option<BuildBlendComponent> = None;
+        let mut blend_disabled = false;
+
+        let parts = body
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>();
+        let mut i = 0usize;
+        while i < parts.len() {
+            let (key, value) = parts[i].split_once('=').unwrap_or_else(|| {
+                panic!("{file}:{line_no}: expected key=value in `{}`", parts[i])
+            });
+            match key.trim().to_ascii_lowercase().as_str() {
+                "vs" | "vertex" => pass.vertex_entry = value.trim().to_string(),
+                "fs" | "fragment" => pass.fragment_entry = value.trim().to_string(),
+                "depth" | "ztest" => pass.depth_compare = compare_token(value, file, line_no),
+                "zwrite" | "depth_write" => {
+                    pass.depth_write = parse_bool_like(value, "zwrite", file, line_no)
+                }
+                "cull" => pass.cull_mode = cull_token(value, file, line_no),
+                "write" | "writes" | "color_write" | "colorwrites" => {
+                    pass.write_mask = color_writes_token(value, file, line_no)
+                }
+                "bias" | "depth_bias" => {
+                    pass.depth_bias_constant = value.trim().parse().unwrap_or_else(|_| {
+                        panic!("{file}:{line_no}: invalid depth bias `{value}`")
+                    });
+                }
+                "slope" | "slope_bias" => {
+                    pass.depth_bias_slope_scale = value.trim().parse().unwrap_or_else(|_| {
+                        panic!("{file}:{line_no}: invalid slope bias `{value}`")
+                    });
+                }
+                "blend" => {
+                    if value.trim().eq_ignore_ascii_case("none") {
+                        blend_disabled = true;
+                        color_blend = None;
+                        alpha_blend = None;
+                    } else if value.trim().eq_ignore_ascii_case("alpha") {
+                        color_blend = Some(BuildBlendComponent {
+                            src_factor: "wgpu::BlendFactor::SrcAlpha",
+                            dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
+                            operation: "wgpu::BlendOperation::Add",
+                        });
+                        alpha_blend = Some(BuildBlendComponent {
+                            src_factor: "wgpu::BlendFactor::One",
+                            dst_factor: "wgpu::BlendFactor::OneMinusSrcAlpha",
+                            operation: "wgpu::BlendOperation::Add",
+                        });
+                    } else {
+                        blend_disabled = false;
+                        color_blend =
+                            Some(parse_blend_component(&parts, &mut i, value, file, line_no));
+                    }
+                }
+                "alpha" => {
+                    blend_disabled = false;
+                    alpha_blend = Some(parse_blend_component(&parts, &mut i, value, file, line_no));
+                }
+                _ => panic!("{file}:{line_no}: unknown pass key `{key}`"),
+            }
+            i += 1;
+        }
+
+        if !blend_disabled {
+            if let Some(color) = color_blend {
+                let alpha = alpha_blend.unwrap_or_else(|| color.clone());
+                pass.blend = Some((color, alpha));
+                pass.write_mask = "wgpu::ColorWrites::ALL";
+            } else if let Some(alpha) = alpha_blend {
+                pass.blend = Some((
+                    BuildBlendComponent {
+                        src_factor: "wgpu::BlendFactor::One",
+                        dst_factor: "wgpu::BlendFactor::Zero",
+                        operation: "wgpu::BlendOperation::Add",
+                    },
+                    alpha,
+                ));
+                pass.write_mask = "wgpu::ColorWrites::ALL";
+            }
+        }
+
+        passes.push(pass);
+    }
+    passes
+}
+
+fn blend_component_literal(c: &BuildBlendComponent) -> String {
+    format!(
+        "wgpu::BlendComponent {{ src_factor: {}, dst_factor: {}, operation: {} }}",
+        c.src_factor, c.dst_factor, c.operation
+    )
+}
+
+fn pass_literal(pass: &BuildPassDirective) -> String {
+    let blend = match &pass.blend {
+        Some((color, alpha)) => format!(
+            "Some(wgpu::BlendState {{ color: {}, alpha: {} }})",
+            blend_component_literal(color),
+            blend_component_literal(alpha)
+        ),
+        None => "None".to_string(),
+    };
+    format!(
+        "crate::materials::MaterialPassDesc {{ name: {name:?}, vertex_entry: {vs:?}, fragment_entry: {fs:?}, depth_compare: {depth}, depth_write: {zwrite}, cull_mode: {cull}, blend: {blend}, write_mask: {write}, depth_bias_slope_scale: {slope:?}, depth_bias_constant: {bias} }}",
+        name = pass.name.as_str(),
+        vs = pass.vertex_entry.as_str(),
+        fs = pass.fragment_entry.as_str(),
+        depth = pass.depth_compare,
+        zwrite = pass.depth_write,
+        cull = pass.cull_mode,
+        blend = blend,
+        write = pass.write_mask,
+        slope = pass.depth_bias_slope_scale,
+        bias = pass.depth_bias_constant,
+    )
+}
+
 /// Validates `module`, writes WGSL to `out_path`, returns the same string for embedding in Rust.
 fn validate_and_write_wgsl(
     module: &naga::Module,
     label: &str,
     out_path: &std::path::Path,
     expect_view_index: Option<bool>,
+    passes: &[BuildPassDirective],
 ) -> String {
-    let has_vs = module
-        .entry_points
-        .iter()
-        .any(|e| e.stage == naga::ShaderStage::Vertex && e.name == "vs_main");
-    let has_fs = module
-        .entry_points
-        .iter()
-        .any(|e| e.stage == naga::ShaderStage::Fragment && e.name == "fs_main");
-    if !has_vs || !has_fs {
-        panic!(
-            "{label}: expected entry points vs_main and fs_main (vertex={has_vs} fragment={has_fs})",
-        );
+    if passes.is_empty() {
+        let has_vs = module
+            .entry_points
+            .iter()
+            .any(|e| e.stage == naga::ShaderStage::Vertex && e.name == "vs_main");
+        let has_fs = module
+            .entry_points
+            .iter()
+            .any(|e| e.stage == naga::ShaderStage::Fragment && e.name == "fs_main");
+        if !has_vs || !has_fs {
+            panic!(
+                "{label}: expected entry points vs_main and fs_main (vertex={has_vs} fragment={has_fs})",
+            );
+        }
+    } else {
+        for pass in passes {
+            let has_vs = module.entry_points.iter().any(|e| {
+                e.stage == naga::ShaderStage::Vertex && e.name == pass.vertex_entry.as_str()
+            });
+            let has_fs = module.entry_points.iter().any(|e| {
+                e.stage == naga::ShaderStage::Fragment && e.name == pass.fragment_entry.as_str()
+            });
+            if !has_vs || !has_fs {
+                panic!(
+                    "{label}: pass `{}` expected entry points {} and {} (vertex={has_vs} fragment={has_fs})",
+                    pass.name, pass.vertex_entry, pass.fragment_entry
+                );
+            }
+        }
     }
 
     let mut validator = Validator::new(ValidationFlags::all(), Capabilities::all());
@@ -297,6 +583,7 @@ fn main() {
     let shader_modules = discover_shader_modules(&manifest_dir);
 
     let mut embedded_arms = String::new();
+    let mut embedded_pass_arms = String::new();
     let mut output_stems: Vec<String> = Vec::new();
 
     let mut material_paths: Vec<PathBuf> = fs::read_dir(&materials_dir)
@@ -315,6 +602,8 @@ fn main() {
 
         let material_source =
             fs::read_to_string(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+        let material_file_path = path.to_str().expect("utf8 path");
+        let pass_directives = parse_pass_directives(&material_source, material_file_path);
 
         let variants = [
             (format!("{stem}_default"), false),
@@ -322,17 +611,29 @@ fn main() {
         ];
         for (target_stem, multiview) in variants {
             let defs = multiview_shader_defs(multiview);
-            let module = compose_material(
-                &shader_modules,
-                &material_source,
-                path.to_str().expect("utf8 path"),
-                defs,
-            );
+            let module =
+                compose_material(&shader_modules, &material_source, material_file_path, defs);
             let label = format!("{target_stem} (MULTIVIEW={multiview})");
             let out_path = target_dir.join(format!("{target_stem}.wgsl"));
-            let wgsl = validate_and_write_wgsl(&module, &label, &out_path, Some(multiview));
+            let wgsl = validate_and_write_wgsl(
+                &module,
+                &label,
+                &out_path,
+                Some(multiview),
+                &pass_directives,
+            );
             let lit = rust_string_literal_token(&wgsl);
             embedded_arms.push_str(&format!("        \"{target_stem}\" => Some({lit}),\n"));
+            if !pass_directives.is_empty() {
+                let pass_literals = pass_directives
+                    .iter()
+                    .map(pass_literal)
+                    .collect::<Vec<_>>()
+                    .join(",\n            ");
+                embedded_pass_arms.push_str(&format!(
+                    "        \"{target_stem}\" => &[\n            {pass_literals},\n        ],\n"
+                ));
+            }
             output_stems.push(target_stem);
         }
     }
@@ -353,12 +654,20 @@ pub fn embedded_target_wgsl(stem: &str) -> Option<&'static str> {{
     }}
 }}
 
+/// Declared render passes for `stem`, parsed from `//#pass` directives in the source WGSL.
+pub fn embedded_target_passes(stem: &str) -> &'static [crate::materials::MaterialPassDesc] {{
+    match stem {{
+{embedded_pass_arms}        _ => &[],
+    }}
+}}
+
 /// Stems under `shaders/target/*.wgsl` present at build time.
 pub const COMPILED_MATERIAL_STEMS: &[&str] = &[
 {stems}
 ];
 "#,
         embedded_arms = embedded_arms,
+        embedded_pass_arms = embedded_pass_arms,
         stems = stems_list
     );
 

@@ -1,0 +1,148 @@
+//! OverlayFresnel (`Shader "OverlayFresnel"`): two-pass fresnel overlay.
+//!
+//! Pass mapping uses reverse-Z:
+//! - Unity `ZTest Greater` becomes `depth=less` for the behind pass.
+//! - Unity `ZTest LEqual` becomes `depth=greater_equal` for the front pass.
+
+// unity-shader-name: OverlayFresnel
+//#pass behind: fs=fs_main_behind, depth=less, zwrite=on, cull=back, blend=one,zero,add, alpha=one,one,max
+//#pass front: fs=fs_main_front, depth=greater_equal, zwrite=on, cull=back, blend=one,zero,add, alpha=one,one,max
+
+#import renderide::globals as rg
+#import renderide::per_draw as pd
+#import renderide::pbs::brdf as brdf
+#import renderide::uv_utils as uvu
+#import renderide::normal_decode as nd
+
+struct OverlayFresnelMaterial {
+    _BehindFarColor: vec4<f32>,
+    _BehindNearColor: vec4<f32>,
+    _FrontFarColor: vec4<f32>,
+    _FrontNearColor: vec4<f32>,
+    _BehindFarTex_ST: vec4<f32>,
+    _BehindNearTex_ST: vec4<f32>,
+    _FrontFarTex_ST: vec4<f32>,
+    _FrontNearTex_ST: vec4<f32>,
+    _Exp: f32,
+    _GammaCurve: f32,
+    _SrcBlend: f32,
+    _DstBlend: f32,
+    _ZWrite: f32,
+    _Cull: f32,
+    _PolarPow: f32,
+    _OffsetFactor: f32,
+    _OffsetUnits: f32,
+    _NORMALMAP: f32,
+    _MUL_ALPHA_INTENSITY: f32,
+    _POLARUV: f32,
+}
+
+@group(1) @binding(0) var<uniform> mat: OverlayFresnelMaterial;
+@group(1) @binding(1) var _BehindFarTex: texture_2d<f32>;
+@group(1) @binding(2) var _BehindFarTex_sampler: sampler;
+@group(1) @binding(3) var _BehindNearTex: texture_2d<f32>;
+@group(1) @binding(4) var _BehindNearTex_sampler: sampler;
+@group(1) @binding(5) var _FrontFarTex: texture_2d<f32>;
+@group(1) @binding(6) var _FrontFarTex_sampler: sampler;
+@group(1) @binding(7) var _FrontNearTex: texture_2d<f32>;
+@group(1) @binding(8) var _FrontNearTex_sampler: sampler;
+@group(1) @binding(9) var _NormalMap: texture_2d<f32>;
+@group(1) @binding(10) var _NormalMap_sampler: sampler;
+
+struct VertexOutput {
+    @builtin(position) clip_pos: vec4<f32>,
+    @location(0) world_pos: vec3<f32>,
+    @location(1) world_n: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+}
+
+@vertex
+fn vs_main(
+    @builtin(instance_index) instance_index: u32,
+#ifdef MULTIVIEW
+    @builtin(view_index) view_idx: u32,
+#endif
+    @location(0) pos: vec4<f32>,
+    @location(1) n: vec4<f32>,
+    @location(2) uv: vec2<f32>,
+) -> VertexOutput {
+    let d = pd::get_draw(instance_index);
+    let world_p = d.model * vec4<f32>(pos.xyz, 1.0);
+    let wn = normalize((d.model * vec4<f32>(n.xyz, 0.0)).xyz);
+#ifdef MULTIVIEW
+    var vp: mat4x4<f32>;
+    if (view_idx == 0u) {
+        vp = d.view_proj_left;
+    } else {
+        vp = d.view_proj_right;
+    }
+#else
+    let vp = d.view_proj_left;
+#endif
+
+    var out: VertexOutput;
+    out.clip_pos = vp * world_p;
+    out.world_pos = world_p.xyz;
+    out.world_n = wn;
+    out.uv = uv;
+    return out;
+}
+
+fn sample_overlay_tex(tex: texture_2d<f32>, samp: sampler, uv: vec2<f32>, st: vec4<f32>) -> vec4<f32> {
+    let uv_regular = uvu::apply_st(uv, st);
+    let uv_polar = uvu::apply_st(uvu::polar_uv(uv, mat._PolarPow), st);
+    let sample_uv = select(uv_regular, uv_polar, mat._POLARUV > 0.5);
+    return textureSample(tex, samp, sample_uv);
+}
+
+fn overlay_normal(in: VertexOutput) -> vec3<f32> {
+    var n = normalize(in.world_n);
+    if (mat._NORMALMAP > 0.5) {
+        let uv_n = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+        let tbn = brdf::orthonormal_tbn(n);
+        let ts_n = nd::decode_ts_normal(textureSample(_NormalMap, _NormalMap_sampler, uv_n).xyz, 1.0);
+        n = normalize(tbn * ts_n);
+    }
+    return n;
+}
+
+fn fresnel_value(in: VertexOutput, apply_gamma: bool) -> f32 {
+    let n = overlay_normal(in);
+    let view_dir = normalize(rg::frame.camera_world_pos.xyz - in.world_pos);
+    var fresnel = pow(max(1.0 - abs(dot(n, view_dir)), 0.0), max(mat._Exp, 1e-4));
+    if (apply_gamma) {
+        fresnel = pow(clamp(fresnel, 0.0, 1.0), max(mat._GammaCurve, 1e-4));
+    }
+    return clamp(fresnel, 0.0, 1.0);
+}
+
+fn apply_alpha_intensity(color_in: vec4<f32>) -> vec4<f32> {
+    var color = color_in;
+    if (mat._MUL_ALPHA_INTENSITY > 0.5) {
+        let mul = (color.r + color.g + color.b) * 0.33333334;
+        color.a = color.a * mul * mul;
+    }
+    return color;
+}
+
+@fragment
+fn fs_main_behind(in: VertexOutput) -> @location(0) vec4<f32> {
+    let fresnel = fresnel_value(in, false);
+    let far_color = mat._BehindFarColor
+        * sample_overlay_tex(_BehindFarTex, _BehindFarTex_sampler, in.uv, mat._BehindFarTex_ST);
+    let near_color = mat._BehindNearColor
+        * sample_overlay_tex(_BehindNearTex, _BehindNearTex_sampler, in.uv, mat._BehindNearTex_ST);
+    let color = apply_alpha_intensity(mix(near_color, far_color, fresnel));
+    return rg::retain_globals_additive(color);
+}
+
+@fragment
+fn fs_main_front(in: VertexOutput) -> @location(0) vec4<f32> {
+    let fresnel = fresnel_value(in, true);
+    let far_color = mat._FrontFarColor
+        * sample_overlay_tex(_FrontFarTex, _FrontFarTex_sampler, in.uv, mat._FrontFarTex_ST);
+    let near_color = mat._FrontNearColor
+        * sample_overlay_tex(_FrontNearTex, _FrontNearTex_sampler, in.uv, mat._FrontNearTex_ST);
+    let color = apply_alpha_intensity(mix(near_color, far_color, fresnel));
+    return rg::retain_globals_additive(color);
+}

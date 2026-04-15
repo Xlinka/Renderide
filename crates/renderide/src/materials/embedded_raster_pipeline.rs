@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::embedded_shaders;
-use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipeline;
-use crate::materials::MaterialPipelineDesc;
+use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipelines;
+use crate::materials::{default_pass_for_blend_mode, MaterialBlendMode, MaterialPipelineDesc};
 use crate::pipelines::raster::SHADER_PERM_MULTIVIEW_STEREO;
 use crate::pipelines::ShaderPermutation;
 
@@ -160,15 +160,33 @@ pub(crate) fn build_embedded_wgsl(stem: &Arc<str>, permutation: ShaderPermutatio
         .to_string()
 }
 
-pub(crate) fn create_embedded_render_pipeline(
+pub(crate) fn create_embedded_render_pipelines(
     stem: &Arc<str>,
     device: &wgpu::Device,
     module: &wgpu::ShaderModule,
     desc: &MaterialPipelineDesc,
     wgsl_source: &str,
-) -> wgpu::RenderPipeline {
-    let alpha_ui = embedded_stem_uses_alpha_blending(stem.as_ref());
-    create_reflective_raster_mesh_forward_pipeline(
+    permutation: ShaderPermutation,
+    blend_mode: MaterialBlendMode,
+) -> Vec<wgpu::RenderPipeline> {
+    let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
+    let declared_passes = embedded_shaders::embedded_target_passes(&composed);
+    if !declared_passes.is_empty() {
+        return create_reflective_raster_mesh_forward_pipelines(
+            device,
+            module,
+            desc,
+            wgsl_source,
+            "embedded_raster_material",
+            true,
+            true,
+            declared_passes,
+        );
+    }
+
+    let pass =
+        default_pass_for_blend_mode(embedded_stem_uses_alpha_blending(stem.as_ref()), blend_mode);
+    create_reflective_raster_mesh_forward_pipelines(
         device,
         module,
         desc,
@@ -176,8 +194,7 @@ pub(crate) fn create_embedded_render_pipeline(
         "embedded_raster_material",
         true,
         true,
-        alpha_ui,
-        !alpha_ui,
+        std::slice::from_ref(&pass),
     )
 }
 
@@ -188,6 +205,7 @@ pub fn embedded_stem_uses_alpha_blending(stem: &str) -> bool {
         .trim_end_matches("_multiview");
     stem.starts_with("ui_")
         || stem == "overlayunlit"
+        || stem == "overlayfresnel"
         || stem == "textunlit"
         || stem == "textunit"
         || stem == "text_unlit"
