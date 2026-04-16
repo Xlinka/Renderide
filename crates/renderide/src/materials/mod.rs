@@ -10,6 +10,7 @@ mod embedded_shader_stem;
 mod family;
 mod material_passes;
 mod material_property_binding;
+mod pipeline_build_error;
 mod pipeline_kind;
 pub(crate) mod raster_pipeline;
 mod registry;
@@ -43,6 +44,7 @@ pub use material_passes::{
     MaterialStencilState, COLOR_WRITES_NONE,
 };
 pub use material_property_binding::MaterialPropertyGpuLayout;
+pub use pipeline_build_error::PipelineBuildError;
 pub use pipeline_kind::RasterPipelineKind;
 
 /// Naga reflection: composed WGSL → `wgpu` bind layouts, uniform block layout, stem fingerprints.

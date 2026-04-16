@@ -21,6 +21,60 @@ pub struct MaterialRegistry {
 }
 
 impl MaterialRegistry {
+    fn try_pipeline_with_fallback(
+        &mut self,
+        shader_asset_id: Option<i32>,
+        kind: &RasterPipelineKind,
+        desc: &MaterialPipelineDesc,
+        permutation: ShaderPermutation,
+        blend_mode: MaterialBlendMode,
+        render_state: MaterialRenderState,
+    ) -> Option<MaterialPipelineSet> {
+        let err = match self
+            .cache
+            .get_or_create(kind, desc, permutation, blend_mode, render_state)
+        {
+            Ok(p) => return Some(p),
+            Err(e) => e,
+        };
+        if matches!(kind, RasterPipelineKind::DebugWorldNormals) {
+            match shader_asset_id {
+                Some(id) => {
+                    logger::error!(
+                        "DebugWorldNormals pipeline build failed (shader_asset_id={id}): {err}"
+                    );
+                }
+                None => {
+                    logger::error!("DebugWorldNormals pipeline build failed: {err}");
+                }
+            }
+            return None;
+        }
+        match shader_asset_id {
+            Some(id) => {
+                logger::warn!(
+                    "material pipeline build failed (shader_asset_id={id}, kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                );
+            }
+            None => {
+                logger::warn!(
+                    "material pipeline build failed (kind={kind:?}): {err}; falling back to DebugWorldNormals"
+                );
+            }
+        }
+        let fallback = RasterPipelineKind::DebugWorldNormals;
+        match self
+            .cache
+            .get_or_create(&fallback, desc, permutation, blend_mode, render_state)
+        {
+            Ok(p) => Some(p),
+            Err(e2) => {
+                logger::error!("fallback DebugWorldNormals pipeline build failed: {e2}");
+                None
+            }
+        }
+    }
+
     /// Builds a registry whose router falls back to [`RasterPipelineKind::DebugWorldNormals`] for unknown shader assets.
     pub fn with_default_families(device: Arc<wgpu::Device>) -> Self {
         Self {
@@ -79,9 +133,13 @@ impl MaterialRegistry {
         render_state: MaterialRenderState,
     ) -> Option<MaterialPipelineSet> {
         let kind = resolve_raster_pipeline(shader_asset_id, &self.router);
-        Some(
-            self.cache
-                .get_or_create(&kind, desc, permutation, blend_mode, render_state),
+        self.try_pipeline_with_fallback(
+            Some(shader_asset_id),
+            &kind,
+            desc,
+            permutation,
+            blend_mode,
+            render_state,
         )
     }
 
@@ -93,9 +151,8 @@ impl MaterialRegistry {
         permutation: ShaderPermutation,
         blend_mode: MaterialBlendMode,
         render_state: MaterialRenderState,
-    ) -> MaterialPipelineSet {
-        self.cache
-            .get_or_create(kind, desc, permutation, blend_mode, render_state)
+    ) -> Option<MaterialPipelineSet> {
+        self.try_pipeline_with_fallback(None, kind, desc, permutation, blend_mode, render_state)
     }
 
     /// Low-level cache access keyed by [`RasterPipelineKind`].
@@ -106,9 +163,8 @@ impl MaterialRegistry {
         permutation: ShaderPermutation,
         blend_mode: MaterialBlendMode,
         render_state: MaterialRenderState,
-    ) -> MaterialPipelineSet {
-        self.cache
-            .get_or_create(kind, desc, permutation, blend_mode, render_state)
+    ) -> Option<MaterialPipelineSet> {
+        self.try_pipeline_with_fallback(None, kind, desc, permutation, blend_mode, render_state)
     }
 
     /// Borrow the wgpu device held by this registry.
@@ -161,7 +217,7 @@ mod wgpu_cache_tests {
     #[ignore = "wgpu/GPU stack (may SIGSEGV in sandbox CI); run with --ignored"]
     fn debug_world_normals_pipeline_cache_hits() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            eprintln!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
+            logger::warn!("skipping debug_world_normals_pipeline_cache_hits: no wgpu adapter");
             return;
         };
         let mut reg = MaterialRegistry::with_default_families(device);
@@ -172,23 +228,27 @@ mod wgpu_cache_tests {
             multiview_mask: None,
         };
         let addr = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-                MaterialBlendMode::StemDefault,
-                MaterialRenderState::default(),
-            );
+            let p = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                    MaterialBlendMode::StemDefault,
+                    MaterialRenderState::default(),
+                )
+                .expect("pipeline");
             std::ptr::from_ref(&p[0])
         };
         let addr2 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-                MaterialBlendMode::StemDefault,
-                MaterialRenderState::default(),
-            );
+            let p = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                    MaterialBlendMode::StemDefault,
+                    MaterialRenderState::default(),
+                )
+                .expect("pipeline");
             std::ptr::from_ref(&p[0])
         };
         assert_eq!(addr, addr2);
@@ -198,7 +258,7 @@ mod wgpu_cache_tests {
     #[ignore = "wgpu/GPU stack (may SIGSEGV in sandbox CI); run with --ignored"]
     fn permutation_bit_changes_pipeline() {
         let Some(device) = pollster::block_on(device_with_adapter()) else {
-            eprintln!("skipping permutation_bit_changes_pipeline: no wgpu adapter");
+            logger::warn!("skipping permutation_bit_changes_pipeline: no wgpu adapter");
             return;
         };
         let mut reg = MaterialRegistry::with_default_families(device);
@@ -209,23 +269,27 @@ mod wgpu_cache_tests {
             multiview_mask: None,
         };
         let addr0 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(0),
-                MaterialBlendMode::StemDefault,
-                MaterialRenderState::default(),
-            );
+            let p = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(0),
+                    MaterialBlendMode::StemDefault,
+                    MaterialRenderState::default(),
+                )
+                .expect("pipeline");
             std::ptr::from_ref(&p[0])
         };
         let addr1 = {
-            let p = reg.pipeline_for_kind(
-                &RasterPipelineKind::DebugWorldNormals,
-                &desc,
-                ShaderPermutation(1),
-                MaterialBlendMode::StemDefault,
-                MaterialRenderState::default(),
-            );
+            let p = reg
+                .pipeline_for_kind(
+                    &RasterPipelineKind::DebugWorldNormals,
+                    &desc,
+                    ShaderPermutation(1),
+                    MaterialBlendMode::StemDefault,
+                    MaterialRenderState::default(),
+                )
+                .expect("pipeline");
             std::ptr::from_ref(&p[0])
         };
         assert_ne!(addr0, addr1);

@@ -12,6 +12,7 @@ mod cluster_gpu;
 mod debug_hud_bundle;
 mod embedded;
 mod frame_gpu;
+mod frame_gpu_error;
 mod frame_resource_manager;
 mod light_gpu;
 mod material_system;
@@ -26,9 +27,12 @@ pub use cluster_gpu::{
     MAX_LIGHTS_PER_TILE, TILE_SIZE,
 };
 pub use debug_hud_bundle::DebugHudBundle;
-pub use embedded::EmbeddedMaterialBindResources;
 pub(crate) use embedded::MaterialBindCacheKey;
+pub use embedded::{
+    EmbeddedMaterialBindError, EmbeddedMaterialBindResources, EmbeddedTexturePools,
+};
 pub use frame_gpu::{empty_material_bind_group_layout, EmptyMaterialBindGroup, FrameGpuResources};
+pub use frame_gpu_error::FrameGpuInitError;
 pub use frame_resource_manager::{FrameGpuBindContext, FrameResourceManager};
 pub use light_gpu::{
     order_lights_for_clustered_shading, order_lights_for_clustered_shading_in_place, GpuLight,
@@ -36,13 +40,14 @@ pub use light_gpu::{
 };
 pub use material_system::{MaterialSystem, MAX_PENDING_MATERIAL_BATCHES};
 pub use mesh_deform::{
-    advance_slab_cursor, plan_blendshape_bind_chunks, write_per_draw_uniform_slab,
-    MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms, WgslMat3x3,
-    INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
+    advance_slab_cursor, blendshape_sparse_buffers_fit_device, plan_blendshape_scatter_chunks,
+    write_per_draw_uniform_slab, MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
+    WgslMat3x3, INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE,
 };
+pub(crate) use occlusion::HiZBuildInput;
 pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
 pub use render_backend::{
-    RenderBackend, MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS,
+    RenderBackend, RenderBackendAttachDesc, MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS,
     MAX_PENDING_TEXTURE_UPLOADS,
 };

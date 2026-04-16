@@ -1,7 +1,12 @@
 //! Renderer binary entry point.
 
 fn main() {
-    if let Some(code) = renderide::run() {
-        std::process::exit(code);
+    match renderide::run() {
+        Ok(Some(code)) => std::process::exit(code),
+        Ok(None) => {}
+        Err(e) => {
+            logger::error!("{e}");
+            std::process::exit(1);
+        }
     }
 }

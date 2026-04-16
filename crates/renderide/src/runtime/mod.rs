@@ -11,6 +11,7 @@
 //! optional payloads are trace-logged until consumers exist.
 
 mod accessors;
+mod command_dispatch;
 mod commands;
 mod debug_hud_frame;
 mod frame_submit;
@@ -58,6 +59,10 @@ pub struct RendererRuntime {
     host_hud: crate::diagnostics::HostHudGatherer,
     /// [`FrameSubmitData::render_tasks`] length from the last applied frame submit (HUD).
     last_submit_render_task_count: usize,
+    /// Cached full [`wgpu::AllocatorReport`] for the **GPU memory** HUD tab (refreshed on a timer).
+    allocator_report_hud: Option<crate::diagnostics::GpuAllocatorReportHud>,
+    /// Wall clock when a **GPU memory** tab refresh was last attempted (typically every 2s while the main debug HUD runs).
+    allocator_report_last_refresh: Option<Instant>,
 }
 
 impl RendererRuntime {
@@ -76,6 +81,8 @@ impl RendererRuntime {
             config_save_path,
             host_hud: crate::diagnostics::HostHudGatherer::default(),
             last_submit_render_task_count: 0,
+            allocator_report_hud: None,
+            allocator_report_last_refresh: None,
         }
     }
 
@@ -89,6 +96,12 @@ impl RendererRuntime {
             .frame_resources
             .prepare_lights_from_scene(&self.scene);
         self.sync_debug_hud_diagnostics_from_settings();
+        let requested_msaa = self
+            .settings
+            .read()
+            .map(|s| s.rendering.msaa.as_count())
+            .unwrap_or(1);
+        gpu.set_swapchain_msaa_requested(requested_msaa);
         let scene_ref: &SceneCoordinator = &self.scene;
         self.backend
             .execute_frame_graph(gpu, window, scene_ref, self.host_camera)
@@ -214,7 +227,8 @@ impl RendererRuntime {
         }
         self.frontend.set_pending_init(d.clone());
         if let Some(ref mut ipc) = self.frontend.ipc_mut() {
-            ipc_init_dispatch::send_renderer_init_result(ipc, d.output_device);
+            let settings = self.settings.read().map(|g| g.clone()).unwrap_or_default();
+            ipc_init_dispatch::send_renderer_init_result(ipc, d.output_device, &settings, None);
         }
         self.frontend.on_init_received();
     }

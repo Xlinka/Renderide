@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::backend::mesh_deform::{INITIAL_PER_DRAW_UNIFORM_SLOTS, PER_DRAW_UNIFORM_STRIDE};
 use crate::gpu::GpuLimits;
+use crate::materials::PipelineBuildError;
 use crate::pipelines::raster::DebugWorldNormalsFamily;
 
 /// GPU storage slab: one [`crate::backend::mesh_deform::PaddedPerDrawUniforms`] slot (256 bytes) per
@@ -19,8 +20,8 @@ pub struct PerDrawResources {
 
 impl PerDrawResources {
     /// Allocates [`INITIAL_PER_DRAW_UNIFORM_SLOTS`] slots (256 bytes each).
-    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Self {
-        let layout = DebugWorldNormalsFamily::per_draw_bind_group_layout(device);
+    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Result<Self, PipelineBuildError> {
+        let layout = DebugWorldNormalsFamily::per_draw_bind_group_layout(device)?;
         let slot_count = INITIAL_PER_DRAW_UNIFORM_SLOTS.min(limits.max_per_draw_slab_slots);
         let size = (slot_count * PER_DRAW_UNIFORM_STRIDE) as u64;
         let per_draw_storage = device.create_buffer(&wgpu::BufferDescriptor {
@@ -35,12 +36,12 @@ impl PerDrawResources {
             &per_draw_storage,
             size,
         ));
-        Self {
+        Ok(Self {
             per_draw_storage,
             bind_group,
             slot_count,
             limits,
-        }
+        })
     }
 
     fn make_bind_group(
@@ -91,7 +92,15 @@ impl PerDrawResources {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let layout = DebugWorldNormalsFamily::per_draw_bind_group_layout(device);
+        let layout = match DebugWorldNormalsFamily::per_draw_bind_group_layout(device) {
+            Ok(l) => l,
+            Err(e) => {
+                logger::warn!(
+                    "per-draw slab resize: could not build debug normals bind layout: {e}"
+                );
+                return;
+            }
+        };
         let bind_group = Arc::new(Self::make_bind_group(
             device,
             &layout,

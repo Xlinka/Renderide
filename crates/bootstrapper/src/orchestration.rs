@@ -55,7 +55,6 @@ pub fn run(config: &ResoBootConfig, ctx: RunContext) -> Result<(), BootstrapErro
     } = ctx;
 
     let mut args: Vec<String> = host_args;
-    args.push("-Invisible".to_string());
     args.push("-shmprefix".to_string());
     args.push(config.shared_memory_prefix.clone());
     logger::info!("Host args: {:?}", args);
@@ -170,7 +169,6 @@ fn spawn_host_exit_watcher(
             "Host process exited{exit_info}. Check logs/host/{host_out_name} for stdout/stderr."
         );
         logger::info!("{msg}");
-        eprintln!("{msg}");
         cancel_host.store(true, Ordering::SeqCst);
     })
 }

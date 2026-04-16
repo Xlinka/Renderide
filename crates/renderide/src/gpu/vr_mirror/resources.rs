@@ -162,23 +162,20 @@ impl VrMirrorBlitResources {
         gpu: &mut GpuContext,
         window: &Window,
     ) -> Result<(), PresentClearError> {
-        self.present_staging_to_surface_overlay(gpu, window, |_, _, _| Ok(()))
+        self.present_staging_to_surface_overlay(gpu, window, |_, _, _| Ok::<(), String>(()))
     }
 
     /// Same as [`Self::present_staging_to_surface`], then runs `overlay` on the same encoder and swapchain view
     /// (e.g. Dear ImGui with `LoadOp::Load` over the mirror image).
-    pub fn present_staging_to_surface_overlay<F>(
+    pub fn present_staging_to_surface_overlay<F, E>(
         &mut self,
         gpu: &mut GpuContext,
         window: &Window,
         overlay: F,
     ) -> Result<(), PresentClearError>
     where
-        F: FnOnce(
-            &mut wgpu::CommandEncoder,
-            &wgpu::TextureView,
-            &mut GpuContext,
-        ) -> Result<(), String>,
+        F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), E>,
+        E: std::fmt::Display,
     {
         if !self.staging_valid {
             return Ok(());
@@ -247,27 +244,7 @@ impl VrMirrorBlitResources {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("vr_mirror_surface"),
         });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("vr_mirror_surface"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                occlusion_query_set: None,
-                timestamp_writes: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(pipeline);
-            pass.set_bind_group(0, &bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
+        encode_vr_mirror_cover_blit_pass(&mut encoder, &surface_view, pipeline, &bind_group);
 
         if let Err(e) = overlay(&mut encoder, &surface_view, gpu) {
             logger::warn!("debug HUD overlay (VR mirror): {e}");
@@ -277,4 +254,32 @@ impl VrMirrorBlitResources {
         frame.present();
         Ok(())
     }
+}
+
+/// Clears the swapchain to black, then draws a fullscreen triangle using the mirror bind group.
+fn encode_vr_mirror_cover_blit_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    surface_view: &wgpu::TextureView,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("vr_mirror_surface"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: surface_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: None,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, bind_group, &[]);
+    pass.draw(0..3, 0..1);
 }

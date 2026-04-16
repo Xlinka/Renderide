@@ -10,12 +10,10 @@ use crate::assets::texture::{
     texture2d_asset_id_from_packed, unpack_host_texture_packed, HostTextureAssetKind,
 };
 use crate::materials::ReflectedRasterLayout;
-use crate::resources::{
-    CubemapPool, CubemapSamplerState, RenderTexturePool, Texture2dSamplerState, Texture3dPool,
-    Texture3dSamplerState, TexturePool,
-};
+use crate::resources::{CubemapSamplerState, Texture2dSamplerState, Texture3dSamplerState};
 
 use super::layout::{shader_writer_unescaped_property_name, StemEmbeddedPropertyIds};
+use super::texture_pools::EmbeddedTexturePools;
 
 /// Resolved GPU texture binding for a material property (packed host id or primary fallback).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,16 +206,12 @@ fn hash_cubemap_sampler(state: &CubemapSamplerState, h: &mut DefaultHasher) {
 ///
 /// When `offscreen_write_render_texture_asset_id` is [`Some`], that render-texture id is treated as
 /// non-resident (offscreen color target; self-sampling is masked).
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn texture_bind_signature(
     reflected: &ReflectedRasterLayout,
     ids: &StemEmbeddedPropertyIds,
     store: &MaterialPropertyStore,
     lookup: MaterialPropertyLookupIds,
-    texture_pool: &TexturePool,
-    texture3d_pool: &Texture3dPool,
-    cubemap_pool: &CubemapPool,
-    render_texture_pool: &RenderTexturePool,
+    pools: &EmbeddedTexturePools<'_>,
     primary_texture_2d: i32,
     offscreen_write_render_texture_asset_id: Option<i32>,
 ) -> u64 {
@@ -247,7 +241,7 @@ pub(crate) fn texture_bind_signature(
         match binding {
             ResolvedTextureBinding::None => false.hash(&mut h),
             ResolvedTextureBinding::Texture2D { asset_id } => {
-                if let Some(t) = texture_pool.get_texture(asset_id) {
+                if let Some(t) = pools.texture.get_texture(asset_id) {
                     let resident = t.mip_levels_resident > 0;
                     resident.hash(&mut h);
                     t.mip_levels_resident.hash(&mut h);
@@ -257,7 +251,7 @@ pub(crate) fn texture_bind_signature(
                 }
             }
             ResolvedTextureBinding::Texture3D { asset_id } => {
-                if let Some(t) = texture3d_pool.get_texture(asset_id) {
+                if let Some(t) = pools.texture3d.get_texture(asset_id) {
                     let resident = t.mip_levels_resident > 0;
                     resident.hash(&mut h);
                     t.mip_levels_resident.hash(&mut h);
@@ -267,7 +261,7 @@ pub(crate) fn texture_bind_signature(
                 }
             }
             ResolvedTextureBinding::Cubemap { asset_id } => {
-                if let Some(t) = cubemap_pool.get_texture(asset_id) {
+                if let Some(t) = pools.cubemap.get_texture(asset_id) {
                     let resident = t.mip_levels_resident > 0;
                     resident.hash(&mut h);
                     t.mip_levels_resident.hash(&mut h);
@@ -279,7 +273,7 @@ pub(crate) fn texture_bind_signature(
             ResolvedTextureBinding::RenderTexture { asset_id } => {
                 if offscreen_write_render_texture_asset_id == Some(asset_id) {
                     false.hash(&mut h);
-                } else if let Some(t) = render_texture_pool.get(asset_id) {
+                } else if let Some(t) = pools.render_texture.get(asset_id) {
                     t.is_sampleable().hash(&mut h);
                     hash_texture2d_sampler(&t.sampler, &mut h);
                 } else {

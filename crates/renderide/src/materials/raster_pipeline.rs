@@ -1,50 +1,118 @@
 //! Shared [`wgpu::RenderPipeline`] construction for reflective raster materials (frame, material, per-draw groups).
 //!
-//! **Transparent blending:** embedded materials that mirror Unity transparent queues (e.g. UI text) may need
-//! alpha blending derived from material uniforms (`_SrcBlend` / `_DstBlend`) or host render-queue metadata.
-//! Opaque paths use `blend: None` and [`wgpu::ColorWrites::COLOR`] so only RGB is written and the clear
-//! alpha (`a=1`) is preserved for `Rgba16Float` render textures. Enabling any [`wgpu::BlendState`] on opaque
-//! targets would require the format to be **blendable**; `Rgba16Float` is often not, which breaks pipeline
-//! creation. Alpha-blended stems use [`wgpu::BlendState::ALPHA_BLENDING`] with [`wgpu::ColorWrites::ALL`].
-//! Unity-style blend from uniforms is a cross-cutting follow-up—not per-shader logic in the mesh pass.
+//! Opaque paths use no blend state and write RGB only so destination alpha stays at the clear value
+//! for float render textures. Pass descriptors from `//#pass` directives can override blend, depth,
+//! cull, and stencil/color-write state per material.
 
 use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
 use crate::materials::material_passes::{default_pass, MaterialPassDesc, MaterialRenderState};
-use crate::materials::MaterialPipelineDesc;
+use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::{
     reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
-    reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2,
+    reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2, MaterialPipelineDesc,
 };
 
-/// Builds a forward mesh render pipeline from reflected WGSL (`@group(0..=2)`), with optional UV0,
-/// color, and extended UI vertex streams.
-///
-/// Vertex inputs are `@location(0)` position, `@location(1)` normal/extra, and optionally
-/// `@location(2)` UV0, `@location(3)` color, `@location(4)` tangent/color, and
-/// `@location(5..=7)` UV1/UV2/UV3.
-///
-/// Used by [`crate::pipelines::raster::DebugWorldNormalsFamily`] and embedded WGSL raster materials.
-///
-/// Argument list mirrors discrete wgpu pipeline options (vertex streams, blending, depth) at call sites.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
+/// Vertex stream toggles, blending, depth write, and material overrides for
+/// [`create_reflective_raster_mesh_forward_pipeline`].
+pub(crate) struct ReflectiveRasterMeshForwardPipelineDesc {
+    /// Include UV0 vertex stream when the shader references it.
+    pub include_uv_vertex_buffer: bool,
+    /// Include vertex color stream when the shader references it.
+    pub include_color_vertex_buffer: bool,
+    /// Alpha blending vs opaque RGB-only writes for the default single pass.
+    pub use_alpha_blending: bool,
+    /// Depth write flag for the default single pass.
+    pub depth_write_enabled: bool,
+    /// Runtime material overrides for color mask, stencil, and ZWrite.
+    pub render_state: MaterialRenderState,
+}
+
+fn mesh_forward_vertex_buffer_layouts() -> [wgpu::VertexBufferLayout<'static>; 8] {
+    [
+        wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 3,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 4,
+                format: wgpu::VertexFormat::Float32x4,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 5,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 6,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        },
+        wgpu::VertexBufferLayout {
+            array_stride: 8,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[wgpu::VertexAttribute {
+                offset: 0,
+                shader_location: 7,
+                format: wgpu::VertexFormat::Float32x2,
+            }],
+        },
+    ]
+}
+
+fn pipeline_layout_and_vertex_buffers(
     device: &wgpu::Device,
-    module: &wgpu::ShaderModule,
-    desc: &MaterialPipelineDesc,
     wgsl_source: &str,
     label: &'static str,
     include_uv_vertex_buffer: bool,
     include_color_vertex_buffer: bool,
-    use_alpha_blending: bool,
-    depth_write_enabled: bool,
-    render_state: MaterialRenderState,
-) -> wgpu::RenderPipeline {
-    let reflected = reflect_raster_material_wgsl(wgsl_source).unwrap_or_else(|e| {
-        panic!("reflect {label} (must match frame globals + per-draw contract): {e}");
-    });
-    validate_per_draw_group2(&reflected.per_draw_entries).unwrap_or_else(|e| {
-        panic!("{label} per_draw group2: {e}");
-    });
+) -> Result<(wgpu::PipelineLayout, Vec<wgpu::VertexBufferLayout<'static>>), PipelineBuildError> {
+    let reflected = reflect_raster_material_wgsl(wgsl_source)?;
+    validate_per_draw_group2(&reflected.per_draw_entries)?;
 
     let frame_bgl = FrameGpuResources::bind_group_layout(device);
     let material_bgl = if reflected.material_entries.is_empty() {
@@ -66,118 +134,26 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
         immediate_size: 0,
     });
 
-    let pos_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 0,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let nrm_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 1,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let uv_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 2,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let color_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 3,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let tangent_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 4,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let uv1_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 5,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let uv2_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 6,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let uv3_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 7,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-
+    let layouts = mesh_forward_vertex_buffer_layouts();
     let use_uv = include_uv_vertex_buffer && reflect_vertex_shader_needs_uv0_stream(wgsl_source);
     let use_color =
         include_color_vertex_buffer && reflect_vertex_shader_needs_color_stream(wgsl_source);
     let use_extended = reflected.vs_max_vertex_location.is_some_and(|m| m >= 4);
 
-    let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if use_extended {
-        &[
-            pos_layout,
-            nrm_layout,
-            uv_layout,
-            color_layout,
-            tangent_layout,
-            uv1_layout,
-            uv2_layout,
-            uv3_layout,
-        ]
+    let vertex_buffers = if use_extended {
+        layouts[..8].to_vec()
     } else if use_color {
-        &[pos_layout, nrm_layout, uv_layout, color_layout]
+        layouts[..4].to_vec()
     } else if use_uv {
-        &[pos_layout, nrm_layout, uv_layout]
+        layouts[..3].to_vec()
     } else {
-        &[pos_layout, nrm_layout]
+        layouts[..2].to_vec()
     };
-    // Opaque: no blending + write RGB only so destination alpha stays at the clear value (a=1). Do not use
-    // `blend: Some(...)` on opaque passes: float RT formats may not be blendable and pipeline creation can fail.
-    let pass = default_pass(use_alpha_blending, depth_write_enabled);
-    build_pipeline_from_pass(
-        device,
-        module,
-        desc,
-        label,
-        &layout,
-        vertex_buffers,
-        &pass,
-        render_state,
-    )
+
+    Ok((layout, vertex_buffers))
 }
 
-/// Builds one pipeline for a single [`MaterialPassDesc`] sharing the layout and vertex buffers.
+/// Builds one pipeline for a single [`MaterialPassDesc`] sharing the reflected layout and vertex buffers.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_pipeline_from_pass(
     device: &wgpu::Device,
@@ -241,11 +217,36 @@ pub(crate) fn build_pipeline_from_pass(
     })
 }
 
-/// Builds N pipelines (one per pass descriptor) that share the reflected bind-group layout and vertex streams.
-///
-/// Used by the embedded material path when [`crate::embedded_shaders::embedded_target_passes`] reports
-/// one or more `//#pass` directives. Single-pass materials still go through
-/// [`create_reflective_raster_mesh_forward_pipeline`] directly.
+/// Builds a default single-pass forward mesh pipeline from reflected WGSL (`@group(0..=2)`).
+pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
+    device: &wgpu::Device,
+    module: &wgpu::ShaderModule,
+    desc: &MaterialPipelineDesc,
+    wgsl_source: &str,
+    label: &'static str,
+    raster: ReflectiveRasterMeshForwardPipelineDesc,
+) -> Result<wgpu::RenderPipeline, PipelineBuildError> {
+    let pass = default_pass(raster.use_alpha_blending, raster.depth_write_enabled);
+    let (layout, vertex_buffers) = pipeline_layout_and_vertex_buffers(
+        device,
+        wgsl_source,
+        label,
+        raster.include_uv_vertex_buffer,
+        raster.include_color_vertex_buffer,
+    )?;
+    Ok(build_pipeline_from_pass(
+        device,
+        module,
+        desc,
+        label,
+        &layout,
+        &vertex_buffers,
+        &pass,
+        raster.render_state,
+    ))
+}
+
+/// Builds N pipelines (one per pass descriptor) that share reflected bind-group layout and vertex streams.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn create_reflective_raster_mesh_forward_pipelines(
     device: &wgpu::Device,
@@ -257,147 +258,32 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipelines(
     include_color_vertex_buffer: bool,
     passes: &[MaterialPassDesc],
     render_state: MaterialRenderState,
-) -> Vec<wgpu::RenderPipeline> {
+) -> Result<Vec<wgpu::RenderPipeline>, PipelineBuildError> {
     assert!(
         !passes.is_empty(),
         "create_reflective_raster_mesh_forward_pipelines called with empty passes (stem {label})"
     );
-    let reflected = reflect_raster_material_wgsl(wgsl_source).unwrap_or_else(|e| {
-        panic!("reflect {label} (must match frame globals + per-draw contract): {e}");
-    });
-    validate_per_draw_group2(&reflected.per_draw_entries).unwrap_or_else(|e| {
-        panic!("{label} per_draw group2: {e}");
-    });
+    let (layout, vertex_buffers) = pipeline_layout_and_vertex_buffers(
+        device,
+        wgsl_source,
+        label,
+        include_uv_vertex_buffer,
+        include_color_vertex_buffer,
+    )?;
 
-    let frame_bgl = FrameGpuResources::bind_group_layout(device);
-    let material_bgl = if reflected.material_entries.is_empty() {
-        empty_material_bind_group_layout(device)
-    } else {
-        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some(&format!("{label}_material_props")),
-            entries: &reflected.material_entries,
-        })
-    };
-    let per_draw_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(&format!("{label}_per_draw")),
-        entries: &reflected.per_draw_entries,
-    });
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(label),
-        bind_group_layouts: &[Some(&frame_bgl), Some(&material_bgl), Some(&per_draw_bgl)],
-        immediate_size: 0,
-    });
-
-    let pos_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 0,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let nrm_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 1,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let uv_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 2,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let color_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 3,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let tangent_layout = wgpu::VertexBufferLayout {
-        array_stride: 16,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 4,
-            format: wgpu::VertexFormat::Float32x4,
-        }],
-    };
-    let uv1_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 5,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let uv2_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 6,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-    let uv3_layout = wgpu::VertexBufferLayout {
-        array_stride: 8,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &[wgpu::VertexAttribute {
-            offset: 0,
-            shader_location: 7,
-            format: wgpu::VertexFormat::Float32x2,
-        }],
-    };
-
-    let use_uv = include_uv_vertex_buffer && reflect_vertex_shader_needs_uv0_stream(wgsl_source);
-    let use_color =
-        include_color_vertex_buffer && reflect_vertex_shader_needs_color_stream(wgsl_source);
-    let use_extended = reflected.vs_max_vertex_location.is_some_and(|m| m >= 4);
-
-    let vertex_buffers: &[wgpu::VertexBufferLayout<'_>] = if use_extended {
-        &[
-            pos_layout,
-            nrm_layout,
-            uv_layout,
-            color_layout,
-            tangent_layout,
-            uv1_layout,
-            uv2_layout,
-            uv3_layout,
-        ]
-    } else if use_color {
-        &[pos_layout, nrm_layout, uv_layout, color_layout]
-    } else if use_uv {
-        &[pos_layout, nrm_layout, uv_layout]
-    } else {
-        &[pos_layout, nrm_layout]
-    };
-
-    passes
+    Ok(passes
         .iter()
-        .map(|p| {
+        .map(|pass| {
             build_pipeline_from_pass(
                 device,
                 module,
                 desc,
                 label,
                 &layout,
-                vertex_buffers,
-                p,
+                &vertex_buffers,
+                pass,
                 render_state,
             )
         })
-        .collect()
+        .collect())
 }

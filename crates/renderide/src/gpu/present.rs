@@ -82,17 +82,18 @@ pub fn record_swapchain_clear_pass(
 
 /// Clears the swapchain texture to [`SWAPCHAIN_CLEAR_COLOR`] and presents.
 pub fn present_clear_frame(gpu: &mut GpuContext, window: &Window) -> Result<(), PresentClearError> {
-    present_clear_frame_overlay(gpu, window, |_, _, _| Ok(()))
+    present_clear_frame_overlay(gpu, window, |_, _, _| Ok::<(), String>(()))
 }
 
 /// Clears the swapchain, optionally composites an overlay (e.g. Dear ImGui with `LoadOp::Load`), then presents.
-pub fn present_clear_frame_overlay<F>(
+pub fn present_clear_frame_overlay<F, E>(
     gpu: &mut GpuContext,
     window: &Window,
     overlay: F,
 ) -> Result<(), PresentClearError>
 where
-    F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), String>,
+    F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), E>,
+    E: std::fmt::Display,
 {
     let frame = match acquire_surface_outcome(gpu, window)? {
         SurfaceFrameOutcome::Skip | SurfaceFrameOutcome::Reconfigured => return Ok(()),

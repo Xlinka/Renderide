@@ -1,6 +1,8 @@
 //! ImGui window bodies for [`super::DebugHud`].
 
-use crate::config::{save_renderer_settings, PowerPreferenceSetting, RendererSettingsHandle};
+use crate::config::{
+    save_renderer_settings, MsaaSampleCount, PowerPreferenceSetting, RendererSettingsHandle,
+};
 use crate::diagnostics::scene_transforms_snapshot::RenderSpaceTransformsSnapshot;
 use crate::diagnostics::{
     FrameDiagnosticsSnapshot, FrameTimingHudSnapshot, RendererInfoSnapshot,
@@ -27,31 +29,382 @@ fn device_type_label(kind: wgpu::DeviceType) -> &'static str {
     }
 }
 
-fn pipeline_label(kind: &RasterPipelineKind) -> String {
-    match kind {
+/// Frame index line and optional “waiting” stub for the Stats tab.
+fn main_debug_panel_frame_line(
+    ui: &imgui::Ui,
+    renderer: Option<&RendererInfoSnapshot>,
+    frame: Option<&FrameDiagnosticsSnapshot>,
+) {
+    if let Some(r) = renderer {
+        ui.text(format!(
+            "Frame index {}  |  viewport {}×{}",
+            r.last_frame_index, r.viewport_px.0, r.viewport_px.1
+        ));
+    } else if frame.is_some() {
+        ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
+    }
+}
+
+/// Adapter name, limits, and surface info (Stats tab).
+fn main_debug_panel_gpu_adapter(ui: &imgui::Ui, r: &RendererInfoSnapshot) {
+    ui.separator();
+    ui.text("GPU (adapter)");
+    ui.text_wrapped(format!("Name: {}", r.adapter_name));
+    ui.text(format!(
+        "Class: {}  |  backend: {:?}",
+        device_type_label(r.adapter_device_type),
+        r.adapter_backend
+    ));
+    ui.text_wrapped(format!(
+        "Driver: {} ({})",
+        r.adapter_driver, r.adapter_driver_info
+    ));
+    ui.text(format!(
+        "Surface: {:?}  |  present: {:?}",
+        r.surface_format, r.present_mode
+    ));
+    ui.text(format!(
+        "MSAA: requested {}×  |  effective {}×  |  max {}×",
+        r.msaa_requested_samples, r.msaa_effective_samples, r.msaa_max_samples
+    ));
+    ui.text(format!(
+        "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
+        r.gpu_max_texture_dim_2d,
+        r.gpu_max_buffer_size,
+        r.gpu_max_storage_binding,
+        r.gpu_supports_base_instance,
+        r.gpu_supports_multiview
+    ));
+}
+
+/// Allocator and host CPU / RAM lines (Stats tab).
+fn main_debug_panel_host_and_allocator(ui: &imgui::Ui, f: &FrameDiagnosticsSnapshot) {
+    ui.separator();
+    ui.text("Process GPU memory (wgpu allocator)");
+    match (
+        f.gpu_allocator.allocated_bytes,
+        f.gpu_allocator.reserved_bytes,
+    ) {
+        (Some(alloc), Some(resv)) => ui.text(format!(
+            "{} / {} GiB allocated / reserved",
+            hud_fmt::gib_value(7, 2, alloc),
+            hud_fmt::gib_value(7, 2, resv)
+        )),
+        _ => ui.text("not reported for this backend"),
+    }
+
+    ui.separator();
+    ui.text("CPU / RAM (host)");
+    if f.host.cpu_model.is_empty() {
+        ui.text("CPU model: (unknown)");
+    } else {
+        ui.text_wrapped(format!("CPU model: {}", f.host.cpu_model));
+    }
+    ui.text(format!(
+        "Logical CPUs: {:>3}  |  usage {}%",
+        f.host.logical_cpus,
+        hud_fmt::f64_field(6, 2, f64::from(f.host.cpu_usage_percent))
+    ));
+    let ram_pct = if f.host.ram_total_bytes > 0 {
+        100.0 * f.host.ram_used_bytes as f64 / f.host.ram_total_bytes as f64
+    } else {
+        0.0
+    };
+    ui.text(format!(
+        "RAM: {} / {} GiB  ({}%)",
+        hud_fmt::gib_value(7, 2, f.host.ram_used_bytes),
+        hud_fmt::gib_value(7, 2, f.host.ram_total_bytes),
+        hud_fmt::f64_field(5, 1, ram_pct)
+    ));
+}
+
+/// IPC connection, init state, and coarse scene counts (Stats tab).
+fn main_debug_panel_ipc_and_scene(ui: &imgui::Ui, r: &RendererInfoSnapshot) {
+    ui.separator();
+    ui.text("IPC / init");
+    ui.text(format!(
+        "Connected: {}  |  init: {:?}",
+        r.ipc_connected, r.init_state
+    ));
+
+    ui.separator();
+    ui.text("Scene");
+    ui.text(format!("Render spaces: {}", r.render_space_count));
+    ui.text(format!(
+        "Mesh renderables (CPU tables): {}",
+        r.mesh_renderable_count
+    ));
+}
+
+/// Draw batches, instance batches, and cull stats (Stats tab).
+fn main_debug_panel_draw_stats(ui: &imgui::Ui, f: &FrameDiagnosticsSnapshot) {
+    ui.separator();
+    ui.text("Batches");
+    let m = &f.mesh_draw;
+    ui.text(format!(
+        "{:>5} total  |  {:>5} main  |  {:>5} overlay",
+        m.batch_total, m.batch_main, m.batch_overlay
+    ));
+    ui.text("Draws");
+    ui.text(format!(
+        "{:>5} total  |  {:>5} main  |  {:>5} overlay",
+        m.draws_total, m.draws_main, m.draws_overlay
+    ));
+    ui.text(format!(
+        "GPU instance batches (indexed submits): {:>5}",
+        m.instance_batch_total
+    ));
+    ui.text(format!(
+        "Frustum cull: {:>5} considered  |  {:>5} culled  |  Hi-Z {:>5} culled  |  {:>5} submitted after cull",
+        m.draws_pre_cull, m.draws_culled, m.draws_hi_z_culled, m.draws_total
+    ));
+    ui.text(format!(
+        "Prep rigid {:>5}  skinned {:>5}",
+        m.rigid_draws, m.skinned_draws
+    ));
+    ui.text(format!(
+        "Last submit render_tasks: {}  |  pending camera readbacks: not implemented",
+        f.last_submit_render_task_count
+    ));
+}
+
+/// Pool counts, materials, and render graph summary (Stats tab).
+fn main_debug_panel_resources_and_graph(
+    ui: &imgui::Ui,
+    renderer: Option<&RendererInfoSnapshot>,
+    frame: Option<&FrameDiagnosticsSnapshot>,
+) {
+    match (renderer, frame) {
+        (Some(r), Some(f)) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
+            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                f.render_textures_gpu_resident
+            ));
+
+            ui.separator();
+            ui.text("Materials (property store)");
+            ui.text(format!(
+                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
+                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
+            ));
+
+            ui.separator();
+            ui.text("Frame graph");
+            ui.text(format!(
+                "Render graph passes: {}  |  GPU lights (packed): {}",
+                r.frame_graph_pass_count, r.gpu_light_count
+            ));
+        }
+        (Some(r), None) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", r.resident_mesh_count));
+            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                r.resident_render_texture_count
+            ));
+
+            ui.separator();
+            ui.text("Materials (property store)");
+            ui.text(format!(
+                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
+                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
+            ));
+
+            ui.separator();
+            ui.text("Frame graph");
+            ui.text(format!(
+                "Render graph passes: {}  |  GPU lights (packed): {}",
+                r.frame_graph_pass_count, r.gpu_light_count
+            ));
+        }
+        (None, Some(f)) => {
+            ui.separator();
+            ui.text("Resources");
+            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
+            ui.text(format!("Textures (pool): {}", f.textures_gpu_resident));
+            ui.text(format!(
+                "Render textures (pool): {}",
+                f.render_textures_gpu_resident
+            ));
+        }
+        (None, None) => {}
+    }
+}
+
+/// Focused / unfocused FPS caps (Renderer config window).
+fn renderer_config_display_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Display");
+    ui.indent();
+    let mut ff = g.display.focused_fps_cap as f32;
+    if Drag::new("Focused FPS cap (0 = uncapped)")
+        .range(0.0, 2000.0)
+        .speed(1.0)
+        .build(ui, &mut ff)
+    {
+        g.display.focused_fps_cap = ff.round().clamp(0.0, u32::MAX as f32) as u32;
+        *dirty = true;
+    }
+    let mut uf = g.display.unfocused_fps_cap as f32;
+    if Drag::new("Unfocused FPS cap (0 = uncapped)")
+        .range(0.0, 2000.0)
+        .speed(1.0)
+        .build(ui, &mut uf)
+    {
+        g.display.unfocused_fps_cap = uf.round().clamp(0.0, u32::MAX as f32) as u32;
+        *dirty = true;
+    }
+    ui.unindent();
+}
+
+/// VSync toggle (Renderer config window).
+fn renderer_config_rendering_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Rendering");
+    ui.indent();
+    if ui.checkbox("VSync", &mut g.rendering.vsync) {
+        *dirty = true;
+    }
+    ui.text_disabled("Swapchain present mode; applies immediately (no restart).");
+    ui.text_disabled("MSAA (main window forward path; clamped to GPU max).");
+    for (i, &msaa) in MsaaSampleCount::ALL.iter().enumerate() {
+        let _id = ui.push_id_int(i as i32);
+        if ui
+            .selectable_config(msaa.label())
+            .selected(g.rendering.msaa == msaa)
+            .build()
+        {
+            g.rendering.msaa = msaa;
+            *dirty = true;
+        }
+    }
+    ui.unindent();
+}
+
+/// Debug HUD toggles, logging, validation layers, power preference (Renderer config window).
+fn renderer_config_debug_section(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    dirty: &mut bool,
+) {
+    ui.text("Debug");
+    ui.indent();
+    if ui.checkbox("Frame timing HUD", &mut g.debug.debug_hud_frame_timing) {
+        *dirty = true;
+    }
+    ui.text_disabled("FPS and CPU/GPU submit intervals; snapshot is cheap.");
+    if ui.checkbox(
+        "Debug HUD (Stats / Shader routes / Draw state / GPU memory)",
+        &mut g.debug.debug_hud_enabled,
+    ) {
+        *dirty = true;
+    }
+    ui.text_disabled("Main debug panels and per-frame diagnostics capture when enabled.");
+    if ui.checkbox("Scene transforms HUD", &mut g.debug.debug_hud_transforms) {
+        *dirty = true;
+    }
+    ui.text_disabled(
+        "Per-space world transform table; separate from main HUD (can be expensive on large scenes).",
+    );
+    if ui.checkbox("Textures HUD", &mut g.debug.debug_hud_textures) {
+        *dirty = true;
+    }
+    ui.text_disabled("Texture pool rows and current-view usage; can be noisy in large scenes.");
+    if ui.checkbox("Log verbose", &mut g.debug.log_verbose) {
+        *dirty = true;
+    }
+    if ui.checkbox("GPU validation layers", &mut g.debug.gpu_validation_layers) {
+        *dirty = true;
+    }
+    ui.text_disabled(
+        "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
+    );
+    ui.text_disabled("Power preference (applies on next GPU adapter init)");
+    for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {
+        let _id = ui.push_id_int(i as i32);
+        if ui
+            .selectable_config(pref.label())
+            .selected(g.debug.power_preference == pref)
+            .build()
+        {
+            g.debug.power_preference = pref;
+            *dirty = true;
+        }
+    }
+    ui.unindent();
+}
+
+/// Body of **Renderer config**: grouped controls and immediate save.
+fn renderer_config_panel_body(
+    ui: &imgui::Ui,
+    g: &mut crate::config::RendererSettings,
+    save_path: &std::path::Path,
+) {
+    let mut dirty = false;
+    renderer_config_display_section(ui, g, &mut dirty);
+    renderer_config_rendering_section(ui, g, &mut dirty);
+    renderer_config_debug_section(ui, g, &mut dirty);
+
+    if dirty {
+        if let Err(e) = save_renderer_settings(save_path, g) {
+            logger::warn!(
+                "Failed to save renderer config to {}: {e}",
+                save_path.display()
+            );
+        }
+    }
+
+    ui.separator();
+    ui.text_disabled(format!("Persist: {}", save_path.display()));
+}
+
+/// Feeds winit-derived [`crate::diagnostics::DebugHudInput`] into ImGui `io` before each frame.
+pub(super) fn apply_input(io: &mut Io, input: &crate::diagnostics::DebugHudInput) {
+    if input.mouse_active && input.window_focused {
+        io.add_mouse_pos_event(input.cursor_px);
+    } else {
+        io.add_mouse_pos_event([-f32::MAX, -f32::MAX]);
+    }
+    io.add_mouse_button_event(ImGuiMouseButton::Left, input.left);
+    io.add_mouse_button_event(ImGuiMouseButton::Right, input.right);
+    io.add_mouse_button_event(ImGuiMouseButton::Middle, input.middle);
+    io.add_mouse_button_event(ImGuiMouseButton::Extra1, input.extra1);
+    io.add_mouse_button_event(ImGuiMouseButton::Extra2, input.extra2);
+}
+
+fn pipeline_label(pipeline: &RasterPipelineKind) -> String {
+    match pipeline {
         RasterPipelineKind::EmbeddedStem(stem) => stem.to_string(),
         RasterPipelineKind::DebugWorldNormals => "debug_world_normals".to_string(),
     }
 }
 
 fn draw_state_is_uiish(row: &WorldMeshDrawStateRow) -> bool {
-    match &row.pipeline {
-        RasterPipelineKind::EmbeddedStem(stem) => {
-            let stem = stem.as_ref();
-            stem.starts_with("ui_")
-                || stem.contains("text")
-                || stem.contains("projection360")
-                || stem.contains("dash")
-        }
-        RasterPipelineKind::DebugWorldNormals => false,
-    }
+    row.is_overlay
+        || row.alpha_blended
+        || matches!(
+            &row.pipeline,
+            RasterPipelineKind::EmbeddedStem(stem)
+                if stem.starts_with("ui_")
+                    || stem.contains("text")
+                    || stem.contains("overlay")
+        )
 }
 
 fn draw_state_has_override(row: &WorldMeshDrawStateRow) -> bool {
-    row.depth_write.is_some()
-        || row.color_mask.is_some()
-        || row.stencil_enabled
-        || !matches!(row.blend_mode, MaterialBlendMode::StemDefault)
+    row.depth_write.is_some() || row.color_mask.is_some() || row.stencil_enabled
 }
 
 fn blend_mode_label(mode: MaterialBlendMode) -> String {
@@ -69,25 +422,26 @@ fn blend_mode_label(mode: MaterialBlendMode) -> String {
 
 fn color_mask_label(mask: Option<u8>) -> String {
     let Some(mask) = mask else {
-        return "inherit".to_string();
+        return "pass".to_string();
     };
-    if mask == 0 {
-        return "0 none".to_string();
-    }
-    let mut s = String::new();
+    let mut out = String::new();
     if mask & 8 != 0 {
-        s.push('r');
+        out.push('R');
     }
     if mask & 4 != 0 {
-        s.push('g');
+        out.push('G');
     }
     if mask & 2 != 0 {
-        s.push('b');
+        out.push('B');
     }
     if mask & 1 != 0 {
-        s.push('a');
+        out.push('A');
     }
-    format!("{s} ({mask})")
+    if out.is_empty() {
+        "none".to_string()
+    } else {
+        out
+    }
 }
 
 fn stencil_label(row: &WorldMeshDrawStateRow) -> String {
@@ -95,27 +449,13 @@ fn stencil_label(row: &WorldMeshDrawStateRow) -> String {
         return "off".to_string();
     }
     format!(
-        "ref={} cmp={} op={} r/w={:02x}/{:02x}",
+        "ref={} cmp={} pass={} read=0x{:02x} write=0x{:02x}",
         row.stencil_reference,
         row.stencil_compare,
         row.stencil_pass_op,
         row.stencil_read_mask,
         row.stencil_write_mask
     )
-}
-
-/// Feeds winit-derived [`crate::diagnostics::DebugHudInput`] into ImGui `io` before each frame.
-pub(super) fn apply_input(io: &mut Io, input: &crate::diagnostics::DebugHudInput) {
-    if input.mouse_active && input.window_focused {
-        io.add_mouse_pos_event(input.cursor_px);
-    } else {
-        io.add_mouse_pos_event([-f32::MAX, -f32::MAX]);
-    }
-    io.add_mouse_button_event(ImGuiMouseButton::Left, input.left);
-    io.add_mouse_button_event(ImGuiMouseButton::Right, input.right);
-    io.add_mouse_button_event(ImGuiMouseButton::Middle, input.middle);
-    io.add_mouse_button_event(ImGuiMouseButton::Extra1, input.extra1);
-    io.add_mouse_button_event(ImGuiMouseButton::Extra2, input.extra2);
 }
 
 impl DebugHud {
@@ -171,173 +511,28 @@ impl DebugHud {
             return;
         }
 
-        if let Some(r) = renderer {
-            ui.text(format!(
-                "Frame index {}  |  viewport {}×{}",
-                r.last_frame_index, r.viewport_px.0, r.viewport_px.1
-            ));
-        } else if frame.is_some() {
-            ui.text_disabled("Frame index / viewport: (need renderer snapshot)");
-        }
+        main_debug_panel_frame_line(ui, renderer, frame);
 
         if let Some(r) = renderer {
-            ui.separator();
-            ui.text("GPU (adapter)");
-            ui.text_wrapped(format!("Name: {}", r.adapter_name));
-            ui.text(format!(
-                "Class: {}  |  backend: {:?}",
-                device_type_label(r.adapter_device_type),
-                r.adapter_backend
-            ));
-            ui.text_wrapped(format!(
-                "Driver: {} ({})",
-                r.adapter_driver, r.adapter_driver_info
-            ));
-            ui.text(format!(
-                "Surface: {:?}  |  present: {:?}",
-                r.surface_format, r.present_mode
-            ));
-            ui.text(format!(
-                "Limits: tex2d≤{}  max_buf={}  storage_bind={}  |  base_instance={}  multiview={}",
-                r.gpu_max_texture_dim_2d,
-                r.gpu_max_buffer_size,
-                r.gpu_max_storage_binding,
-                r.gpu_supports_base_instance,
-                r.gpu_supports_multiview
-            ));
+            main_debug_panel_gpu_adapter(ui, r);
         }
 
         if let Some(f) = frame {
-            ui.separator();
-            ui.text("Process GPU memory (wgpu allocator)");
-            match (
-                f.gpu_allocator.allocated_bytes,
-                f.gpu_allocator.reserved_bytes,
-            ) {
-                (Some(alloc), Some(resv)) => ui.text(format!(
-                    "{} / {} GiB allocated / reserved",
-                    hud_fmt::gib_value(7, 2, alloc),
-                    hud_fmt::gib_value(7, 2, resv)
-                )),
-                _ => ui.text("not reported for this backend"),
-            }
-
-            ui.separator();
-            ui.text("CPU / RAM (host)");
-            if f.host.cpu_model.is_empty() {
-                ui.text("CPU model: (unknown)");
-            } else {
-                ui.text_wrapped(format!("CPU model: {}", f.host.cpu_model));
-            }
-            ui.text(format!(
-                "Logical CPUs: {:>3}  |  usage {}%",
-                f.host.logical_cpus,
-                hud_fmt::f64_field(6, 2, f64::from(f.host.cpu_usage_percent))
-            ));
-            let ram_pct = if f.host.ram_total_bytes > 0 {
-                100.0 * f.host.ram_used_bytes as f64 / f.host.ram_total_bytes as f64
-            } else {
-                0.0
-            };
-            ui.text(format!(
-                "RAM: {} / {} GiB  ({}%)",
-                hud_fmt::gib_value(7, 2, f.host.ram_used_bytes),
-                hud_fmt::gib_value(7, 2, f.host.ram_total_bytes),
-                hud_fmt::f64_field(5, 1, ram_pct)
-            ));
+            main_debug_panel_host_and_allocator(ui, f);
         }
 
         if let Some(r) = renderer {
-            ui.separator();
-            ui.text("IPC / init");
-            ui.text(format!(
-                "Connected: {}  |  init: {:?}",
-                r.ipc_connected, r.init_state
-            ));
-
-            ui.separator();
-            ui.text("Scene");
-            ui.text(format!("Render spaces: {}", r.render_space_count));
-            ui.text(format!(
-                "Mesh renderables (CPU tables): {}",
-                r.mesh_renderable_count
-            ));
+            main_debug_panel_ipc_and_scene(ui, r);
         }
 
         if let Some(f) = frame {
-            ui.separator();
-            ui.text("Batches");
-            let m = &f.mesh_draw;
-            ui.text(format!(
-                "{:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.batch_total, m.batch_main, m.batch_overlay
-            ));
-            ui.text("Draws");
-            ui.text(format!(
-                "{:>5} total  |  {:>5} main  |  {:>5} overlay",
-                m.draws_total, m.draws_main, m.draws_overlay
-            ));
-            ui.text(format!(
-                "GPU instance batches (indexed submits): {:>5}",
-                m.instance_batch_total
-            ));
-            ui.text(format!(
-                "Frustum cull: {:>5} considered  |  {:>5} culled  |  Hi-Z {:>5} culled  |  {:>5} submitted after cull",
-                m.draws_pre_cull, m.draws_culled, m.draws_hi_z_culled, m.draws_total
-            ));
-            ui.text(format!(
-                "Prep rigid {:>5}  skinned {:>5}",
-                m.rigid_draws, m.skinned_draws
-            ));
-            ui.text(format!(
-                "Last submit render_tasks: {}  |  pending camera readbacks: not implemented",
-                f.last_submit_render_task_count
-            ));
+            main_debug_panel_draw_stats(ui, f);
         }
 
-        if let Some(r) = renderer {
-            ui.separator();
-            ui.text("Resources");
-            if let Some(f) = frame {
-                ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
-            } else {
-                ui.text(format!("Mesh pool: {}", r.resident_mesh_count));
-            }
-            ui.text(format!("Textures (pool): {}", r.resident_texture_count));
-            let render_rt = frame
-                .map(|f| f.render_textures_gpu_resident)
-                .unwrap_or(r.resident_render_texture_count);
-            ui.text(format!("Render textures (pool): {}", render_rt));
-
-            ui.separator();
-            ui.text("Materials (property store)");
-            ui.text(format!(
-                "Material property maps: {}  |  property blocks: {}  |  shader bindings: {}",
-                r.material_property_slots, r.property_block_slots, r.material_shader_bindings
-            ));
-
-            ui.separator();
-            ui.text("Frame graph");
-            ui.text(format!(
-                "Render graph passes: {}  |  GPU lights (packed): {}",
-                r.frame_graph_pass_count, r.gpu_light_count
-            ));
-        } else if let Some(f) = frame {
-            ui.separator();
-            ui.text("Resources");
-            ui.text(format!("Mesh pool: {}", f.mesh_pool_entry_count));
-            ui.text(format!("Textures (pool): {}", f.textures_gpu_resident));
-            ui.text(format!(
-                "Render textures (pool): {}",
-                f.render_textures_gpu_resident
-            ));
-        }
+        main_debug_panel_resources_and_graph(ui, renderer, frame);
     }
 
-    /// Host shader routes rendered as a table with an implementation-status filter toggle.
-    ///
-    /// Rows group implemented routes first and fallback (`debug_world_normals`) routes last;
-    /// the toggle hides implemented rows so only unimplemented shaders remain visible.
+    /// Host shader asset id, logical name (or `<none>`), and material family per line (see **Shader routes** tab).
     pub(super) fn shader_mappings_tab(
         ui: &imgui::Ui,
         frame: Option<&FrameDiagnosticsSnapshot>,
@@ -347,78 +542,30 @@ impl DebugHud {
             ui.text("Waiting for frame diagnostics…");
             return;
         };
+        ui.checkbox("Only fallback routes", only_fallback);
         if d.shader_routes.is_empty() {
             ui.text("No shader route data");
-            return;
-        }
-
-        let implemented_count = d.shader_routes.iter().filter(|r| r.implemented).count();
-        let fallback_count = d.shader_routes.len() - implemented_count;
-
-        ui.text(format!(
-            "Routes: {}  |  implemented: {}  |  fallback (debug_world_normals): {}",
-            d.shader_routes.len(),
-            implemented_count,
-            fallback_count,
-        ));
-        ui.checkbox("Show only unimplemented (fallback)", only_fallback);
-        ui.text_disabled(
-            "Fallback rows use debug_world_normals because the host shader has no embedded target.",
-        );
-        ui.separator();
-
-        let rows: Vec<_> = d
-            .shader_routes
-            .iter()
-            .filter(|r| !*only_fallback || !r.implemented)
-            .collect();
-        if rows.is_empty() {
-            ui.text("No shader routes match the current filter.");
-            return;
-        }
-
-        let table_flags = TableFlags::BORDERS
-            | TableFlags::ROW_BG
-            | TableFlags::SCROLL_Y
-            | TableFlags::RESIZABLE
-            | TableFlags::SIZING_STRETCH_PROP;
-        let avail = ui.content_region_avail();
-        let table_height = avail[1].max(160.0);
-        if let Some(_table) = ui.begin_table_with_sizing(
-            "shader_routes",
-            4,
-            table_flags,
-            [avail[0], table_height],
-            0.0,
-        ) {
-            ui.table_setup_column("ID");
-            ui.table_setup_column("Shader name");
-            ui.table_setup_column("Pipeline");
-            ui.table_setup_column("Status");
-            ui.table_headers_row();
-
-            let clip = ListClipper::new(rows.len() as i32);
-            let tok = clip.begin(ui);
-            for row_i in tok.iter() {
-                let r = rows[row_i as usize];
-                ui.table_next_row();
-                ui.table_next_column();
-                ui.text(format!("{}", r.shader_asset_id));
-                ui.table_next_column();
-                ui.text(r.display_name.as_deref().unwrap_or("<none>"));
-                ui.table_next_column();
-                ui.text(&r.pipeline_label);
-                ui.table_next_column();
-                if r.implemented {
-                    ui.text_colored([0.5, 0.95, 0.55, 1.0], "implemented");
-                } else {
-                    ui.text_colored([1.0, 0.55, 0.4, 1.0], "fallback");
+        } else {
+            for route in &d.shader_routes {
+                if *only_fallback && route.implemented {
+                    continue;
                 }
+                ui.text_wrapped(format!(
+                    "{}  {}  {}  {}",
+                    route.shader_asset_id,
+                    route.display_name.as_deref().unwrap_or("<none>"),
+                    route.pipeline_label,
+                    if route.implemented {
+                        "implemented"
+                    } else {
+                        "fallback"
+                    },
+                ));
             }
         }
     }
 
-    /// Sorted draw rows with material-driven pipeline state (`_ZWrite`, stencil, color mask, blend).
+    /// Sorted draw rows with runtime material state.
     pub(super) fn draw_state_tab(
         ui: &imgui::Ui,
         frame: Option<&FrameDiagnosticsSnapshot>,
@@ -426,166 +573,263 @@ impl DebugHud {
         only_overrides: &mut bool,
     ) {
         let Some(d) = frame else {
-            ui.text("Waiting for frame diagnostics...");
+            ui.text("Waiting for frame diagnostics");
             return;
         };
-        if d.draw_state_rows.is_empty() {
-            ui.text("No draw-state rows captured.");
-            return;
-        }
+        ui.checkbox("Only UI / alpha rows", ui_only);
+        ui.checkbox("Only render-state overrides", only_overrides);
 
-        let z_inherit = d
+        let rows: Vec<&WorldMeshDrawStateRow> = d
             .draw_state_rows
             .iter()
-            .filter(|r| r.depth_write.is_none())
-            .count();
-        let z_on = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| r.depth_write == Some(true))
-            .count();
-        let z_off = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| r.depth_write == Some(false))
-            .count();
-        let stencil_on = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| r.stencil_enabled)
-            .count();
-        let color_masked = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| r.color_mask.is_some())
-            .count();
-        let alpha_sorted = d.draw_state_rows.iter().filter(|r| r.alpha_blended).count();
-        let uiish = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| draw_state_is_uiish(r))
-            .count();
-
-        ui.text(format!(
-            "Draws: {}  |  UI-ish: {}  |  alpha-sorted: {}",
-            d.draw_state_rows.len(),
-            uiish,
-            alpha_sorted
-        ));
-        ui.text(format!(
-            "ZWrite property: inherit {}  |  on {}  |  off {}",
-            z_inherit, z_on, z_off
-        ));
-        ui.text(format!(
-            "Stencil enabled: {}  |  ColorMask overrides: {}",
-            stencil_on, color_masked
-        ));
-        ui.text_disabled(
-            "ZWrite 'inherit' means no _ZWrite/ZWrite value was found; the shader pass default is used.",
-        );
-        ui.checkbox("Show only UI/text/projection rows", ui_only);
-        ui.checkbox("Show only rows with material overrides", only_overrides);
-        ui.separator();
-
-        let rows: Vec<_> = d
-            .draw_state_rows
-            .iter()
-            .filter(|r| !*ui_only || draw_state_is_uiish(r))
-            .filter(|r| !*only_overrides || draw_state_has_override(r))
+            .filter(|row| !*ui_only || draw_state_is_uiish(row))
+            .filter(|row| !*only_overrides || draw_state_has_override(row))
             .collect();
-        if rows.is_empty() {
-            ui.text("No draw-state rows match the current filters.");
-            return;
-        }
+        ui.text(format!(
+            "{} rows ({} submitted)",
+            rows.len(),
+            d.draw_state_rows.len()
+        ));
 
         let table_flags = TableFlags::BORDERS
             | TableFlags::ROW_BG
             | TableFlags::SCROLL_Y
             | TableFlags::RESIZABLE
             | TableFlags::SIZING_STRETCH_PROP;
-        let avail = ui.content_region_avail();
-        let table_height = avail[1].max(180.0);
-        if let Some(_table) = ui.begin_table_with_sizing(
-            "draw_state_rows",
-            11,
-            table_flags,
-            [avail[0], table_height],
-            0.0,
-        ) {
-            ui.table_setup_column("#");
-            ui.table_setup_column("Pipeline");
-            ui.table_setup_column("Mat/PB");
-            ui.table_setup_column("Shader");
+        if let Some(_table) =
+            ui.begin_table_with_sizing("draw_state_rows", 9, table_flags, [0.0, 360.0], 0.0)
+        {
+            ui.table_setup_column("Draw");
+            ui.table_setup_column("Node");
             ui.table_setup_column("Mesh");
-            ui.table_setup_column("Flags");
+            ui.table_setup_column("Material");
+            ui.table_setup_column("Pipeline");
             ui.table_setup_column("Blend");
             ui.table_setup_column("ZWrite");
+            ui.table_setup_column("Color");
             ui.table_setup_column("Stencil");
-            ui.table_setup_column("ColorMask");
-            ui.table_setup_column("Sort");
             ui.table_headers_row();
-
             let clip = ListClipper::new(rows.len() as i32);
             let tok = clip.begin(ui);
             for row_i in tok.iter() {
-                let r = rows[row_i as usize];
+                let row = rows[row_i as usize];
                 ui.table_next_row();
                 ui.table_next_column();
-                ui.text(format!("{}", r.draw_index));
+                ui.text(format!("{}", row.draw_index));
                 ui.table_next_column();
-                ui.text(pipeline_label(&r.pipeline));
+                ui.text(format!("{}", row.node_id));
                 ui.table_next_column();
-                let pb = r
-                    .property_block_slot0
-                    .map(|id| id.to_string())
-                    .unwrap_or_else(|| "-".to_string());
-                ui.text(format!("{}/{}", r.material_asset_id, pb));
-                ui.table_next_column();
-                ui.text(format!("{}", r.shader_asset_id));
+                ui.text(format!("{}:{}", row.mesh_asset_id, row.slot_index));
                 ui.table_next_column();
                 ui.text(format!(
-                    "s{} n{} m{}:{}",
-                    r.space_id, r.node_id, r.mesh_asset_id, r.slot_index
+                    "{} / {:?}",
+                    row.material_asset_id, row.property_block_slot0
                 ));
                 ui.table_next_column();
-                let mut flags = Vec::new();
-                if r.is_overlay {
-                    flags.push("overlay");
-                }
-                if r.alpha_blended {
-                    flags.push("alpha");
-                }
-                if r.skinned {
-                    flags.push("skin");
-                }
-                if r.requires_intersection_pass {
-                    flags.push("intersect");
-                }
-                if flags.is_empty() {
-                    ui.text("-");
-                } else {
-                    ui.text(flags.join(","));
-                }
+                ui.text_wrapped(pipeline_label(&row.pipeline));
                 ui.table_next_column();
-                ui.text(blend_mode_label(r.blend_mode));
+                ui.text(blend_mode_label(row.blend_mode));
                 ui.table_next_column();
-                match r.depth_write {
-                    Some(true) => ui.text_colored([0.5, 0.95, 0.55, 1.0], "on"),
-                    Some(false) => ui.text_colored([1.0, 0.75, 0.35, 1.0], "off"),
-                    None => ui.text_disabled("inherit"),
-                }
+                ui.text(match row.depth_write {
+                    Some(true) => "on",
+                    Some(false) => "off",
+                    None => "pass",
+                });
                 ui.table_next_column();
-                ui.text(stencil_label(r));
+                ui.text(color_mask_label(row.color_mask));
                 ui.table_next_column();
-                match r.color_mask {
-                    Some(0) => {
-                        ui.text_colored([1.0, 0.55, 0.4, 1.0], color_mask_label(r.color_mask))
+                ui.text_wrapped(stencil_label(row));
+            }
+        }
+    }
+
+    /// Texture pool window with current-view filtering.
+    pub(super) fn texture_debug_window(
+        ui: &imgui::Ui,
+        snapshot: &TextureDebugSnapshot,
+        open: &mut bool,
+        current_view_only: &mut bool,
+    ) {
+        ui.window("Textures")
+            .opened(open)
+            .position(
+                [overlay_layout::MARGIN, overlay_layout::MARGIN + 360.0],
+                Condition::FirstUseEver,
+            )
+            .size([860.0, 420.0], Condition::FirstUseEver)
+            .bg_alpha(0.85)
+            .build(|| {
+                ui.checkbox("Only current view", current_view_only);
+                ui.text(format!(
+                    "{} textures  |  {} current-view  |  {} total",
+                    snapshot.rows.len(),
+                    snapshot.current_view_texture_count,
+                    hud_fmt::bytes_compact(snapshot.total_resident_bytes)
+                ));
+                let rows: Vec<_> = snapshot
+                    .rows
+                    .iter()
+                    .filter(|row| !*current_view_only || row.used_by_current_view)
+                    .collect();
+                let table_flags = TableFlags::BORDERS
+                    | TableFlags::ROW_BG
+                    | TableFlags::SCROLL_Y
+                    | TableFlags::RESIZABLE
+                    | TableFlags::SIZING_STRETCH_PROP;
+                if let Some(_table) = ui.begin_table_with_sizing(
+                    "texture_debug_rows",
+                    8,
+                    table_flags,
+                    [0.0, 330.0],
+                    0.0,
+                ) {
+                    ui.table_setup_column("Asset");
+                    ui.table_setup_column("Size");
+                    ui.table_setup_column("Mips");
+                    ui.table_setup_column("Bytes");
+                    ui.table_setup_column("Host");
+                    ui.table_setup_column("GPU");
+                    ui.table_setup_column("Sampler");
+                    ui.table_setup_column("View");
+                    ui.table_headers_row();
+                    let clip = ListClipper::new(rows.len() as i32);
+                    let tok = clip.begin(ui);
+                    for row_i in tok.iter() {
+                        let row = rows[row_i as usize];
+                        ui.table_next_row();
+                        ui.table_next_column();
+                        ui.text(format!("{}", row.asset_id));
+                        ui.table_next_column();
+                        ui.text(format!("{}x{}", row.width, row.height));
+                        ui.table_next_column();
+                        ui.text(format!(
+                            "{}/{}",
+                            row.mip_levels_resident, row.mip_levels_total
+                        ));
+                        ui.table_next_column();
+                        ui.text(hud_fmt::bytes_compact(row.resident_bytes));
+                        ui.table_next_column();
+                        ui.text(format!("{:?} {:?}", row.host_format, row.color_profile));
+                        ui.table_next_column();
+                        ui.text(format!("{:?}", row.wgpu_format));
+                        ui.table_next_column();
+                        ui.text(format!(
+                            "{:?} aniso={} wrap={:?}/{:?} bias={:.2}",
+                            row.filter_mode,
+                            row.aniso_level,
+                            row.wrap_u,
+                            row.wrap_v,
+                            row.mipmap_bias
+                        ));
+                        ui.table_next_column();
+                        ui.text(if row.used_by_current_view {
+                            "current"
+                        } else {
+                            ""
+                        });
                     }
-                    Some(_) => ui.text(color_mask_label(r.color_mask)),
-                    None => ui.text_disabled("inherit"),
                 }
+            });
+    }
+
+    /// Full [`wgpu::AllocatorReport`] from [`FrameDiagnosticsSnapshot::gpu_allocator_report`], refreshed on a timer.
+    ///
+    /// Row labels mirror wgpu `label` strings on buffers and textures (often empty).
+    pub(super) fn gpu_memory_tab(ui: &imgui::Ui, frame: Option<&FrameDiagnosticsSnapshot>) {
+        let Some(d) = frame else {
+            ui.text("Waiting for frame diagnostics…");
+            return;
+        };
+
+        ui.text_disabled(format!(
+            "Next full report refresh in ~{:.1} s (detail lags Stats totals by up to one interval).",
+            d.gpu_allocator_report_next_refresh_in_secs
+        ));
+
+        let Some(hud) = &d.gpu_allocator_report else {
+            ui.separator();
+            ui.text_wrapped(
+                "Full allocator report unavailable: unsupported backend, or not yet collected. \
+                 The Stats tab still shows totals when the device reports them.",
+            );
+            return;
+        };
+
+        let r = hud.report.as_ref();
+
+        ui.separator();
+        ui.text("Summary (wgpu device allocator)");
+        ui.text(format!(
+            "{} / {}  allocated / reserved  |  {} blocks  |  {} sub-allocations",
+            hud_fmt::bytes_compact(r.total_allocated_bytes),
+            hud_fmt::bytes_compact(r.total_reserved_bytes),
+            r.blocks.len(),
+            r.allocations.len(),
+        ));
+        ui.text_disabled(
+            "Sizes are device-local sub-allocations; Vulkan memory-type names are not exposed here.",
+        );
+
+        ui.separator();
+        ui.text("Sub-allocations (by size, largest first)");
+        let n = hud.allocation_indices_by_size.len();
+        let table_flags = TableFlags::BORDERS
+            | TableFlags::ROW_BG
+            | TableFlags::SCROLL_Y
+            | TableFlags::RESIZABLE
+            | TableFlags::SIZING_STRETCH_PROP;
+        if let Some(_table) =
+            ui.begin_table_with_sizing("gpu_alloc_rows", 3, table_flags, [0.0, 360.0], 0.0)
+        {
+            ui.table_setup_column("Size");
+            ui.table_setup_column("Offset");
+            ui.table_setup_column("Label");
+            ui.table_headers_row();
+            let clip = ListClipper::new(n as i32);
+            let tok = clip.begin(ui);
+            for row_i in tok.iter() {
+                let idx = hud.allocation_indices_by_size[row_i as usize];
+                let a = &r.allocations[idx];
+                ui.table_next_row();
                 ui.table_next_column();
-                ui.text(format!("{} / {}", r.sorting_order, r.collect_order));
+                ui.text(hud_fmt::bytes_compact(a.size));
+                ui.table_next_column();
+                ui.text(format!("{}", a.offset));
+                let name = if a.name.is_empty() {
+                    "(no label)"
+                } else {
+                    a.name.as_str()
+                };
+                ui.table_next_column();
+                ui.text_wrapped(name);
+            }
+        }
+
+        ui.separator();
+        if let Some(_node) = ui.tree_node("Memory blocks") {
+            let nb = r.blocks.len();
+            if let Some(_table) = ui.begin_table_with_sizing(
+                "gpu_mem_blocks",
+                3,
+                TableFlags::BORDERS | TableFlags::ROW_BG | TableFlags::SIZING_STRETCH_PROP,
+                [0.0, 200.0],
+                0.0,
+            ) {
+                ui.table_setup_column("Block");
+                ui.table_setup_column("Size");
+                ui.table_setup_column("Sub-allocs");
+                ui.table_headers_row();
+                for bi in 0..nb {
+                    let b = &r.blocks[bi];
+                    let sub = b.allocations.end.saturating_sub(b.allocations.start);
+                    ui.table_next_row();
+                    ui.table_next_column();
+                    ui.text(format!("{bi}"));
+                    ui.table_next_column();
+                    ui.text(hud_fmt::bytes_compact(b.size));
+                    ui.table_next_column();
+                    ui.text(format!("{sub}"));
+                }
             }
         }
     }
@@ -599,9 +843,15 @@ impl DebugHud {
     ) {
         ui.window("Renderer config")
             .opened(open)
-            .position([overlay_layout::MARGIN, overlay_layout::MARGIN], Condition::FirstUseEver)
+            .position(
+                [overlay_layout::MARGIN, overlay_layout::MARGIN],
+                Condition::FirstUseEver,
+            )
             .size(
-                [overlay_layout::RENDERER_CONFIG_W, overlay_layout::RENDERER_CONFIG_H],
+                [
+                    overlay_layout::RENDERER_CONFIG_W,
+                    overlay_layout::RENDERER_CONFIG_H,
+                ],
                 Condition::FirstUseEver,
             )
             .bg_alpha(0.88)
@@ -618,208 +868,7 @@ impl DebugHud {
                     return;
                 };
 
-                let mut dirty = false;
-
-                ui.text("Display");
-                ui.indent();
-                let mut ff = g.display.focused_fps_cap as f32;
-                if Drag::new("Focused FPS cap (0 = uncapped)")
-                    .range(0.0, 2000.0)
-                    .speed(1.0)
-                    .build(ui, &mut ff)
-                {
-                    g.display.focused_fps_cap = ff.round().clamp(0.0, u32::MAX as f32) as u32;
-                    dirty = true;
-                }
-                let mut uf = g.display.unfocused_fps_cap as f32;
-                if Drag::new("Unfocused FPS cap (0 = uncapped)")
-                    .range(0.0, 2000.0)
-                    .speed(1.0)
-                    .build(ui, &mut uf)
-                {
-                    g.display.unfocused_fps_cap = uf.round().clamp(0.0, u32::MAX as f32) as u32;
-                    dirty = true;
-                }
-                ui.unindent();
-
-                ui.text("Rendering");
-                ui.indent();
-                if ui.checkbox("VSync", &mut g.rendering.vsync) {
-                    dirty = true;
-                }
-                ui.text_disabled("Swapchain present mode; applies immediately (no restart).");
-                ui.unindent();
-
-                ui.text("Debug");
-                ui.indent();
-                if ui.checkbox("Frame timing HUD", &mut g.debug.debug_hud_frame_timing) {
-                    dirty = true;
-                }
-                ui.text_disabled("FPS and CPU/GPU submit intervals; snapshot is cheap.");
-                if ui.checkbox("Debug HUD (Stats + Shader routes + Draw state)", &mut g.debug.debug_hud_enabled) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Main debug panels and per-frame diagnostics capture when enabled.",
-                );
-                if ui.checkbox("Scene transforms HUD", &mut g.debug.debug_hud_transforms) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Per-space world transform table; separate from main HUD (can be expensive on large scenes).",
-                );
-                if ui.checkbox("Textures HUD", &mut g.debug.debug_hud_textures) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "GPU texture pool listing with format, mips (resident/total), filter, and VRAM per entry.",
-                );
-                if ui.checkbox("Log verbose", &mut g.debug.log_verbose) {
-                    dirty = true;
-                }
-                if ui.checkbox("GPU validation layers", &mut g.debug.gpu_validation_layers) {
-                    dirty = true;
-                }
-                ui.text_disabled(
-                    "Vulkan validation layers significantly reduce performance; enable only when debugging. Restart required to apply (desktop and OpenXR).",
-                );
-                ui.text_disabled("Power preference (applies on next GPU adapter init)");
-                for (i, &pref) in PowerPreferenceSetting::ALL.iter().enumerate() {
-                    let _id = ui.push_id_int(i as i32);
-                    if ui
-                        .selectable_config(pref.label())
-                        .selected(g.debug.power_preference == pref)
-                        .build()
-                    {
-                        g.debug.power_preference = pref;
-                        dirty = true;
-                    }
-                }
-                ui.unindent();
-
-                if dirty {
-                    if let Err(e) = save_renderer_settings(save_path, &g) {
-                        logger::warn!(
-                            "Failed to save renderer config to {}: {e}",
-                            save_path.display()
-                        );
-                    }
-                }
-
-                ui.separator();
-                ui.text_disabled(format!("Persist: {}", save_path.display()));
-            });
-    }
-
-    /// Table of GPU texture pool entries: dimensions, format, resident/total mips, sampler state.
-    pub(super) fn texture_debug_window(
-        ui: &imgui::Ui,
-        snapshot: &TextureDebugSnapshot,
-        open: &mut bool,
-        current_view_only: &mut bool,
-    ) {
-        const WINDOW_W: f32 = 860.0;
-        const WINDOW_H: f32 = 420.0;
-        ui.window("Textures")
-            .opened(open)
-            .position(
-                [overlay_layout::MARGIN, overlay_layout::MARGIN + 480.0],
-                Condition::FirstUseEver,
-            )
-            .size([WINDOW_W, WINDOW_H], Condition::FirstUseEver)
-            .bg_alpha(0.85)
-            .build(|| {
-                ui.text(format!(
-                    "Resident textures: {}  |  current view: {}  |  total GPU bytes: {} MiB",
-                    snapshot.rows.len(),
-                    snapshot.current_view_texture_count,
-                    snapshot.total_resident_bytes / (1024 * 1024)
-                ));
-                if ui.checkbox("Only current view", current_view_only) {
-                    // State only; the snapshot is refreshed once per frame.
-                }
-                ui.text_disabled(
-                    "Filters to Texture2D assets used by submitted world draws after culling.",
-                );
-                ui.separator();
-                if snapshot.rows.is_empty() {
-                    ui.text("Texture pool is empty.");
-                    return;
-                }
-                let rows: Vec<_> = snapshot
-                    .rows
-                    .iter()
-                    .filter(|r| !*current_view_only || r.used_by_current_view)
-                    .collect();
-                if rows.is_empty() {
-                    ui.text("No Texture2D rows are used by the current view.");
-                    return;
-                }
-                let table_flags = TableFlags::BORDERS
-                    | TableFlags::ROW_BG
-                    | TableFlags::SCROLL_Y
-                    | TableFlags::RESIZABLE
-                    | TableFlags::SIZING_STRETCH_PROP;
-                let avail = ui.content_region_avail();
-                if let Some(_table) = ui.begin_table_with_sizing(
-                    "texture_pool_rows",
-                    8,
-                    table_flags,
-                    [avail[0], avail[1]],
-                    0.0,
-                ) {
-                    ui.table_setup_column("ID");
-                    ui.table_setup_column("Size");
-                    ui.table_setup_column("Host fmt");
-                    ui.table_setup_column("GPU fmt");
-                    ui.table_setup_column("Mips (R/T)");
-                    ui.table_setup_column("Filter");
-                    ui.table_setup_column("Wrap U/V");
-                    ui.table_setup_column("View / VRAM");
-                    ui.table_headers_row();
-
-                    let clip = ListClipper::new(rows.len() as i32);
-                    let tok = clip.begin(ui);
-                    for row_i in tok.iter() {
-                        let r = rows[row_i as usize];
-                        ui.table_next_row();
-                        ui.table_next_column();
-                        ui.text(format!("{}", r.asset_id));
-                        ui.table_next_column();
-                        ui.text(format!("{}×{}", r.width, r.height));
-                        ui.table_next_column();
-                        ui.text(format!("{:?}", r.host_format));
-                        ui.table_next_column();
-                        ui.text(format!("{:?}", r.wgpu_format));
-                        ui.table_next_column();
-                        let short = r.mip_levels_resident < r.mip_levels_total;
-                        let text = format!("{}/{}", r.mip_levels_resident, r.mip_levels_total);
-                        if short {
-                            ui.text_colored([1.0, 0.75, 0.4, 1.0], text);
-                        } else {
-                            ui.text(text);
-                        }
-                        ui.table_next_column();
-                        let filter = match r.filter_mode {
-                            crate::shared::TextureFilterMode::Point => "point",
-                            crate::shared::TextureFilterMode::Bilinear => "bilinear",
-                            crate::shared::TextureFilterMode::Trilinear => "trilinear",
-                            crate::shared::TextureFilterMode::Anisotropic => "aniso",
-                        };
-                        ui.text(format!("{} x{}", filter, r.aniso_level.max(1)));
-                        ui.table_next_column();
-                        let wrap = |w: crate::shared::TextureWrapMode| match w {
-                            crate::shared::TextureWrapMode::Repeat => "rep",
-                            crate::shared::TextureWrapMode::Clamp => "clp",
-                            crate::shared::TextureWrapMode::Mirror => "mir",
-                            crate::shared::TextureWrapMode::MirrorOnce => "m1x",
-                        };
-                        ui.text(format!("{}/{}", wrap(r.wrap_u), wrap(r.wrap_v)));
-                        ui.table_next_column();
-                        let used = if r.used_by_current_view { "yes" } else { "no" };
-                        ui.text(format!("{used} / {}", r.resident_bytes / 1024));
-                    }
-                }
+                renderer_config_panel_body(ui, &mut g, save_path);
             });
     }
 

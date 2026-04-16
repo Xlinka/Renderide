@@ -81,27 +81,18 @@ impl<'a> MemoryPacker<'a> {
         }
     }
 
-    /// Packs up to eight booleans into one byte (bit0 = LSB).
-    #[allow(clippy::too_many_arguments)]
-    pub fn write_packed_bools(
-        &mut self,
-        bit0: bool,
-        bit1: bool,
-        bit2: bool,
-        bit3: bool,
-        bit4: bool,
-        bit5: bool,
-        bit6: bool,
-        bit7: bool,
-    ) {
-        let byte = (bit0 as u8)
-            | (bit1 as u8) << 1
-            | (bit2 as u8) << 2
-            | (bit3 as u8) << 3
-            | (bit4 as u8) << 4
-            | (bit5 as u8) << 5
-            | (bit6 as u8) << 6
-            | (bit7 as u8) << 7;
+    /// Packs eight booleans into one byte (bit0 = LSB).
+    ///
+    /// SharedTypeGenerator emits `packer.write_packed_bools_array([...])` for packed-bool fields in the generated shared types.
+    pub fn write_packed_bools_array(&mut self, bits: [bool; 8]) {
+        let byte = (bits[0] as u8)
+            | (bits[1] as u8) << 1
+            | (bits[2] as u8) << 2
+            | (bits[3] as u8) << 3
+            | (bits[4] as u8) << 4
+            | (bits[5] as u8) << 5
+            | (bits[6] as u8) << 6
+            | (bits[7] as u8) << 7;
         self.write(&byte);
     }
 

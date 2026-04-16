@@ -61,14 +61,17 @@ mod world_mesh_cull_eval;
 mod world_mesh_draw_prep;
 mod world_mesh_draw_stats;
 
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 pub mod passes;
 
 pub use world_mesh_draw_prep::{
     build_instance_batches, collect_and_sort_world_mesh_draws,
     collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
-    resolved_material_slots, sort_world_mesh_draws, CameraTransformDrawFilter, InstanceBatch,
-    MaterialDrawBatchKey, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
-    WorldMeshDrawItem,
+    resolved_material_slots, sort_world_mesh_draws, CameraTransformDrawFilter,
+    DrawCollectionContext, InstanceBatch, MaterialDrawBatchKey, WorldMeshDrawCollectParallelism,
+    WorldMeshDrawCollection, WorldMeshDrawItem,
 };
 pub use world_mesh_draw_stats::{
     world_mesh_draw_state_rows_from_sorted, world_mesh_draw_stats_from_sorted,
@@ -85,7 +88,7 @@ pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use cluster_frame::{cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams};
 pub use compiled::{
     CompileStats, CompiledRenderGraph, ExternalFrameTargets, ExternalOffscreenTargets, FrameView,
-    FrameViewTarget,
+    FrameViewTarget, OffscreenSingleViewExecuteSpec,
 };
 pub use context::RenderPassContext;
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
@@ -111,7 +114,7 @@ pub use reverse_z_depth::{
     main_forward_depth_stencil_format, MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE,
 };
 pub use secondary_camera::{camera_state_enabled, host_camera_frame_for_render_texture};
-pub use skinning_palette::build_skinning_palette;
+pub use skinning_palette::{build_skinning_palette, SkinningPaletteParams};
 pub use world_mesh_cull::{
     build_world_mesh_cull_proj_params, capture_hi_z_temporal, HiZTemporalState, WorldMeshCullInput,
     WorldMeshCullProjParams,

@@ -22,6 +22,7 @@ use crate::pipelines::raster::debug_world_normals::{
 use crate::pipelines::ShaderPermutation;
 
 use super::family::MaterialPipelineDesc;
+use super::pipeline_build_error::PipelineBuildError;
 
 /// Maximum raster pipelines retained (LRU eviction).
 const MAX_CACHED_PIPELINES: usize = 512;
@@ -86,7 +87,7 @@ impl MaterialPipelineCache {
         permutation: ShaderPermutation,
         blend_mode: MaterialBlendMode,
         render_state: MaterialRenderState,
-    ) -> MaterialPipelineSet {
+    ) -> Result<MaterialPipelineSet, PipelineBuildError> {
         let key = MaterialPipelineCacheKey {
             kind: kind.clone(),
             permutation,
@@ -97,15 +98,14 @@ impl MaterialPipelineCache {
             blend_mode,
             render_state,
         };
-        let device = self.device.clone();
-        let cache = &mut self.pipelines;
-        if let Some(set) = cache.get(&key) {
-            return set.clone();
+        if let Some(hit) = self.pipelines.peek(&key) {
+            return Ok(hit.clone());
         }
         let wgsl = match kind {
-            RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation),
-            RasterPipelineKind::DebugWorldNormals => build_debug_world_normals_wgsl(permutation),
+            RasterPipelineKind::EmbeddedStem(stem) => build_embedded_wgsl(stem, permutation)?,
+            RasterPipelineKind::DebugWorldNormals => build_debug_world_normals_wgsl(permutation)?,
         };
+        let device = self.device.clone();
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("raster_material_shader"),
             source: wgpu::ShaderSource::Wgsl(wgsl.clone().into()),
@@ -120,18 +120,18 @@ impl MaterialPipelineCache {
                 permutation,
                 blend_mode,
                 render_state,
-            ),
+            )?,
             RasterPipelineKind::DebugWorldNormals => {
                 vec![create_debug_world_normals_render_pipeline(
                     &device, &module, desc, &wgsl,
-                )]
+                )?]
             }
         };
         let set: MaterialPipelineSet = Arc::from(pipelines.into_boxed_slice());
-        if let Some(evicted) = cache.put(key, set.clone()) {
+        if let Some(evicted) = self.pipelines.put(key, set.clone()) {
             drop(evicted);
             logger::trace!("MaterialPipelineCache: evicted LRU pipeline entry");
         }
-        set
+        Ok(set)
     }
 }

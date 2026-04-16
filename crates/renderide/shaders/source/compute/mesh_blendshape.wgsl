@@ -1,53 +1,47 @@
-// Weighted blendshape deltas (compute). `deltas` uses `BLENDSHAPE_OFFSET_GPU_STRIDE` (48) bytes per
-// (shape_index, vertex): three vec4 chunks (position, normal, tangent deltas). This entry point
-// consumes only `.pos.xyz` per shape weight.
+// Sparse weighted blendshape position deltas. Each entry is one influenced vertex for one shape;
+// the encoder dispatches one scatter pass per active shape (optionally chunked by entry count).
 
 struct Params {
-    /// Vertices in the mesh (same for every chunk).
     vertex_count: u32,
-    /// Blendshape count in **this** dispatch only.
-    shape_count: u32,
-    /// Same as `vertex_count`; stride inside the bound `deltas` subrange.
-    vertices_per_shape: u32,
-    /// Global shape index of `deltas[0]` (indexes into `weights`).
-    weight_base: u32,
-    /// `1` for the first chunk (seed from `base_pos`); `0` for later chunks (accumulate from `out_pos`).
-    first_chunk: u32,
-    _pad0: u32,
-    _pad1: u32,
-    _pad2: u32,
+    shape_index: u32,
+    sparse_base: u32,
+    sparse_count: u32,
+    /// Element offset into `out_pos` for this instance’s subrange (GPU skin cache arena).
+    base_dst_e: u32,
+    _p1: u32,
+    _p2: u32,
+    _p3: u32,
 }
 
-struct DeltaPacked {
-    pos: vec4<f32>,
-    _norm: vec4<f32>,
-    _tang: vec4<f32>,
+struct SparseEntry {
+    vertex_index: u32,
+    dx: f32,
+    dy: f32,
+    dz: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
-@group(0) @binding(1) var<storage, read> base_pos: array<vec4<f32>>;
-@group(0) @binding(2) var<storage, read> deltas: array<DeltaPacked>;
-@group(0) @binding(3) var<storage, read> weights: array<f32>;
-@group(0) @binding(4) var<storage, read_write> out_pos: array<vec4<f32>>;
+@group(0) @binding(1) var<storage, read> sparse: array<SparseEntry>;
+@group(0) @binding(2) var<storage, read> weights: array<f32>;
+@group(0) @binding(3) var<storage, read_write> out_pos: array<vec4<f32>>;
 
 @compute @workgroup_size(64)
-fn blendshape_main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn blendshape_scatter_main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    if (i >= params.vertex_count) {
+    if (i >= params.sparse_count) {
         return;
     }
-    var acc: vec3<f32>;
-    if (params.first_chunk != 0u) {
-        acc = base_pos[i].xyz;
-    } else {
-        acc = out_pos[i].xyz;
+    let wi = weights[params.shape_index];
+    if (wi == 0.0) {
+        return;
     }
-    for (var s = 0u; s < params.shape_count; s = s + 1u) {
-        let wi = weights[params.weight_base + s];
-        if (wi != 0.0) {
-            let di = deltas[s * params.vertices_per_shape + i];
-            acc += wi * di.pos.xyz;
-        }
+    let e = sparse[params.sparse_base + i];
+    let vi = e.vertex_index;
+    if (vi >= params.vertex_count) {
+        return;
     }
-    out_pos[i] = vec4<f32>(acc, base_pos[i].w);
+    let d = vec3<f32>(e.dx, e.dy, e.dz);
+    let oi = params.base_dst_e + vi;
+    let p = out_pos[oi];
+    out_pos[oi] = vec4<f32>(p.xyz + wi * d, p.w);
 }

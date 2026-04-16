@@ -32,14 +32,15 @@ pub(crate) fn try_hmd_multiview_submit(
 /// Blits the last HMD eye staging texture to the window (VR mirror); no full scene render.
 ///
 /// `overlay` runs on the same encoder after the mirror pass (e.g. Dear ImGui composite with `LoadOp::Load`).
-pub(crate) fn present_vr_mirror_blit<F>(
+pub(crate) fn present_vr_mirror_blit<F, E>(
     gpu: &mut GpuContext,
     window: &Window,
     mirror_blit: &mut VrMirrorBlitResources,
     overlay: F,
 ) -> Result<(), PresentClearError>
 where
-    F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), String>,
+    F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), E>,
+    E: std::fmt::Display,
 {
     mirror_blit.present_staging_to_surface_overlay(gpu, window, overlay)
 }

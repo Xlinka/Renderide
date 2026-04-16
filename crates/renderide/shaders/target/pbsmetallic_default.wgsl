@@ -266,6 +266,27 @@ fn diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_
     return ((((base_color_1 / vec3(3.1415927f)) * light_color_1) * _e91) * n_dot_l_2);
 }
 
+fn decode_ts_normal_sample_rawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(s: vec4<f32>) -> vec3<f32> {
+    var local: bool;
+
+    let uniform_white_rgb: bool = all((s.xyz > vec3<f32>(0.99f, 0.99f, 0.99f)));
+    if uniform_white_rgb {
+        return s.xyz;
+    }
+    let all_r_high: bool = (s.x >= 0.98039216f);
+    let gb_close: bool = (abs((s.y - s.z)) <= 0.03137255f);
+    if all_r_high {
+        local = gb_close;
+    } else {
+        local = false;
+    }
+    let _e21: bool = local;
+    if _e21 {
+        return vec3<f32>(s.w, s.y, s.z);
+    }
+    return s.xyz;
+}
+
 fn decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(raw: vec3<f32>, scale: f32) -> vec3<f32> {
     if all((raw > vec3<f32>(0.99f, 0.99f, 0.99f))) {
         return vec3<f32>(0f, 0f, 1f);
@@ -273,6 +294,12 @@ fn decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF
     let nm_xy: vec2<f32> = (((raw.xy * 2f) - vec2(1f)) * scale);
     let z: f32 = max(sqrt(max((1f - dot(nm_xy, nm_xy)), 0f)), 0.000001f);
     return normalize(vec3<f32>(nm_xy, z));
+}
+
+fn decode_ts_normal_with_placeholder_sampleX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(s_1: vec4<f32>, scale_1: f32) -> vec3<f32> {
+    let _e1: vec3<f32> = decode_ts_normal_sample_rawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(s_1);
+    let _e3: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e1, scale_1);
+    return _e3;
 }
 
 fn apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv_in: vec2<f32>, st: vec4<f32>) -> vec2<f32> {
@@ -326,27 +353,12 @@ fn mode_near(v_2: f32) -> bool {
 }
 
 fn alpha_test_enabled() -> bool {
-    var local: bool;
+    var local_1: bool;
 
     let _e2: f32 = mat._ALPHATEST_ON;
     let _e3: bool = kw(_e2);
     if !(_e3) {
         let _e6: bool = mode_near(1f);
-        local = _e6;
-    } else {
-        local = true;
-    }
-    let _e10: bool = local;
-    return _e10;
-}
-
-fn alpha_premultiply_enabled() -> bool {
-    var local_1: bool;
-
-    let _e2: f32 = mat._ALPHAPREMULTIPLY_ON;
-    let _e3: bool = kw(_e2);
-    if !(_e3) {
-        let _e6: bool = mode_near(3f);
         local_1 = _e6;
     } else {
         local_1 = true;
@@ -355,33 +367,48 @@ fn alpha_premultiply_enabled() -> bool {
     return _e10;
 }
 
-fn specular_highlights_enabled() -> bool {
+fn alpha_premultiply_enabled() -> bool {
     var local_2: bool;
+
+    let _e2: f32 = mat._ALPHAPREMULTIPLY_ON;
+    let _e3: bool = kw(_e2);
+    if !(_e3) {
+        let _e6: bool = mode_near(3f);
+        local_2 = _e6;
+    } else {
+        local_2 = true;
+    }
+    let _e10: bool = local_2;
+    return _e10;
+}
+
+fn specular_highlights_enabled() -> bool {
+    var local_3: bool;
 
     let _e2: f32 = mat._SpecularHighlights;
     if (_e2 > 0.5f) {
         let _e7: f32 = mat._SPECULARHIGHLIGHTS_OFF;
-        let _e8: bool = kw(_e7);
-        local_2 = !(_e8);
-    } else {
-        local_2 = false;
-    }
-    let _e13: bool = local_2;
-    return _e13;
-}
-
-fn glossy_reflections_enabled() -> bool {
-    var local_3: bool;
-
-    let _e2: f32 = mat._GlossyReflections;
-    if (_e2 > 0.5f) {
-        let _e7: f32 = mat._GLOSSYREFLECTIONS_OFF;
         let _e8: bool = kw(_e7);
         local_3 = !(_e8);
     } else {
         local_3 = false;
     }
     let _e13: bool = local_3;
+    return _e13;
+}
+
+fn glossy_reflections_enabled() -> bool {
+    var local_4: bool;
+
+    let _e2: f32 = mat._GlossyReflections;
+    if (_e2 > 0.5f) {
+        let _e7: f32 = mat._GLOSSYREFLECTIONS_OFF;
+        let _e8: bool = kw(_e7);
+        local_4 = !(_e8);
+    } else {
+        local_4 = false;
+    }
+    let _e13: bool = local_4;
     return _e13;
 }
 
@@ -392,17 +419,17 @@ fn metallic_gloss_map_enabled() -> bool {
 }
 
 fn smoothness_from_albedo_alpha() -> bool {
-    var local_4: bool;
+    var local_5: bool;
 
     let _e2: f32 = mat._SmoothnessTextureChannel;
     if !((_e2 > 0.5f)) {
         let _e8: f32 = mat._SMOOTHNESS_TEXTURE_ALBEDO_CHANNEL_A;
         let _e9: bool = kw(_e8);
-        local_4 = _e9;
+        local_5 = _e9;
     } else {
-        local_4 = true;
+        local_5 = true;
     }
-    let _e13: bool = local_4;
+    let _e13: bool = local_5;
     return _e13;
 }
 
@@ -424,7 +451,7 @@ fn uv_with_parallax(uv_1: vec2<f32>, world_pos_5: vec3<f32>) -> vec2<f32> {
 fn sample_normal_world(uv_main: vec2<f32>, uv_detail: vec2<f32>, world_n_2: vec3<f32>, detail_mask: f32) -> vec3<f32> {
     var n_4: vec3<f32>;
     var ts_n: vec3<f32>;
-    var local_5: bool;
+    var local_6: bool;
 
     n_4 = normalize(world_n_2);
     let _e5: f32 = mat._NORMALMAP;
@@ -436,40 +463,39 @@ fn sample_normal_world(uv_main: vec2<f32>, uv_detail: vec2<f32>, world_n_2: vec3
     let _e9: vec3<f32> = n_4;
     let _e10: mat3x3<f32> = orthonormal_tbnX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(_e9);
     let _e14: vec4<f32> = textureSample(_BumpMap, _BumpMap_sampler, uv_main);
-    let _e18: f32 = mat._BumpScale;
-    let _e19: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e14.xyz, _e18);
-    ts_n = _e19;
-    let _e23: f32 = mat._DETAIL_MULX2_;
-    let _e24: bool = kw(_e23);
-    if _e24 {
-        local_5 = (detail_mask > 0.001f);
+    let _e17: f32 = mat._BumpScale;
+    let _e18: vec3<f32> = decode_ts_normal_with_placeholder_sampleX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e14, _e17);
+    ts_n = _e18;
+    let _e22: f32 = mat._DETAIL_MULX2_;
+    let _e23: bool = kw(_e22);
+    if _e23 {
+        local_6 = (detail_mask > 0.001f);
     } else {
-        local_5 = false;
+        local_6 = false;
     }
-    let _e31: bool = local_5;
-    if _e31 {
-        let _e35: vec4<f32> = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_detail);
-        let detail_raw: vec3<f32> = _e35.xyz;
-        let _e39: f32 = mat._DetailNormalMapScale;
-        let _e40: vec3<f32> = decode_ts_normal_with_placeholderX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(detail_raw, _e39);
-        let _e41: vec3<f32> = ts_n;
-        let _e47: f32 = ts_n.z;
-        ts_n = normalize(vec3<f32>((_e41.xy + (_e40.xy * detail_mask)), _e47));
+    let _e30: bool = local_6;
+    if _e30 {
+        let _e34: vec4<f32> = textureSample(_DetailNormalMap, _DetailNormalMap_sampler, uv_detail);
+        let _e37: f32 = mat._DetailNormalMapScale;
+        let _e38: vec3<f32> = decode_ts_normal_with_placeholder_sampleX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMNXWIZIX(_e34, _e37);
+        let _e39: vec3<f32> = ts_n;
+        let _e45: f32 = ts_n.z;
+        ts_n = normalize(vec3<f32>((_e39.xy + (_e38.xy * detail_mask)), _e45));
     }
-    let _e50: vec3<f32> = ts_n;
-    n_4 = normalize((_e10 * _e50));
-    let _e53: vec3<f32> = n_4;
-    return _e53;
+    let _e48: vec3<f32> = ts_n;
+    n_4 = normalize((_e10 * _e48));
+    let _e51: vec3<f32> = n_4;
+    return _e51;
 }
 
 fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, world_n_3: vec3<f32>) -> SurfaceData {
-    var local_6: bool;
+    var local_7: bool;
     var base_color_2: vec3<f32>;
     var metallic_1: f32;
     var smoothness: f32;
     var detail_mask_1: f32 = 0f;
     var emission: vec3<f32> = vec3(0f);
-    var local_7: bool;
+    var local_8: bool;
 
     let _e4: vec4<f32> = mat._MainTex_ST;
     let _e6: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(uv0_3, _e4);
@@ -487,11 +513,11 @@ fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, wo
     let _e37: bool = alpha_test_enabled();
     if _e37 {
         let _e40: f32 = mat._Cutoff;
-        local_6 = (clip_alpha <= _e40);
+        local_7 = (clip_alpha <= _e40);
     } else {
-        local_6 = false;
+        local_7 = false;
     }
-    let _e45: bool = local_6;
+    let _e45: bool = local_7;
     if _e45 {
         discard;
     }
@@ -539,11 +565,11 @@ fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, wo
     if !(_e123) {
         let _e127: vec4<f32> = mat._EmissionColor;
         let _e131: vec4<f32> = mat._EmissionColor;
-        local_7 = (dot(_e127.xyz, _e131.xyz) > 0f);
+        local_8 = (dot(_e127.xyz, _e131.xyz) > 0f);
     } else {
-        local_7 = true;
+        local_8 = true;
     }
-    let _e139: bool = local_7;
+    let _e139: bool = local_8;
     if _e139 {
         let _e142: vec4<f32> = textureSample(_EmissionMap, _EmissionMap_sampler, _e8);
         let _e146: vec4<f32> = mat._EmissionColor;
@@ -555,17 +581,17 @@ fn sample_surface(uv0_3: vec2<f32>, uv1_2: vec2<f32>, world_pos_6: vec3<f32>, wo
     return SurfaceData(_e150, base_alpha, _e151, roughness_4, occlusion, _e119, _e152);
 }
 
-fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_layer_2: u32, s: SurfaceData, include_directional: bool, include_local: bool) -> vec3<f32> {
+fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_layer_2: u32, s_2: SurfaceData, include_directional: bool, include_local: bool) -> vec3<f32> {
     var lo: vec3<f32> = vec3(0f);
     var i: u32 = 0u;
-    var local_8: bool;
     var local_9: bool;
     var local_10: bool;
+    var local_11: bool;
 
     let _e5: vec4<f32> = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.camera_world_pos;
     let cam: vec3<f32> = _e5.xyz;
     let v_3: vec3<f32> = normalize((cam - world_pos_7));
-    let f0_2: vec3<f32> = mix(vec3(0.04f), s.base_color, s.metallic);
+    let f0_2: vec3<f32> = mix(vec3(0.04f), s_2.base_color, s_2.metallic);
     let _e18: vec4<f32> = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.view_space_z_coeffs;
     let _e21: vec4<f32> = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.view_space_z_coeffs_right;
     let _e24: u32 = frameX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX.viewport_width;
@@ -595,34 +621,34 @@ fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_
             let light_2: GpuLightX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX = lightsX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX[li];
             let is_directional: bool = (light_2.light_type == 1u);
             if is_directional {
-                local_8 = !(include_directional);
+                local_9 = !(include_directional);
             } else {
-                local_8 = false;
+                local_9 = false;
             }
-            let _e76: bool = local_8;
+            let _e76: bool = local_9;
             if !(_e76) {
                 if !(is_directional) {
-                    local_10 = !(include_local);
+                    local_11 = !(include_local);
                 } else {
-                    local_10 = false;
+                    local_11 = false;
                 }
-                let _e84: bool = local_10;
-                local_9 = _e84;
+                let _e84: bool = local_11;
+                local_10 = _e84;
             } else {
-                local_9 = true;
+                local_10 = true;
             }
-            let _e88: bool = local_9;
+            let _e88: bool = local_10;
             if _e88 {
                 continue;
             }
             let _e89: bool = specular_highlights_enabled();
             if _e89 {
                 let _e91: vec3<f32> = lo;
-                let _e96: vec3<f32> = direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_2, world_pos_7, s.normal, v_3, s.roughness, s.metallic, s.base_color, f0_2);
+                let _e96: vec3<f32> = direct_radiance_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_2, world_pos_7, s_2.normal, v_3, s_2.roughness, s_2.metallic, s_2.base_color, f0_2);
                 lo = (_e91 + _e96);
             } else {
                 let _e98: vec3<f32> = lo;
-                let _e101: vec3<f32> = diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_2, world_pos_7, s.normal, s.base_color);
+                let _e101: vec3<f32> = diffuse_only_metallicX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJYGE4Z2HJRHEZDGX(light_2, world_pos_7, s_2.normal, s_2.base_color);
                 lo = (_e98 + _e101);
             }
         }
@@ -632,7 +658,7 @@ fn clustered_direct_lighting(frag_xy_1: vec2<f32>, world_pos_7: vec3<f32>, view_
         }
     }
     let _e106: vec3<f32> = lo;
-    return (_e106 * s.occlusion);
+    return (_e106 * s_2.occlusion);
 }
 
 fn apply_premultiply(color: vec3<f32>, alpha: f32) -> vec3<f32> {

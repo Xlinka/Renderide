@@ -36,6 +36,24 @@ pub struct RenderingSettings {
     /// Wall-clock budget per frame for cooperative mesh/texture integration ([`crate::runtime::RendererRuntime::run_asset_integration`]), in milliseconds.
     #[serde(rename = "asset_integration_budget_ms")]
     pub asset_integration_budget_ms: u32,
+    /// Upper bound for [`crate::shared::RendererInitResult::max_texture_size`] sent to the host.
+    /// `0` means use the GPU’s [`wgpu::Limits::max_texture_dimension_2d`] (after device creation).
+    /// Non-zero values are clamped to the GPU maximum.
+    #[serde(rename = "reported_max_texture_size")]
+    pub reported_max_texture_size: u32,
+    /// When `true`, host [`crate::shared::SetRenderTextureFormat`] assets allocate **HDR** color
+    /// (`Rgba16Float`, Unity `ARGBHalf` parity). When `false` (default), **`Rgba8Unorm`** is used to
+    /// reduce VRAM for typical LDR render targets (mirrors, cameras, UI).
+    #[serde(rename = "render_texture_hdr_color")]
+    pub render_texture_hdr_color: bool,
+    /// When non-zero, logs a **warning** when combined resident Texture2D + render-texture bytes exceed
+    /// this many mebibytes (best-effort accounting).
+    #[serde(rename = "texture_vram_budget_mib")]
+    pub texture_vram_budget_mib: u32,
+    /// Multisample anti-aliasing for the main window forward path (clustered forward). Effective sample
+    /// count is clamped to the GPU’s supported maximum for the swapchain format. VR and offscreen host
+    /// render textures stay at 1× until extended separately.
+    pub msaa: MsaaSampleCount,
 }
 
 impl Default for RenderingSettings {
@@ -43,6 +61,78 @@ impl Default for RenderingSettings {
         Self {
             vsync: false,
             asset_integration_budget_ms: 3,
+            reported_max_texture_size: 0,
+            render_texture_hdr_color: false,
+            texture_vram_budget_mib: 0,
+            msaa: MsaaSampleCount::default(),
+        }
+    }
+}
+
+/// MSAA sample count for the main desktop swapchain forward path ([`RenderingSettings::msaa`]).
+///
+/// Tiers stop at **8×**; higher modes are not exposed (and are rarely supported for common surface
+/// formats on desktop GPUs).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MsaaSampleCount {
+    /// No multisampling (`sample_count` 1).
+    #[default]
+    Off,
+    /// 2× MSAA.
+    X2,
+    /// 4× MSAA.
+    X4,
+    /// 8× MSAA (largest tier in settings; the GPU may still cap lower).
+    #[serde(alias = "x16")]
+    X8,
+}
+
+impl MsaaSampleCount {
+    /// All variants for ImGui lists and config round-trips.
+    pub const ALL: [Self; 4] = [Self::Off, Self::X2, Self::X4, Self::X8];
+
+    /// Requested [`wgpu::RenderPipeline`] / attachment sample count (`1` = off).
+    pub fn as_count(self) -> u32 {
+        match self {
+            Self::Off => 1,
+            Self::X2 => 2,
+            Self::X4 => 4,
+            Self::X8 => 8,
+        }
+    }
+
+    /// Stable string for TOML / UI (`off`, `x2`, …).
+    pub fn as_persist_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::X2 => "x2",
+            Self::X4 => "x4",
+            Self::X8 => "x8",
+        }
+    }
+
+    /// Parses case-insensitive persisted or UI token.
+    ///
+    /// Legacy **`x16` / `16` / `16x`** tokens map to [`Self::X8`] so older configs still load.
+    pub fn from_persist_str(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "off" | "1" | "1x" | "none" => Some(Self::Off),
+            "x2" | "2" | "2x" => Some(Self::X2),
+            "x4" | "4" | "4x" => Some(Self::X4),
+            "x8" | "8" | "8x" => Some(Self::X8),
+            "x16" | "16" | "16x" => Some(Self::X8),
+            _ => None,
+        }
+    }
+
+    /// Short label for developer UI.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "1× (off)",
+            Self::X2 => "2×",
+            Self::X4 => "4×",
+            Self::X8 => "8×",
         }
     }
 }
@@ -159,5 +249,47 @@ impl RendererSettings {
     /// Hardcoded defaults only.
     pub fn from_defaults() -> Self {
         Self::default()
+    }
+
+    /// Effective value for [`crate::shared::RendererInitResult::max_texture_size`].
+    ///
+    /// `gpu_max_texture_dim_2d` should be [`wgpu::Limits::max_texture_dimension_2d`] when the device
+    /// exists; use [`None`] before GPU init (conservative **8192** fallback).
+    pub fn reported_max_texture_dimension_for_host(
+        &self,
+        gpu_max_texture_dim_2d: Option<u32>,
+    ) -> i32 {
+        let gpu_cap = gpu_max_texture_dim_2d.unwrap_or(8192);
+        let cap = self.rendering.reported_max_texture_size;
+        let v = if cap == 0 { gpu_cap } else { cap.min(gpu_cap) };
+        v as i32
+    }
+}
+
+#[cfg(test)]
+mod reported_max_texture_tests {
+    use super::RendererSettings;
+
+    #[test]
+    fn reported_max_texture_matches_gpu_when_config_zero() {
+        let s = RendererSettings::default();
+        assert_eq!(
+            s.reported_max_texture_dimension_for_host(Some(16384)),
+            16384
+        );
+    }
+
+    #[test]
+    fn reported_max_texture_clamps_config_to_gpu() {
+        let mut s = RendererSettings::default();
+        s.rendering.reported_max_texture_size = 4096;
+        assert_eq!(s.reported_max_texture_dimension_for_host(Some(16384)), 4096);
+        assert_eq!(s.reported_max_texture_dimension_for_host(Some(2048)), 2048);
+    }
+
+    #[test]
+    fn reported_max_texture_fallback_without_gpu() {
+        let s = RendererSettings::default();
+        assert_eq!(s.reported_max_texture_dimension_for_host(None), 8192);
     }
 }

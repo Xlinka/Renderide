@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::assets::texture::{CubemapMipChainUploader, MipChainAdvance};
+use crate::assets::texture::{
+    CubemapFaceMipUploadStep, CubemapMipChainUploader, MipChainAdvance, TextureUploadError,
+};
 use crate::gpu::GpuLimits;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
 use crate::shared::{
@@ -55,7 +57,7 @@ impl CubemapUploadTask {
     pub fn step(
         &mut self,
         queue: &mut AssetTransferQueue,
-        _device: &Arc<wgpu::Device>,
+        device: &Arc<wgpu::Device>,
         _gpu_limits: &Arc<GpuLimits>,
         gpu_queue: &wgpu::Queue,
         shm: &mut SharedMemoryAccessor,
@@ -82,13 +84,14 @@ impl CubemapUploadTask {
                             let want = upload.data.length.max(0) as usize;
                             if raw.len() < want {
                                 return Some((
-                                    Err(format!(
+                                    Err(TextureUploadError::from(format!(
                                         "raw shorter than descriptor (need {want}, got {})",
                                         raw.len()
-                                    )),
+                                    ))),
                                     Vec::new(),
                                 ));
                             }
+                            //review: keep the bytes owned while the cooperative face/mip task spans frames.
                             raw[..want].to_vec()
                         }
                         Err(_) => Vec::new(),
@@ -115,14 +118,15 @@ impl CubemapUploadTask {
                 let fmt = &self.format;
                 let wgpu_format = self.wgpu_format;
                 let upload = &self.data;
-                let mip_result = uploader.upload_next_face_mip(
-                    gpu_queue,
+                let mip_result = uploader.upload_next_face_mip(CubemapFaceMipUploadStep {
+                    device: device.as_ref(),
+                    queue: gpu_queue,
                     texture,
                     fmt,
                     wgpu_format,
                     upload,
                     payload,
-                );
+                });
                 match mip_result {
                     Ok(MipChainAdvance::UploadedOne { .. }) => StepResult::Continue,
                     Ok(MipChainAdvance::Finished { total_uploaded }) => {

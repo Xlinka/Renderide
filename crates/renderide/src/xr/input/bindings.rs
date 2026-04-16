@@ -110,6 +110,210 @@ pub(super) struct ActionRefs<'a> {
     pub(super) right_select: &'a xr::Action<bool>,
 }
 
+/// Oculus Touch interaction profile suggestions for the shared action set.
+fn oculus_touch_bindings<'a>(a: &'a ActionRefs<'a>, p: &'a BindingPaths) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
+        xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
+        xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
+        xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
+        xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+        xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+        xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
+        xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
+        xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+        xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+        xr::Binding::new(a.left_primary, p.left_x_click),
+        xr::Binding::new(a.left_secondary, p.left_y_click),
+        xr::Binding::new(a.right_primary, p.right_a_click),
+        xr::Binding::new(a.right_secondary, p.right_b_click),
+        xr::Binding::new(a.left_primary_touch, p.left_x_touch),
+        xr::Binding::new(a.left_secondary_touch, p.left_y_touch),
+        xr::Binding::new(a.right_primary_touch, p.right_a_touch),
+        xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
+        xr::Binding::new(a.left_menu, p.left_menu_click),
+        xr::Binding::new(a.left_thumbrest_touch, p.left_thumbrest_touch),
+        xr::Binding::new(a.right_thumbrest_touch, p.right_thumbrest_touch),
+    ]
+}
+
+/// ByteDance Pico / `XR_BD_controller_interaction`; touch-like layout without thumbrest paths.
+fn pico4_controller_bindings<'a>(
+    a: &'a ActionRefs<'a>,
+    p: &'a BindingPaths,
+) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
+        xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
+        xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
+        xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
+        xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
+        xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
+        xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
+        xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
+        xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+        xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+        xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
+        xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
+        xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+        xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+        xr::Binding::new(a.left_primary, p.left_x_click),
+        xr::Binding::new(a.left_secondary, p.left_y_click),
+        xr::Binding::new(a.right_primary, p.right_a_click),
+        xr::Binding::new(a.right_secondary, p.right_b_click),
+        xr::Binding::new(a.left_primary_touch, p.left_x_touch),
+        xr::Binding::new(a.left_secondary_touch, p.left_y_touch),
+        xr::Binding::new(a.right_primary_touch, p.right_a_touch),
+        xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
+        xr::Binding::new(a.left_menu, p.left_menu_click),
+    ]
+}
+
+/// Valve Index controller profile.
+fn valve_index_bindings<'a>(a: &'a ActionRefs<'a>, p: &'a BindingPaths) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
+        xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
+        xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
+        xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
+        xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
+        xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
+        xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+        xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+        xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
+        xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
+        xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+        xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+        xr::Binding::new(a.left_trackpad, p.left_trackpad),
+        xr::Binding::new(a.right_trackpad, p.right_trackpad),
+        xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
+        xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
+        xr::Binding::new(a.left_trackpad_force, p.left_trackpad_force),
+        xr::Binding::new(a.right_trackpad_force, p.right_trackpad_force),
+        xr::Binding::new(a.left_primary, p.left_a_click),
+        xr::Binding::new(a.left_secondary, p.left_b_click),
+        xr::Binding::new(a.right_primary, p.right_a_click),
+        xr::Binding::new(a.right_secondary, p.right_b_click),
+        xr::Binding::new(a.left_primary_touch, p.left_a_touch),
+        xr::Binding::new(a.left_secondary_touch, p.left_b_touch),
+        xr::Binding::new(a.right_primary_touch, p.right_a_touch),
+        xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
+    ]
+}
+
+/// HTC Vive wand profile.
+fn htc_vive_bindings<'a>(a: &'a ActionRefs<'a>, p: &'a BindingPaths) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
+        xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
+        xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
+        xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
+        xr::Binding::new(a.left_trackpad, p.left_trackpad),
+        xr::Binding::new(a.right_trackpad, p.right_trackpad),
+        xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
+        xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
+        xr::Binding::new(a.left_trackpad_click, p.left_trackpad_click),
+        xr::Binding::new(a.right_trackpad_click, p.right_trackpad_click),
+        xr::Binding::new(a.left_menu, p.left_menu_click),
+        xr::Binding::new(a.right_menu, p.right_menu_click),
+    ]
+}
+
+/// Windows Mixed Reality motion controllers.
+fn microsoft_motion_bindings<'a>(
+    a: &'a ActionRefs<'a>,
+    p: &'a BindingPaths,
+) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
+        xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
+        xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+        xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+        xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+        xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+        xr::Binding::new(a.left_trackpad, p.left_trackpad),
+        xr::Binding::new(a.right_trackpad, p.right_trackpad),
+        xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
+        xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
+        xr::Binding::new(a.left_trackpad_click, p.left_trackpad_click),
+        xr::Binding::new(a.right_trackpad_click, p.right_trackpad_click),
+        xr::Binding::new(a.left_menu, p.left_menu_click),
+        xr::Binding::new(a.right_menu, p.right_menu_click),
+    ]
+}
+
+/// `XR_KHR_generic_controller` minimal suggestions (tracked pose + triggers + sticks + face buttons).
+fn generic_controller_bindings<'a>(
+    a: &'a ActionRefs<'a>,
+    p: &'a BindingPaths,
+) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_trigger, p.left_trigger_value),
+        xr::Binding::new(a.right_trigger, p.right_trigger_value),
+        xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
+        xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
+        xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
+        xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
+        xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
+        xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
+        xr::Binding::new(a.left_primary, p.left_select_click),
+        xr::Binding::new(a.right_primary, p.right_select_click),
+        xr::Binding::new(a.left_secondary, p.left_menu_click),
+        xr::Binding::new(a.right_secondary, p.right_menu_click),
+    ]
+}
+
+/// OpenXR `simple_controller` profile.
+fn simple_controller_bindings<'a>(
+    a: &'a ActionRefs<'a>,
+    p: &'a BindingPaths,
+) -> Vec<xr::Binding<'a>> {
+    vec![
+        xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
+        xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
+        xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
+        xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
+        xr::Binding::new(a.left_select, p.left_select_click),
+        xr::Binding::new(a.right_select, p.right_select_click),
+        xr::Binding::new(a.left_menu, p.left_menu_click),
+        xr::Binding::new(a.right_menu, p.right_menu_click),
+    ]
+}
+
 /// Applies all known interaction profile binding tables; succeeds if at least one profile accepted bindings.
 ///
 /// When `suggest_generic_controller` is `false` (runtime did not enable `XR_KHR_generic_controller`),
@@ -138,196 +342,24 @@ pub(super) fn apply_suggested_interaction_bindings(
         Err(e) => last_binding_err = Some(e),
     };
 
-    suggest(
-        ip.oculus_touch,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_trigger, p.left_trigger_value),
-            xr::Binding::new(a.right_trigger, p.right_trigger_value),
-            xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
-            xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
-            xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
-            xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
-            xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-            xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-            xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
-            xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
-            xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-            xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-            xr::Binding::new(a.left_primary, p.left_x_click),
-            xr::Binding::new(a.left_secondary, p.left_y_click),
-            xr::Binding::new(a.right_primary, p.right_a_click),
-            xr::Binding::new(a.right_secondary, p.right_b_click),
-            xr::Binding::new(a.left_primary_touch, p.left_x_touch),
-            xr::Binding::new(a.left_secondary_touch, p.left_y_touch),
-            xr::Binding::new(a.right_primary_touch, p.right_a_touch),
-            xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
-            xr::Binding::new(a.left_menu, p.left_menu_click),
-            xr::Binding::new(a.left_thumbrest_touch, p.left_thumbrest_touch),
-            xr::Binding::new(a.right_thumbrest_touch, p.right_thumbrest_touch),
-        ],
-    );
+    let oculus_touch = oculus_touch_bindings(a, p);
+    suggest(ip.oculus_touch, &oculus_touch);
     if suggest_bd_controller {
-        // Touch-like layout; `pico4_controller` has no thumbrest components (unlike Oculus Touch).
-        suggest(
-            ip.pico4_controller,
-            &[
-                xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-                xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-                xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-                xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-                xr::Binding::new(a.left_trigger, p.left_trigger_value),
-                xr::Binding::new(a.right_trigger, p.right_trigger_value),
-                xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
-                xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
-                xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
-                xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
-                xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
-                xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
-                xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
-                xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
-                xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-                xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-                xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
-                xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
-                xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-                xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-                xr::Binding::new(a.left_primary, p.left_x_click),
-                xr::Binding::new(a.left_secondary, p.left_y_click),
-                xr::Binding::new(a.right_primary, p.right_a_click),
-                xr::Binding::new(a.right_secondary, p.right_b_click),
-                xr::Binding::new(a.left_primary_touch, p.left_x_touch),
-                xr::Binding::new(a.left_secondary_touch, p.left_y_touch),
-                xr::Binding::new(a.right_primary_touch, p.right_a_touch),
-                xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
-                xr::Binding::new(a.left_menu, p.left_menu_click),
-            ],
-        );
+        let pico4 = pico4_controller_bindings(a, p);
+        suggest(ip.pico4_controller, &pico4);
     }
-    suggest(
-        ip.valve_index,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_trigger, p.left_trigger_value),
-            xr::Binding::new(a.right_trigger, p.right_trigger_value),
-            xr::Binding::new(a.left_trigger_touch, p.left_trigger_touch),
-            xr::Binding::new(a.right_trigger_touch, p.right_trigger_touch),
-            xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
-            xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
-            xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
-            xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
-            xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-            xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-            xr::Binding::new(a.left_thumbstick_touch, p.left_thumbstick_touch),
-            xr::Binding::new(a.right_thumbstick_touch, p.right_thumbstick_touch),
-            xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-            xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-            xr::Binding::new(a.left_trackpad, p.left_trackpad),
-            xr::Binding::new(a.right_trackpad, p.right_trackpad),
-            xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
-            xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
-            xr::Binding::new(a.left_trackpad_force, p.left_trackpad_force),
-            xr::Binding::new(a.right_trackpad_force, p.right_trackpad_force),
-            xr::Binding::new(a.left_primary, p.left_a_click),
-            xr::Binding::new(a.left_secondary, p.left_b_click),
-            xr::Binding::new(a.right_primary, p.right_a_click),
-            xr::Binding::new(a.right_secondary, p.right_b_click),
-            xr::Binding::new(a.left_primary_touch, p.left_a_touch),
-            xr::Binding::new(a.left_secondary_touch, p.left_b_touch),
-            xr::Binding::new(a.right_primary_touch, p.right_a_touch),
-            xr::Binding::new(a.right_secondary_touch, p.right_b_touch),
-        ],
-    );
-    suggest(
-        ip.htc_vive,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_trigger, p.left_trigger_value),
-            xr::Binding::new(a.right_trigger, p.right_trigger_value),
-            xr::Binding::new(a.left_trigger_click, p.left_trigger_click),
-            xr::Binding::new(a.right_trigger_click, p.right_trigger_click),
-            xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
-            xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
-            xr::Binding::new(a.left_trackpad, p.left_trackpad),
-            xr::Binding::new(a.right_trackpad, p.right_trackpad),
-            xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
-            xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
-            xr::Binding::new(a.left_trackpad_click, p.left_trackpad_click),
-            xr::Binding::new(a.right_trackpad_click, p.right_trackpad_click),
-            xr::Binding::new(a.left_menu, p.left_menu_click),
-            xr::Binding::new(a.right_menu, p.right_menu_click),
-        ],
-    );
-    suggest(
-        ip.microsoft_motion,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_trigger, p.left_trigger_value),
-            xr::Binding::new(a.right_trigger, p.right_trigger_value),
-            xr::Binding::new(a.left_squeeze_click, p.left_squeeze_click),
-            xr::Binding::new(a.right_squeeze_click, p.right_squeeze_click),
-            xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-            xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-            xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-            xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-            xr::Binding::new(a.left_trackpad, p.left_trackpad),
-            xr::Binding::new(a.right_trackpad, p.right_trackpad),
-            xr::Binding::new(a.left_trackpad_touch, p.left_trackpad_touch),
-            xr::Binding::new(a.right_trackpad_touch, p.right_trackpad_touch),
-            xr::Binding::new(a.left_trackpad_click, p.left_trackpad_click),
-            xr::Binding::new(a.right_trackpad_click, p.right_trackpad_click),
-            xr::Binding::new(a.left_menu, p.left_menu_click),
-            xr::Binding::new(a.right_menu, p.right_menu_click),
-        ],
-    );
+    let valve_index = valve_index_bindings(a, p);
+    suggest(ip.valve_index, &valve_index);
+    let htc_vive = htc_vive_bindings(a, p);
+    suggest(ip.htc_vive, &htc_vive);
+    let microsoft_motion = microsoft_motion_bindings(a, p);
+    suggest(ip.microsoft_motion, &microsoft_motion);
     if suggest_generic_controller {
-        suggest(
-            ip.generic_controller,
-            &[
-                xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-                xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-                xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-                xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-                xr::Binding::new(a.left_trigger, p.left_trigger_value),
-                xr::Binding::new(a.right_trigger, p.right_trigger_value),
-                xr::Binding::new(a.left_squeeze, p.left_squeeze_value),
-                xr::Binding::new(a.right_squeeze, p.right_squeeze_value),
-                xr::Binding::new(a.left_thumbstick, p.left_thumbstick),
-                xr::Binding::new(a.right_thumbstick, p.right_thumbstick),
-                xr::Binding::new(a.left_thumbstick_click, p.left_thumbstick_click),
-                xr::Binding::new(a.right_thumbstick_click, p.right_thumbstick_click),
-                xr::Binding::new(a.left_primary, p.left_select_click),
-                xr::Binding::new(a.right_primary, p.right_select_click),
-                xr::Binding::new(a.left_secondary, p.left_menu_click),
-                xr::Binding::new(a.right_secondary, p.right_menu_click),
-            ],
-        );
+        let generic_controller = generic_controller_bindings(a, p);
+        suggest(ip.generic_controller, &generic_controller);
     }
-    suggest(
-        ip.simple_controller,
-        &[
-            xr::Binding::new(a.left_grip_pose, p.left_grip_pose),
-            xr::Binding::new(a.right_grip_pose, p.right_grip_pose),
-            xr::Binding::new(a.left_aim_pose, p.left_aim_pose),
-            xr::Binding::new(a.right_aim_pose, p.right_aim_pose),
-            xr::Binding::new(a.left_select, p.left_select_click),
-            xr::Binding::new(a.right_select, p.right_select_click),
-            xr::Binding::new(a.left_menu, p.left_menu_click),
-            xr::Binding::new(a.right_menu, p.right_menu_click),
-        ],
-    );
+    let simple_controller = simple_controller_bindings(a, p);
+    suggest(ip.simple_controller, &simple_controller);
 
     if !any_bindings {
         return Err(last_binding_err.unwrap_or(xr::sys::Result::ERROR_PATH_UNSUPPORTED));

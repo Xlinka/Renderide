@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::embedded_shaders;
+use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::raster_pipeline::create_reflective_raster_mesh_forward_pipelines;
 use crate::materials::{
     default_pass_for_blend_mode, materialized_pass_for_blend_mode, MaterialBlendMode,
@@ -183,13 +184,14 @@ pub fn embedded_composed_stem_for_permutation(
     base_stem.to_string()
 }
 
-pub(crate) fn build_embedded_wgsl(stem: &Arc<str>, permutation: ShaderPermutation) -> String {
+pub(crate) fn build_embedded_wgsl(
+    stem: &Arc<str>,
+    permutation: ShaderPermutation,
+) -> Result<String, PipelineBuildError> {
     let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
-    embedded_shaders::embedded_target_wgsl(&composed)
-        .unwrap_or_else(|| {
-            panic!("composed shader missing for stem {composed} (run build with shaders/source)")
-        })
-        .to_string()
+    let wgsl = embedded_shaders::embedded_target_wgsl(&composed)
+        .ok_or_else(|| PipelineBuildError::MissingEmbeddedShader(composed.clone()))?;
+    Ok(wgsl.to_string())
 }
 
 pub(crate) fn create_embedded_render_pipelines(
@@ -201,7 +203,7 @@ pub(crate) fn create_embedded_render_pipelines(
     permutation: ShaderPermutation,
     blend_mode: MaterialBlendMode,
     render_state: MaterialRenderState,
-) -> Vec<wgpu::RenderPipeline> {
+) -> Result<Vec<wgpu::RenderPipeline>, PipelineBuildError> {
     let composed = embedded_composed_stem_for_permutation(stem.as_ref(), permutation);
     let declared_passes = embedded_shaders::embedded_target_passes(&composed);
     if !declared_passes.is_empty() {

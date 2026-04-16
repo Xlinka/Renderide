@@ -1,7 +1,9 @@
 //! GPU render targets for host [`crate::shared::SetRenderTextureFormat`] (Unity `RenderTexture` assets).
 //!
 //! Color textures use `RENDER_ATTACHMENT | TEXTURE_BINDING` so the same asset can be sampled from
-//! materials after the offscreen pass. Depth buffers are separate textures when `depth > 0`.
+//! materials after the offscreen pass. Depth buffers are separate textures when `depth > 0`; depth
+//! also includes `COPY_SRC` so [`crate::backend::frame_gpu::FrameGpuResources::copy_scene_depth_snapshot`]
+//! can copy scene depth for intersection / frame bindings (same as main `renderide-depth`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,12 +51,14 @@ impl GpuResource for GpuRenderTexture {
 impl GpuRenderTexture {
     /// Creates GPU storage for a host [`SetRenderTextureFormat`].
     ///
-    /// Matches Unity `RenderTextureAsset`: `ARGBHalf` color and optional depth buffer when `depth > 0`.
+    /// Color format: **`Rgba16Float`** when `hdr_color` (Unity `ARGBHalf` / HDR parity), else
+    /// **`Rgba8Unorm`** for lower VRAM on typical LDR targets. Depth is always [`Depth32Float`].
     /// Size is clamped to `[4, min(8192, max_texture_dimension_2d)]` per edge like the Unity handler.
     pub fn new_from_format(
         device: &wgpu::Device,
         limits: &GpuLimits,
         fmt: &SetRenderTextureFormat,
+        hdr_color: bool,
     ) -> Option<Self> {
         let w = limits.clamp_render_texture_edge(fmt.size.x);
         let h = limits.clamp_render_texture_edge(fmt.size.y);
@@ -72,7 +76,11 @@ impl GpuRenderTexture {
             return None;
         }
 
-        let wgpu_color_format = wgpu::TextureFormat::Rgba16Float;
+        let wgpu_color_format = if hdr_color {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
         let size = wgpu::Extent3d {
             width: w,
             height: h,
@@ -152,6 +160,7 @@ impl GpuRenderTexture {
 fn estimate_texture_bytes(format: wgpu::TextureFormat, width: u32, height: u32, mips: u32) -> u64 {
     let bpp = match format {
         wgpu::TextureFormat::Rgba16Float => 8u64,
+        wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb => 4u64,
         wgpu::TextureFormat::Depth32Float => 4u64,
         wgpu::TextureFormat::Depth24PlusStencil8 => 4u64,
         wgpu::TextureFormat::Depth32FloatStencil8 => 8u64,

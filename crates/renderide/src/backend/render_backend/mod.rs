@@ -17,18 +17,35 @@ use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQu
 use crate::assets::material::MaterialPropertyStore;
 use crate::backend::mesh_deform::{MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
-use crate::diagnostics::{DebugHudInput, SceneTransformsSnapshot};
-use crate::gpu::GpuLimits;
+use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
+use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::render_graph::{WorldMeshDrawStateRow, WorldMeshDrawStats};
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
 use super::debug_hud_bundle::DebugHudBundle;
+use super::embedded::EmbeddedTexturePools;
 use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
 
 pub use crate::assets::asset_transfer_queue::{
     MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };
+
+/// Device, queue, and settings passed to [`RenderBackend::attach`] (shared-memory flush is passed separately for borrow reasons).
+pub struct RenderBackendAttachDesc {
+    /// Logical device for uploads and graph encoding.
+    pub device: Arc<wgpu::Device>,
+    /// Queue used for submits and GPU writes.
+    pub queue: Arc<Mutex<wgpu::Queue>>,
+    /// Capabilities for buffer sizing and MSAA.
+    pub gpu_limits: Arc<GpuLimits>,
+    /// Swapchain / main surface format for HUD and pipelines.
+    pub surface_format: wgpu::TextureFormat,
+    /// Live renderer settings (HUD, VR budgets, etc.).
+    pub renderer_settings: RendererSettingsHandle,
+    /// Path for persisting HUD/config from the debug overlay.
+    pub config_save_path: PathBuf,
+}
 
 /// Coordinates materials, asset uploads, per-frame GPU binds, occlusion, optional deform + ImGui HUD, and the render graph.
 pub struct RenderBackend {
@@ -48,6 +65,8 @@ pub struct RenderBackend {
     debug_hud: DebugHudBundle,
     /// Hierarchical depth pyramid, CPU readback, and temporal cull state for occlusion culling.
     pub(crate) occlusion: OcclusionSystem,
+    /// MSAA depth → R32F → [`wgpu::TextureFormat::Depth32Float`] resolve (after [`Self::attach`]).
+    pub(crate) msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
 }
 
 impl Default for RenderBackend {
@@ -68,6 +87,7 @@ impl RenderBackend {
             frame_resources: super::FrameResourceManager::new(),
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
+            msaa_depth_resolve: None,
         }
     }
 
@@ -126,6 +146,16 @@ impl RenderBackend {
         &self.asset_transfers.render_texture_pool
     }
 
+    /// Borrowed view of all texture pools used for embedded material `@group(1)` bind resolution.
+    pub fn embedded_texture_pools(&self) -> EmbeddedTexturePools<'_> {
+        EmbeddedTexturePools {
+            texture: self.texture_pool(),
+            texture3d: self.texture3d_pool(),
+            cubemap: self.cubemap_pool(),
+            render_texture: self.render_texture_pool(),
+        }
+    }
+
     /// Mutable texture pool.
     pub fn texture_pool_mut(&mut self) -> &mut TexturePool {
         &mut self.asset_transfers.texture_pool
@@ -172,20 +202,31 @@ impl RenderBackend {
     ///
     /// `shm` is used to flush pending mesh/texture payloads that require shared-memory reads; omit
     /// when none is available yet (uploads stay queued).
-    #[allow(clippy::too_many_arguments)]
     pub fn attach(
         &mut self,
-        device: Arc<wgpu::Device>,
-        queue: Arc<Mutex<wgpu::Queue>>,
-        gpu_limits: Arc<GpuLimits>,
+        desc: RenderBackendAttachDesc,
         shm: Option<&mut crate::ipc::SharedMemoryAccessor>,
-        surface_format: wgpu::TextureFormat,
-        renderer_settings: RendererSettingsHandle,
-        config_save_path: PathBuf,
     ) {
+        let RenderBackendAttachDesc {
+            device,
+            queue,
+            gpu_limits,
+            surface_format,
+            renderer_settings,
+            config_save_path,
+        } = desc;
         self.asset_transfers.gpu_device = Some(device.clone());
         self.asset_transfers.gpu_queue = Some(queue.clone());
         self.asset_transfers.gpu_limits = Some(Arc::clone(&gpu_limits));
+        {
+            let s = renderer_settings
+                .read()
+                .map(|g| g.clone())
+                .unwrap_or_default();
+            self.asset_transfers.render_texture_hdr_color = s.rendering.render_texture_hdr_color;
+            self.asset_transfers.texture_vram_budget_bytes =
+                u64::from(s.rendering.texture_vram_budget_mib).saturating_mul(1024 * 1024);
+        }
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
         self.frame_resources.attach(device.as_ref(), gpu_limits);
         {
@@ -207,6 +248,8 @@ impl RenderBackend {
         }
         self.materials.attach_gpu(device.clone(), &queue);
         asset_uploads::attach_flush_pending_asset_uploads(&mut self.asset_transfers, &device, shm);
+
+        self.msaa_depth_resolve = MsaaDepthResolveResources::try_new(device.as_ref()).map(Arc::new);
 
         self.frame_graph = match crate::render_graph::build_default_main_graph() {
             Ok(g) => Some(g),
@@ -353,7 +396,7 @@ impl RenderBackend {
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
         extent: (u32, u32),
-    ) -> Result<(), String> {
+    ) -> Result<(), DebugHudEncodeError> {
         self.debug_hud
             .encode_overlay(device, queue, encoder, backbuffer, extent)
     }

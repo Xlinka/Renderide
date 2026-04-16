@@ -8,6 +8,8 @@ use crate::backend::light_gpu::{GpuLight, MAX_LIGHTS};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::GpuLimits;
 
+use super::frame_gpu_error::FrameGpuInitError;
+
 /// GPU buffers and bind group for [`FrameGpuUniforms`], [`GpuLight`] storage, and cluster lists.
 pub struct FrameGpuResources {
     /// Uniform buffer for [`FrameGpuUniforms`].
@@ -435,14 +437,12 @@ impl FrameGpuResources {
     /// Allocates frame uniform, lights storage, minimal cluster grid `(1×1×Z)`; builds [`Self::bind_group`].
     ///
     /// Returns an error when the initial cluster buffer cache could not be populated (zero viewport or internal mismatch).
-    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Result<Self, String> {
+    pub fn new(device: &wgpu::Device, limits: Arc<GpuLimits>) -> Result<Self, FrameGpuInitError> {
         let lights_size = (MAX_LIGHTS * std::mem::size_of::<GpuLight>()) as u64;
         if lights_size > limits.max_storage_buffer_binding_size()
             || lights_size > limits.max_buffer_size()
         {
-            return Err(format!(
-                "lights storage size {lights_size} exceeds GPU storage/buffer limits"
-            ));
+            return Err(FrameGpuInitError::LightsStorageExceedsLimits { size: lights_size });
         }
         let frame_uniform = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame_globals_uniform"),
@@ -459,11 +459,11 @@ impl FrameGpuResources {
         let mut cluster_cache = ClusterBufferCache::new();
         cluster_cache
             .ensure_buffers(device, limits.as_ref(), (1, 1), CLUSTER_COUNT_Z, false)
-            .ok_or_else(|| "cluster buffers: ensure_buffers failed for 1x1 viewport".to_string())?;
+            .ok_or(FrameGpuInitError::ClusterEnsureFailed)?;
         let cluster_bind_version = cluster_cache.version;
         let refs = cluster_cache
             .get_buffers((1, 1), CLUSTER_COUNT_Z, false)
-            .ok_or_else(|| "cluster buffers: get_buffers failed for 1x1 viewport".to_string())?;
+            .ok_or(FrameGpuInitError::ClusterGetBuffersFailed)?;
         let scene_depth_format =
             crate::render_graph::main_forward_depth_stencil_format(device.features());
         let scene_depth_2d = Self::create_depth_snapshot_2d(device, (1, 1), scene_depth_format);

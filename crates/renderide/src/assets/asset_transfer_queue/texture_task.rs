@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::assets::texture::{
     texture_upload_start, MipChainAdvance, TextureDataStart, TextureMipChainUploader,
+    TextureMipUploadStep, TextureUploadError,
 };
 use crate::gpu::GpuLimits;
 use crate::ipc::{DualQueueIpc, SharedMemoryAccessor};
@@ -61,7 +62,7 @@ impl TextureUploadTask {
     pub fn step(
         &mut self,
         queue: &mut AssetTransferQueue,
-        _device: &Arc<wgpu::Device>,
+        device: &Arc<wgpu::Device>,
         _gpu_limits: &Arc<GpuLimits>,
         gpu_queue: &wgpu::Queue,
         shm: &mut SharedMemoryAccessor,
@@ -83,20 +84,28 @@ impl TextureUploadTask {
                 let wgpu_format = self.wgpu_format;
                 let upload = &self.data;
                 let start = shm.with_read_bytes(&upload.data, |raw| {
-                    let start =
-                        texture_upload_start(gpu_queue, texture, fmt, wgpu_format, upload, raw);
+                    let start = texture_upload_start(
+                        device.as_ref(),
+                        gpu_queue,
+                        texture,
+                        fmt,
+                        wgpu_format,
+                        upload,
+                        raw,
+                    );
                     let payload = match start {
                         Ok(TextureDataStart::MipChain(_)) => {
                             let want = upload.data.length.max(0) as usize;
                             if raw.len() < want {
                                 return Some((
-                                    Err(format!(
+                                    Err(TextureUploadError::from(format!(
                                         "raw shorter than descriptor (need {want}, got {})",
                                         raw.len()
-                                    )),
+                                    ))),
                                     Vec::new(),
                                 ));
                             }
+                            //review: keep the bytes owned while the cooperative mip task spans frames.
                             raw[..want].to_vec()
                         }
                         _ => Vec::new(),
@@ -127,8 +136,15 @@ impl TextureUploadTask {
                 let fmt = &self.format;
                 let wgpu_format = self.wgpu_format;
                 let upload = &self.data;
-                let mip_result =
-                    uploader.upload_next_mip(gpu_queue, texture, fmt, wgpu_format, upload, payload);
+                let mip_result = uploader.upload_next_mip(TextureMipUploadStep {
+                    device: device.as_ref(),
+                    queue: gpu_queue,
+                    texture,
+                    fmt,
+                    wgpu_format,
+                    upload,
+                    payload,
+                });
                 match mip_result {
                     Ok(MipChainAdvance::UploadedOne { total_uploaded }) => {
                         self.mark_uploaded_mips(queue, total_uploaded);

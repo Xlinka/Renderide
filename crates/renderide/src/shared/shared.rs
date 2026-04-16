@@ -9,6 +9,7 @@ use super::packing::memory_packable::MemoryPackable;
 use super::packing::memory_packer::MemoryPacker;
 use super::packing::memory_packer_entity_pool::MemoryPackerEntityPool;
 use super::packing::memory_unpacker::MemoryUnpacker;
+use super::packing::polymorphic_decode_error::PolymorphicDecodeError;
 use super::packing::polymorphic_memory_packable_entity::PolymorphicEncode;
 use bytemuck::{Pod, Zeroable};
 use glam::{IVec2, Mat4, Quat, Vec2, Vec3, Vec4};
@@ -476,380 +477,383 @@ impl PolymorphicEncode for RendererCommand {
 
 pub fn decode_renderer_command<P: MemoryPackerEntityPool>(
     unpacker: &mut MemoryUnpacker<'_, '_, P>,
-) -> RendererCommand {
+) -> Result<RendererCommand, PolymorphicDecodeError> {
     let tag = unpacker.read::<i32>();
     match tag {
-        0 => RendererCommand::RendererInitData({
+        0 => Ok(RendererCommand::RendererInitData({
             let mut x = RendererInitData::default();
             x.unpack(unpacker);
             x
-        }),
-        1 => RendererCommand::RendererInitResult({
+        })),
+        1 => Ok(RendererCommand::RendererInitResult({
             let mut x = RendererInitResult::default();
             x.unpack(unpacker);
             x
-        }),
-        2 => RendererCommand::RendererInitProgressUpdate({
+        })),
+        2 => Ok(RendererCommand::RendererInitProgressUpdate({
             let mut x = RendererInitProgressUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        3 => RendererCommand::RendererInitFinalizeData({
+        })),
+        3 => Ok(RendererCommand::RendererInitFinalizeData({
             let mut x = RendererInitFinalizeData::default();
             x.unpack(unpacker);
             x
-        }),
-        4 => RendererCommand::RendererEngineReady({
+        })),
+        4 => Ok(RendererCommand::RendererEngineReady({
             let mut x = RendererEngineReady::default();
             x.unpack(unpacker);
             x
-        }),
-        5 => RendererCommand::RendererShutdownRequest({
+        })),
+        5 => Ok(RendererCommand::RendererShutdownRequest({
             let mut x = RendererShutdownRequest::default();
             x.unpack(unpacker);
             x
-        }),
-        6 => RendererCommand::RendererShutdown({
+        })),
+        6 => Ok(RendererCommand::RendererShutdown({
             let mut x = RendererShutdown::default();
             x.unpack(unpacker);
             x
-        }),
-        7 => RendererCommand::KeepAlive({
+        })),
+        7 => Ok(RendererCommand::KeepAlive({
             let mut x = KeepAlive::default();
             x.unpack(unpacker);
             x
-        }),
-        8 => RendererCommand::RendererParentWindow({
+        })),
+        8 => Ok(RendererCommand::RendererParentWindow({
             let mut x = RendererParentWindow::default();
             x.unpack(unpacker);
             x
-        }),
-        9 => RendererCommand::FreeSharedMemoryView({
+        })),
+        9 => Ok(RendererCommand::FreeSharedMemoryView({
             let mut x = FreeSharedMemoryView::default();
             x.unpack(unpacker);
             x
-        }),
-        10 => RendererCommand::SetWindowIcon({
+        })),
+        10 => Ok(RendererCommand::SetWindowIcon({
             let mut x = SetWindowIcon::default();
             x.unpack(unpacker);
             x
-        }),
-        11 => RendererCommand::SetWindowIconResult({
+        })),
+        11 => Ok(RendererCommand::SetWindowIconResult({
             let mut x = SetWindowIconResult::default();
             x.unpack(unpacker);
             x
-        }),
-        12 => RendererCommand::SetTaskbarProgress({
+        })),
+        12 => Ok(RendererCommand::SetTaskbarProgress({
             let mut x = SetTaskbarProgress::default();
             x.unpack(unpacker);
             x
-        }),
-        13 => RendererCommand::FrameStartData({
+        })),
+        13 => Ok(RendererCommand::FrameStartData({
             let mut x = FrameStartData::default();
             x.unpack(unpacker);
             x
-        }),
-        14 => RendererCommand::FrameSubmitData({
+        })),
+        14 => Ok(RendererCommand::FrameSubmitData({
             let mut x = FrameSubmitData::default();
             x.unpack(unpacker);
             x
-        }),
-        15 => RendererCommand::PostProcessingConfig({
+        })),
+        15 => Ok(RendererCommand::PostProcessingConfig({
             let mut x = PostProcessingConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        16 => RendererCommand::QualityConfig({
+        })),
+        16 => Ok(RendererCommand::QualityConfig({
             let mut x = QualityConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        17 => RendererCommand::ResolutionConfig({
+        })),
+        17 => Ok(RendererCommand::ResolutionConfig({
             let mut x = ResolutionConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        18 => RendererCommand::DesktopConfig({
+        })),
+        18 => Ok(RendererCommand::DesktopConfig({
             let mut x = DesktopConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        19 => RendererCommand::GaussianSplatConfig({
+        })),
+        19 => Ok(RendererCommand::GaussianSplatConfig({
             let mut x = GaussianSplatConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        20 => RendererCommand::RenderDecouplingConfig({
+        })),
+        20 => Ok(RendererCommand::RenderDecouplingConfig({
             let mut x = RenderDecouplingConfig::default();
             x.unpack(unpacker);
             x
-        }),
-        21 => RendererCommand::MeshUploadData({
+        })),
+        21 => Ok(RendererCommand::MeshUploadData({
             let mut x = MeshUploadData::default();
             x.unpack(unpacker);
             x
-        }),
-        22 => RendererCommand::MeshUnload({
+        })),
+        22 => Ok(RendererCommand::MeshUnload({
             let mut x = MeshUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        23 => RendererCommand::MeshUploadResult({
+        })),
+        23 => Ok(RendererCommand::MeshUploadResult({
             let mut x = MeshUploadResult::default();
             x.unpack(unpacker);
             x
-        }),
-        24 => RendererCommand::ShaderUpload({
+        })),
+        24 => Ok(RendererCommand::ShaderUpload({
             let mut x = ShaderUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        25 => RendererCommand::ShaderUnload({
+        })),
+        25 => Ok(RendererCommand::ShaderUnload({
             let mut x = ShaderUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        26 => RendererCommand::ShaderUploadResult({
+        })),
+        26 => Ok(RendererCommand::ShaderUploadResult({
             let mut x = ShaderUploadResult::default();
             x.unpack(unpacker);
             x
-        }),
-        27 => RendererCommand::MaterialPropertyIdRequest({
+        })),
+        27 => Ok(RendererCommand::MaterialPropertyIdRequest({
             let mut x = MaterialPropertyIdRequest::default();
             x.unpack(unpacker);
             x
-        }),
-        28 => RendererCommand::MaterialPropertyIdResult({
+        })),
+        28 => Ok(RendererCommand::MaterialPropertyIdResult({
             let mut x = MaterialPropertyIdResult::default();
             x.unpack(unpacker);
             x
-        }),
-        29 => RendererCommand::MaterialsUpdateBatch({
+        })),
+        29 => Ok(RendererCommand::MaterialsUpdateBatch({
             let mut x = MaterialsUpdateBatch::default();
             x.unpack(unpacker);
             x
-        }),
-        30 => RendererCommand::MaterialsUpdateBatchResult({
+        })),
+        30 => Ok(RendererCommand::MaterialsUpdateBatchResult({
             let mut x = MaterialsUpdateBatchResult::default();
             x.unpack(unpacker);
             x
-        }),
-        31 => RendererCommand::UnloadMaterial({
+        })),
+        31 => Ok(RendererCommand::UnloadMaterial({
             let mut x = UnloadMaterial::default();
             x.unpack(unpacker);
             x
-        }),
-        32 => RendererCommand::UnloadMaterialPropertyBlock({
+        })),
+        32 => Ok(RendererCommand::UnloadMaterialPropertyBlock({
             let mut x = UnloadMaterialPropertyBlock::default();
             x.unpack(unpacker);
             x
-        }),
-        33 => RendererCommand::SetTexture2DFormat({
+        })),
+        33 => Ok(RendererCommand::SetTexture2DFormat({
             let mut x = SetTexture2DFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        34 => RendererCommand::SetTexture2DProperties({
+        })),
+        34 => Ok(RendererCommand::SetTexture2DProperties({
             let mut x = SetTexture2DProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        35 => RendererCommand::SetTexture2DData({
+        })),
+        35 => Ok(RendererCommand::SetTexture2DData({
             let mut x = SetTexture2DData::default();
             x.unpack(unpacker);
             x
-        }),
-        36 => RendererCommand::SetTexture2DResult({
+        })),
+        36 => Ok(RendererCommand::SetTexture2DResult({
             let mut x = SetTexture2DResult::default();
             x.unpack(unpacker);
             x
-        }),
-        37 => RendererCommand::UnloadTexture2D({
+        })),
+        37 => Ok(RendererCommand::UnloadTexture2D({
             let mut x = UnloadTexture2D::default();
             x.unpack(unpacker);
             x
-        }),
-        38 => RendererCommand::SetTexture3DFormat({
+        })),
+        38 => Ok(RendererCommand::SetTexture3DFormat({
             let mut x = SetTexture3DFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        39 => RendererCommand::SetTexture3DProperties({
+        })),
+        39 => Ok(RendererCommand::SetTexture3DProperties({
             let mut x = SetTexture3DProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        40 => RendererCommand::SetTexture3DData({
+        })),
+        40 => Ok(RendererCommand::SetTexture3DData({
             let mut x = SetTexture3DData::default();
             x.unpack(unpacker);
             x
-        }),
-        41 => RendererCommand::SetTexture3DResult({
+        })),
+        41 => Ok(RendererCommand::SetTexture3DResult({
             let mut x = SetTexture3DResult::default();
             x.unpack(unpacker);
             x
-        }),
-        42 => RendererCommand::UnloadTexture3D({
+        })),
+        42 => Ok(RendererCommand::UnloadTexture3D({
             let mut x = UnloadTexture3D::default();
             x.unpack(unpacker);
             x
-        }),
-        43 => RendererCommand::SetCubemapFormat({
+        })),
+        43 => Ok(RendererCommand::SetCubemapFormat({
             let mut x = SetCubemapFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        44 => RendererCommand::SetCubemapProperties({
+        })),
+        44 => Ok(RendererCommand::SetCubemapProperties({
             let mut x = SetCubemapProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        45 => RendererCommand::SetCubemapData({
+        })),
+        45 => Ok(RendererCommand::SetCubemapData({
             let mut x = SetCubemapData::default();
             x.unpack(unpacker);
             x
-        }),
-        46 => RendererCommand::SetCubemapResult({
+        })),
+        46 => Ok(RendererCommand::SetCubemapResult({
             let mut x = SetCubemapResult::default();
             x.unpack(unpacker);
             x
-        }),
-        47 => RendererCommand::UnloadCubemap({
+        })),
+        47 => Ok(RendererCommand::UnloadCubemap({
             let mut x = UnloadCubemap::default();
             x.unpack(unpacker);
             x
-        }),
-        48 => RendererCommand::SetRenderTextureFormat({
+        })),
+        48 => Ok(RendererCommand::SetRenderTextureFormat({
             let mut x = SetRenderTextureFormat::default();
             x.unpack(unpacker);
             x
-        }),
-        49 => RendererCommand::RenderTextureResult({
+        })),
+        49 => Ok(RendererCommand::RenderTextureResult({
             let mut x = RenderTextureResult::default();
             x.unpack(unpacker);
             x
-        }),
-        50 => RendererCommand::UnloadRenderTexture({
+        })),
+        50 => Ok(RendererCommand::UnloadRenderTexture({
             let mut x = UnloadRenderTexture::default();
             x.unpack(unpacker);
             x
-        }),
-        51 => RendererCommand::SetDesktopTextureProperties({
+        })),
+        51 => Ok(RendererCommand::SetDesktopTextureProperties({
             let mut x = SetDesktopTextureProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        52 => RendererCommand::DesktopTexturePropertiesUpdate({
+        })),
+        52 => Ok(RendererCommand::DesktopTexturePropertiesUpdate({
             let mut x = DesktopTexturePropertiesUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        53 => RendererCommand::UnloadDesktopTexture({
+        })),
+        53 => Ok(RendererCommand::UnloadDesktopTexture({
             let mut x = UnloadDesktopTexture::default();
             x.unpack(unpacker);
             x
-        }),
-        54 => RendererCommand::PointRenderBufferUpload({
+        })),
+        54 => Ok(RendererCommand::PointRenderBufferUpload({
             let mut x = PointRenderBufferUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        55 => RendererCommand::PointRenderBufferConsumed({
+        })),
+        55 => Ok(RendererCommand::PointRenderBufferConsumed({
             let mut x = PointRenderBufferConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        56 => RendererCommand::PointRenderBufferUnload({
+        })),
+        56 => Ok(RendererCommand::PointRenderBufferUnload({
             let mut x = PointRenderBufferUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        57 => RendererCommand::TrailRenderBufferUpload({
+        })),
+        57 => Ok(RendererCommand::TrailRenderBufferUpload({
             let mut x = TrailRenderBufferUpload::default();
             x.unpack(unpacker);
             x
-        }),
-        58 => RendererCommand::TrailRenderBufferConsumed({
+        })),
+        58 => Ok(RendererCommand::TrailRenderBufferConsumed({
             let mut x = TrailRenderBufferConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        59 => RendererCommand::TrailRenderBufferUnload({
+        })),
+        59 => Ok(RendererCommand::TrailRenderBufferUnload({
             let mut x = TrailRenderBufferUnload::default();
             x.unpack(unpacker);
             x
-        }),
-        60 => RendererCommand::GaussianSplatUploadRaw({
+        })),
+        60 => Ok(RendererCommand::GaussianSplatUploadRaw({
             let mut x = GaussianSplatUploadRaw::default();
             x.unpack(unpacker);
             x
-        }),
-        61 => RendererCommand::GaussianSplatUploadEncoded({
+        })),
+        61 => Ok(RendererCommand::GaussianSplatUploadEncoded({
             let mut x = GaussianSplatUploadEncoded::default();
             x.unpack(unpacker);
             x
-        }),
-        62 => RendererCommand::GaussianSplatResult({
+        })),
+        62 => Ok(RendererCommand::GaussianSplatResult({
             let mut x = GaussianSplatResult::default();
             x.unpack(unpacker);
             x
-        }),
-        63 => RendererCommand::UnloadGaussianSplat({
+        })),
+        63 => Ok(RendererCommand::UnloadGaussianSplat({
             let mut x = UnloadGaussianSplat::default();
             x.unpack(unpacker);
             x
-        }),
-        64 => RendererCommand::LightsBufferRendererSubmission({
+        })),
+        64 => Ok(RendererCommand::LightsBufferRendererSubmission({
             let mut x = LightsBufferRendererSubmission::default();
             x.unpack(unpacker);
             x
-        }),
-        65 => RendererCommand::LightsBufferRendererConsumed({
+        })),
+        65 => Ok(RendererCommand::LightsBufferRendererConsumed({
             let mut x = LightsBufferRendererConsumed::default();
             x.unpack(unpacker);
             x
-        }),
-        66 => RendererCommand::ReflectionProbeRenderResult({
+        })),
+        66 => Ok(RendererCommand::ReflectionProbeRenderResult({
             let mut x = ReflectionProbeRenderResult::default();
             x.unpack(unpacker);
             x
-        }),
-        67 => RendererCommand::VideoTextureLoad({
+        })),
+        67 => Ok(RendererCommand::VideoTextureLoad({
             let mut x = VideoTextureLoad::default();
             x.unpack(unpacker);
             x
-        }),
-        68 => RendererCommand::VideoTextureUpdate({
+        })),
+        68 => Ok(RendererCommand::VideoTextureUpdate({
             let mut x = VideoTextureUpdate::default();
             x.unpack(unpacker);
             x
-        }),
-        69 => RendererCommand::VideoTextureReady({
+        })),
+        69 => Ok(RendererCommand::VideoTextureReady({
             let mut x = VideoTextureReady::default();
             x.unpack(unpacker);
             x
-        }),
-        70 => RendererCommand::VideoTextureChanged({
+        })),
+        70 => Ok(RendererCommand::VideoTextureChanged({
             let mut x = VideoTextureChanged::default();
             x.unpack(unpacker);
             x
-        }),
-        71 => RendererCommand::VideoTextureProperties({
+        })),
+        71 => Ok(RendererCommand::VideoTextureProperties({
             let mut x = VideoTextureProperties::default();
             x.unpack(unpacker);
             x
-        }),
-        72 => RendererCommand::VideoTextureStartAudioTrack({
+        })),
+        72 => Ok(RendererCommand::VideoTextureStartAudioTrack({
             let mut x = VideoTextureStartAudioTrack::default();
             x.unpack(unpacker);
             x
-        }),
-        73 => RendererCommand::UnloadVideoTexture({
+        })),
+        73 => Ok(RendererCommand::UnloadVideoTexture({
             let mut x = UnloadVideoTexture::default();
             x.unpack(unpacker);
             x
+        })),
+        _ => Err(PolymorphicDecodeError {
+            discriminator: tag,
+            union: "RendererCommand",
         }),
-        _ => panic!("Invalid polymorphic tag: {:?}", tag),
     }
 }
 
@@ -2370,7 +2374,7 @@ impl MemoryPackable for VideoTextureUpdate {
     fn pack(&mut self, packer: &mut MemoryPacker<'_>) {
         packer.write(&self.asset_id);
         packer.write(&self.position);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.play,
             self.r#loop,
             false,
@@ -2379,7 +2383,7 @@ impl MemoryPackable for VideoTextureUpdate {
             false,
             false,
             false,
-        );
+        ]);
     }
     fn unpack<P: MemoryPackerEntityPool>(&mut self, unpacker: &mut MemoryUnpacker<'_, '_, P>) {
         self.asset_id = unpacker.read();
@@ -4099,7 +4103,7 @@ pub struct MouseState {
 
 impl MemoryPackable for MouseState {
     fn pack(&mut self, packer: &mut MemoryPacker<'_>) {
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_active,
             self.left_button_state,
             self.right_button_state,
@@ -4108,7 +4112,7 @@ impl MemoryPackable for MouseState {
             self.button5_state,
             false,
             false,
-        );
+        ]);
         packer.write(&self.desktop_position);
         packer.write(&self.window_position);
         packer.write(&self.direct_delta);
@@ -4186,7 +4190,7 @@ pub struct VRInputsState {
 
 impl MemoryPackable for VRInputsState {
     fn pack(&mut self, packer: &mut MemoryPacker<'_>) {
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.user_present_in_headset,
             self.dashboard_open,
             false,
@@ -4195,7 +4199,7 @@ impl MemoryPackable for VRInputsState {
             false,
             false,
             false,
-        );
+        ]);
         packer.write_object(self.headset_state.as_mut());
         packer.write_polymorphic_list(Some(&mut self.controllers[..]));
         packer.write_object_list(Some(&mut self.trackers[..]));
@@ -4252,7 +4256,7 @@ impl MemoryPackable for GamepadState {
         packer.write(&self.d_pad);
         packer.write(&self.left_trigger);
         packer.write(&self.right_trigger);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.left_thumbstick_click,
             self.right_thumbstick_click,
             self.d_pad_up,
@@ -4261,11 +4265,11 @@ impl MemoryPackable for GamepadState {
             self.d_pad_left,
             self.left_bumper,
             self.right_bumper,
-        );
-        packer.write_packed_bools(
+        ]);
+        packer.write_packed_bools_array([
             self.start, self.menu, false, false, false, false, false, false,
-        );
-        packer.write_packed_bools(
+        ]);
+        packer.write_packed_bools_array([
             self.a,
             self.b,
             self.x,
@@ -4274,7 +4278,7 @@ impl MemoryPackable for GamepadState {
             self.paddle1,
             self.paddle2,
             self.paddle3,
-        );
+        ]);
     }
     fn unpack<P: MemoryPackerEntityPool>(&mut self, unpacker: &mut MemoryUnpacker<'_, '_, P>) {
         self.display_name = unpacker.read_str();
@@ -5871,7 +5875,7 @@ pub struct HeadsetState {
 
 impl MemoryPackable for HeadsetState {
     fn pack(&mut self, packer: &mut MemoryPacker<'_>) {
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_tracking,
             self.battery_charging,
             false,
@@ -5880,7 +5884,7 @@ impl MemoryPackable for HeadsetState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -6014,7 +6018,15 @@ pub fn decode_vr_controller_state<P: MemoryPackerEntityPool>(
             x.unpack(unpacker);
             x
         }),
-        _ => panic!("Invalid polymorphic tag: {:?}", tag),
+        _ => {
+            warn!(
+                "Invalid VRControllerState polymorphic tag {}; decoding remainder as GenericControllerState (host contract violation)",
+                tag
+            );
+            let mut x = GenericControllerState::default();
+            x.unpack(unpacker);
+            VRControllerState::GenericControllerState(x)
+        }
     }
 }
 
@@ -6031,7 +6043,7 @@ pub struct TrackerState {
 impl MemoryPackable for TrackerState {
     fn pack(&mut self, packer: &mut MemoryPacker<'_>) {
         packer.write_str(self.unique_id.as_deref());
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_tracking,
             self.battery_charging,
             false,
@@ -6040,7 +6052,7 @@ impl MemoryPackable for TrackerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -6107,7 +6119,7 @@ impl MemoryPackable for HandState {
         packer.write_str(self.unique_id.as_deref());
         packer.write(&self.priority);
         packer.write_object_required(&mut self.chirality);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.tracks_metacarpals,
@@ -6116,7 +6128,7 @@ impl MemoryPackable for HandState {
             false,
             false,
             false,
-        );
+        ]);
         packer.write(&self.confidence);
         if self.is_tracking {
             packer.write(&self.wrist_position);
@@ -7305,7 +7317,7 @@ impl MemoryPackable for CosmosControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7314,7 +7326,7 @@ impl MemoryPackable for CosmosControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7325,7 +7337,7 @@ impl MemoryPackable for CosmosControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.joystick_touch,
             self.joystick_click,
             self.trigger_touch,
@@ -7334,7 +7346,7 @@ impl MemoryPackable for CosmosControllerState {
             self.vive,
             self.button_ax,
             self.button_by,
-        );
+        ]);
         packer.write(&self.joystick_raw);
         packer.write(&self.trigger);
         packer.write_bool(self.bumper);
@@ -7404,7 +7416,7 @@ impl MemoryPackable for GenericControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7413,7 +7425,7 @@ impl MemoryPackable for GenericControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7426,7 +7438,7 @@ impl MemoryPackable for GenericControllerState {
         }
         packer.write(&self.strength);
         packer.write(&self.axis);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.touching_strength,
             self.touching_axis,
             self.primary,
@@ -7435,7 +7447,7 @@ impl MemoryPackable for GenericControllerState {
             self.secondary,
             false,
             false,
-        );
+        ]);
     }
     fn unpack<P: MemoryPackerEntityPool>(&mut self, unpacker: &mut MemoryUnpacker<'_, '_, P>) {
         self.device_id = unpacker.read_str();
@@ -7502,7 +7514,7 @@ impl MemoryPackable for HPReverbControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7511,7 +7523,7 @@ impl MemoryPackable for HPReverbControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7522,7 +7534,7 @@ impl MemoryPackable for HPReverbControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.app_menu,
             self.button_yb,
             self.button_xa,
@@ -7531,7 +7543,7 @@ impl MemoryPackable for HPReverbControllerState {
             self.joystick_click,
             self.trigger_hair,
             self.trigger_click,
-        );
+        ]);
         packer.write(&self.grip);
         packer.write(&self.joystick_raw);
         packer.write(&self.trigger);
@@ -7610,7 +7622,7 @@ impl MemoryPackable for IndexControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7619,7 +7631,7 @@ impl MemoryPackable for IndexControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7630,7 +7642,7 @@ impl MemoryPackable for IndexControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.grip_touch,
             self.grip_click,
             self.button_a,
@@ -7639,10 +7651,10 @@ impl MemoryPackable for IndexControllerState {
             self.button_btouch,
             self.trigger_touch,
             self.trigger_click,
-        );
+        ]);
         packer.write(&self.grip);
         packer.write(&self.trigger);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.joystick_touch,
             self.joystick_click,
             self.touchpad_touch,
@@ -7651,7 +7663,7 @@ impl MemoryPackable for IndexControllerState {
             false,
             false,
             false,
-        );
+        ]);
         packer.write(&self.joystick_raw);
         packer.write(&self.touchpad);
         packer.write(&self.touchpad_force);
@@ -7730,7 +7742,7 @@ impl MemoryPackable for PicoNeo2ControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7739,7 +7751,7 @@ impl MemoryPackable for PicoNeo2ControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7750,7 +7762,7 @@ impl MemoryPackable for PicoNeo2ControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.app,
             self.pico,
             self.button_yb,
@@ -7759,7 +7771,7 @@ impl MemoryPackable for PicoNeo2ControllerState {
             self.joystick_touch,
             self.joystick_click,
             self.trigger_click,
-        );
+        ]);
         packer.write(&self.joystick);
         packer.write(&self.trigger);
     }
@@ -7834,7 +7846,7 @@ impl MemoryPackable for TouchControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7843,7 +7855,7 @@ impl MemoryPackable for TouchControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7855,7 +7867,7 @@ impl MemoryPackable for TouchControllerState {
             packer.write_bool(self.battery_charging);
         }
         packer.write_object_required(&mut self.model);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.start,
             self.button_yb,
             self.button_xa,
@@ -7864,8 +7876,8 @@ impl MemoryPackable for TouchControllerState {
             self.thumbrest_touch,
             false,
             false,
-        );
-        packer.write_packed_bools(
+        ]);
+        packer.write_packed_bools_array([
             self.grip_click,
             self.joystick_touch,
             self.joystick_click,
@@ -7874,7 +7886,7 @@ impl MemoryPackable for TouchControllerState {
             false,
             false,
             false,
-        );
+        ]);
         packer.write(&self.grip);
         packer.write(&self.joystick_raw);
         packer.write(&self.trigger);
@@ -7949,7 +7961,7 @@ impl MemoryPackable for ViveControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -7958,7 +7970,7 @@ impl MemoryPackable for ViveControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -7969,7 +7981,7 @@ impl MemoryPackable for ViveControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.grip,
             self.app,
             self.trigger_hair,
@@ -7978,7 +7990,7 @@ impl MemoryPackable for ViveControllerState {
             self.touchpad_click,
             false,
             false,
-        );
+        ]);
         packer.write(&self.trigger);
         packer.write(&self.touchpad);
     }
@@ -8046,7 +8058,7 @@ impl MemoryPackable for WindowsMRControllerState {
         packer.write_str(self.device_model.as_deref());
         packer.write_object_required(&mut self.side);
         packer.write_object_required(&mut self.body_node);
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.is_device_active,
             self.is_tracking,
             self.has_bound_hand,
@@ -8055,7 +8067,7 @@ impl MemoryPackable for WindowsMRControllerState {
             false,
             false,
             false,
-        );
+        ]);
         if self.is_tracking {
             packer.write(&self.position);
             packer.write(&self.rotation);
@@ -8066,7 +8078,7 @@ impl MemoryPackable for WindowsMRControllerState {
             packer.write(&self.battery_level);
             packer.write_bool(self.battery_charging);
         }
-        packer.write_packed_bools(
+        packer.write_packed_bools_array([
             self.grip,
             self.app,
             self.trigger_hair,
@@ -8075,7 +8087,7 @@ impl MemoryPackable for WindowsMRControllerState {
             self.touchpad_click,
             self.joystick_click,
             false,
-        );
+        ]);
         packer.write(&self.trigger);
         packer.write(&self.touchpad);
         packer.write(&self.joystick_raw);

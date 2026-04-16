@@ -33,30 +33,38 @@ enum DepthBinding {
     D2Array { layer: u32 },
 }
 
-/// Records Hi-Z build + copy-to-staging into [`HiZGpuState::write_idx`].
+/// Device, encoder, and source/destination views for a single Hi-Z mip0 dispatch from depth.
+struct HiZMip0EncodeContext<'a> {
+    device: &'a wgpu::Device,
+    queue: &'a wgpu::Queue,
+    encoder: &'a mut wgpu::CommandEncoder,
+    depth_view: &'a wgpu::TextureView,
+    scratch: &'a HiZGpuScratch,
+    pipes: &'a HiZPipelines,
+    pyramid_views: &'a [wgpu::TextureView],
+    depth_bind: DepthBinding,
+}
+
+/// Resets slot validity, invalidates cache, ensures [`HiZGpuScratch`] matches `extent` / stereo layout.
 ///
-/// Call [`HiZGpuState::on_frame_submitted`] after [`wgpu::Queue::submit`]. Call
-/// [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain completed maps.
-pub fn encode_hi_z_build(
+/// Returns `false` when encoding must abort (zero extent, missing scratch, or GPU not ready).
+fn reset_and_prepare_hi_z_scratch(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    encoder: &mut wgpu::CommandEncoder,
-    depth_view: &wgpu::TextureView,
     extent: (u32, u32),
     mode: OutputDepthMode,
     state: &mut HiZGpuState,
-) {
+) -> bool {
     state.hi_z_encoded_slot = None;
     state.invalidate_if_needed(extent, mode);
 
     let (full_w, full_h) = extent;
     if full_w == 0 || full_h == 0 {
-        return;
+        return false;
     }
 
     let (bw, bh) = hi_z_pyramid_dimensions(full_w, full_h);
     if bw == 0 || bh == 0 {
-        return;
+        return false;
     }
 
     let stereo = matches!(mode, OutputDepthMode::StereoArray { .. });
@@ -77,7 +85,7 @@ pub fn encode_hi_z_build(
         }
     }
     let Some(scratch_ref) = state.scratch.as_ref() else {
-        return;
+        return false;
     };
 
     if stereo && state.right_pending.is_none() {
@@ -87,7 +95,23 @@ pub fn encode_hi_z_build(
         state.right_pending = None;
     }
 
-    if !state.can_encode_hi_z(scratch_ref) {
+    state.can_encode_hi_z(scratch_ref)
+}
+
+/// Records Hi-Z build + copy-to-staging into [`HiZGpuState::write_idx`].
+///
+/// Call [`HiZGpuState::on_frame_submitted`] after [`wgpu::Queue::submit`]. Call
+/// [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain completed maps.
+pub fn encode_hi_z_build(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    depth_view: &wgpu::TextureView,
+    extent: (u32, u32),
+    mode: OutputDepthMode,
+    state: &mut HiZGpuState,
+) {
+    if !reset_and_prepare_hi_z_scratch(device, extent, mode, state) {
         return;
     }
 
@@ -95,132 +119,22 @@ pub fn encode_hi_z_build(
         return;
     };
 
+    let (bw, bh) = scratch.extent;
     let ws = state.write_idx;
     let pipes = HiZPipelines::get(device);
 
-    let dispatch_mip0_and_downsample =
-        |encoder: &mut wgpu::CommandEncoder,
-         pyramid_views: &[wgpu::TextureView],
-         depth_bind: DepthBinding| {
-            match depth_bind {
-                DepthBinding::D2 => {
-                    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("hi_z_mip0_d_bg"),
-                        layout: &pipes.bgl_mip0_desktop,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(depth_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: wgpu::BindingResource::TextureView(&pyramid_views[0]),
-                            },
-                        ],
-                    });
-                    {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("hi_z_mip0_desktop"),
-                            timestamp_writes: None,
-                        });
-                        pass.set_pipeline(&pipes.mip0_desktop);
-                        pass.set_bind_group(0, &bg, &[]);
-                        pass.dispatch_workgroups(
-                            scratch.extent.0.div_ceil(8),
-                            scratch.extent.1.div_ceil(8),
-                            1,
-                        );
-                    }
-                }
-                DepthBinding::D2Array { layer } => {
-                    let layer_u = LayerUniform {
-                        layer,
-                        _pad0: 0,
-                        _pad1: 0,
-                        _pad2: 0,
-                    };
-                    queue.write_buffer(&scratch.layer_uniform, 0, bytemuck::bytes_of(&layer_u));
-                    let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("hi_z_mip0_s_bg"),
-                        layout: &pipes.bgl_mip0_stereo,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 0,
-                                resource: wgpu::BindingResource::TextureView(depth_view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 1,
-                                resource: scratch.layer_uniform.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 2,
-                                resource: wgpu::BindingResource::TextureView(&pyramid_views[0]),
-                            },
-                        ],
-                    });
-                    {
-                        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                            label: Some("hi_z_mip0_stereo"),
-                            timestamp_writes: None,
-                        });
-                        pass.set_pipeline(&pipes.mip0_stereo);
-                        pass.set_bind_group(0, &bg, &[]);
-                        pass.dispatch_workgroups(
-                            scratch.extent.0.div_ceil(8),
-                            scratch.extent.1.div_ceil(8),
-                            1,
-                        );
-                    }
-                }
-            }
-
-            for mip in 0..scratch.mip_levels.saturating_sub(1) {
-                let (sw, sh) = mip_dimensions(bw, bh, mip).unwrap_or((1, 1));
-                let (dw, dh) = mip_dimensions(bw, bh, mip + 1).unwrap_or((1, 1));
-                let du = DownsampleUniform {
-                    src_w: sw,
-                    src_h: sh,
-                    dst_w: dw,
-                    dst_h: dh,
-                };
-                queue.write_buffer(&scratch.downsample_uniform, 0, bytemuck::bytes_of(&du));
-                let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("hi_z_ds_bg"),
-                    layout: &pipes.bgl_downsample,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 0,
-                            resource: wgpu::BindingResource::TextureView(
-                                &pyramid_views[mip as usize],
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 1,
-                            resource: wgpu::BindingResource::TextureView(
-                                &pyramid_views[mip as usize + 1],
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 2,
-                            resource: scratch.downsample_uniform.as_entire_binding(),
-                        },
-                    ],
-                });
-                {
-                    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                        label: Some("hi_z_downsample"),
-                        timestamp_writes: None,
-                    });
-                    pass.set_pipeline(&pipes.downsample);
-                    pass.set_bind_group(0, &bg, &[]);
-                    pass.dispatch_workgroups(dw.div_ceil(8), dh.div_ceil(8), 1);
-                }
-            }
-        };
-
     match mode {
         OutputDepthMode::DesktopSingle => {
-            dispatch_mip0_and_downsample(encoder, &scratch.views, DepthBinding::D2);
+            dispatch_mip0_and_downsample(HiZMip0EncodeContext {
+                device,
+                queue,
+                encoder,
+                depth_view,
+                scratch,
+                pipes,
+                pyramid_views: &scratch.views,
+                depth_bind: DepthBinding::D2,
+            });
             copy_pyramid_to_staging(
                 encoder,
                 &scratch.pyramid,
@@ -237,12 +151,26 @@ pub fn encode_hi_z_build(
             let Some(staging_r) = scratch.staging_r.as_ref() else {
                 return;
             };
-            dispatch_mip0_and_downsample(
+            dispatch_mip0_and_downsample(HiZMip0EncodeContext {
+                device,
+                queue,
                 encoder,
-                &scratch.views,
-                DepthBinding::D2Array { layer: 0 },
-            );
-            dispatch_mip0_and_downsample(encoder, views_r, DepthBinding::D2Array { layer: 1 });
+                depth_view,
+                scratch,
+                pipes,
+                pyramid_views: &scratch.views,
+                depth_bind: DepthBinding::D2Array { layer: 0 },
+            });
+            dispatch_mip0_and_downsample(HiZMip0EncodeContext {
+                device,
+                queue,
+                encoder,
+                depth_view,
+                scratch,
+                pipes,
+                pyramid_views: views_r,
+                depth_bind: DepthBinding::D2Array { layer: 1 },
+            });
             copy_pyramid_to_staging(
                 encoder,
                 &scratch.pyramid,
@@ -256,6 +184,149 @@ pub fn encode_hi_z_build(
     }
 
     state.hi_z_encoded_slot = Some(ws);
+}
+
+/// Fills Hi-Z mip0 from a depth texture (desktop 2D view or one layer of a stereo depth array).
+fn dispatch_hi_z_mip0_from_depth(args: &mut HiZMip0EncodeContext<'_>) {
+    match args.depth_bind {
+        DepthBinding::D2 => {
+            let bg = args.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hi_z_mip0_d_bg"),
+                layout: &args.pipes.bgl_mip0_desktop,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(args.depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&args.pyramid_views[0]),
+                    },
+                ],
+            });
+            {
+                let mut pass = args
+                    .encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("hi_z_mip0_desktop"),
+                        timestamp_writes: None,
+                    });
+                pass.set_pipeline(&args.pipes.mip0_desktop);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(
+                    args.scratch.extent.0.div_ceil(8),
+                    args.scratch.extent.1.div_ceil(8),
+                    1,
+                );
+            }
+        }
+        DepthBinding::D2Array { layer } => {
+            let layer_u = LayerUniform {
+                layer,
+                _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
+            };
+            args.queue
+                .write_buffer(&args.scratch.layer_uniform, 0, bytemuck::bytes_of(&layer_u));
+            let bg = args.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("hi_z_mip0_s_bg"),
+                layout: &args.pipes.bgl_mip0_stereo,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(args.depth_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: args.scratch.layer_uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&args.pyramid_views[0]),
+                    },
+                ],
+            });
+            {
+                let mut pass = args
+                    .encoder
+                    .begin_compute_pass(&wgpu::ComputePassDescriptor {
+                        label: Some("hi_z_mip0_stereo"),
+                        timestamp_writes: None,
+                    });
+                pass.set_pipeline(&args.pipes.mip0_stereo);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(
+                    args.scratch.extent.0.div_ceil(8),
+                    args.scratch.extent.1.div_ceil(8),
+                    1,
+                );
+            }
+        }
+    }
+}
+
+/// Max-reduction chain from mip0 through the rest of the R32F pyramid.
+fn dispatch_hi_z_downsample_mips(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    scratch: &HiZGpuScratch,
+    pipes: &HiZPipelines,
+    pyramid_views: &[wgpu::TextureView],
+) {
+    let (bw, bh) = scratch.extent;
+    for mip in 0..scratch.mip_levels.saturating_sub(1) {
+        let (sw, sh) = mip_dimensions(bw, bh, mip).unwrap_or((1, 1));
+        let (dw, dh) = mip_dimensions(bw, bh, mip + 1).unwrap_or((1, 1));
+        let du = DownsampleUniform {
+            src_w: sw,
+            src_h: sh,
+            dst_w: dw,
+            dst_h: dh,
+        };
+        queue.write_buffer(&scratch.downsample_uniform, 0, bytemuck::bytes_of(&du));
+        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("hi_z_ds_bg"),
+            layout: &pipes.bgl_downsample,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&pyramid_views[mip as usize]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&pyramid_views[mip as usize + 1]),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: scratch.downsample_uniform.as_entire_binding(),
+                },
+            ],
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("hi_z_downsample"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&pipes.downsample);
+            pass.set_bind_group(0, &bg, &[]);
+            pass.dispatch_workgroups(dw.div_ceil(8), dh.div_ceil(8), 1);
+        }
+    }
+}
+
+/// Depth mip0 copy plus hierarchical downsample for one pyramid view chain (desktop or one array layer).
+fn dispatch_mip0_and_downsample(mut args: HiZMip0EncodeContext<'_>) {
+    dispatch_hi_z_mip0_from_depth(&mut args);
+    dispatch_hi_z_downsample_mips(
+        args.device,
+        args.queue,
+        args.encoder,
+        args.scratch,
+        args.pipes,
+        args.pyramid_views,
+    );
 }
 
 fn copy_pyramid_to_staging(

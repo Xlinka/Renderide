@@ -1,98 +1,80 @@
-//! Plan storage-buffer subranges for blendshape compute so each bind respects [`wgpu::Limits`].
-//!
-//! `max_storage_buffer_binding_size` limits bytes bound per storage entry; subrange offsets must be
-//! multiples of `min_storage_buffer_offset_alignment` (typically 256).
+//! Sparse blendshape buffer size checks and scatter dispatch chunking for [`wgpu::Limits`].
 
-use crate::assets::mesh::BLENDSHAPE_OFFSET_GPU_STRIDE;
+use crate::assets::mesh::{BlendshapeGpuPack, BLENDSHAPE_SPARSE_ENTRY_SIZE};
 
-/// Greatest common divisor (Euclidean algorithm).
-pub(crate) fn gcd_u64(mut a: u64, mut b: u64) -> u64 {
-    while b != 0 {
-        let t = b;
-        b = a % b;
-        a = t;
+/// Minimum storage buffer size used when a mesh has blendshapes but zero sparse bytes (padding).
+pub const BLENDSHAPE_SPARSE_MIN_BUFFER_BYTES: u64 = 16;
+
+/// Returns `false` when sparse or shape-descriptor payloads cannot exist on the device or be bound
+/// as a single storage read (typical WebGPU path).
+pub fn blendshape_sparse_buffers_fit_device(
+    pack: &BlendshapeGpuPack,
+    max_buffer_size: u64,
+    max_storage_buffer_binding_size: u64,
+) -> bool {
+    let sparse_len = pack.sparse_deltas.len().max(BLENDSHAPE_SPARSE_ENTRY_SIZE);
+    let sparse_u64 = sparse_len as u64;
+    let desc_len = pack.shape_descriptor_bytes.len();
+    let desc_u64 = desc_len as u64;
+    if sparse_u64 > max_buffer_size || desc_u64 > max_buffer_size {
+        return false;
     }
-    a
+    if sparse_u64 > max_storage_buffer_binding_size || desc_u64 > max_storage_buffer_binding_size {
+        return false;
+    }
+    true
 }
 
-/// Byte stride of one blendshape’s packed delta block in the mesh GPU buffer.
-pub(crate) fn blendshape_shape_stride_bytes(vertex_count: u32) -> Option<u64> {
-    u64::from(vertex_count).checked_mul(BLENDSHAPE_OFFSET_GPU_STRIDE as u64)
-}
-
-/// Plans `(shape_start, shapes_in_chunk)` dispatches so each chunk’s byte length is ≤ `max_binding`
-/// and each non-zero start offset is a multiple of `min_offset_alignment`.
-///
-/// Returns [`None`] if even one shape does not fit, or chunk capacity collapses to zero after
-/// alignment rounding (caller should disable blendshapes for that mesh).
-pub fn plan_blendshape_bind_chunks(
-    shape_count: u32,
-    vertex_count: u32,
-    max_binding: u64,
-    min_offset_alignment: u32,
-) -> Option<Vec<(u32, u32)>> {
-    if shape_count == 0 || vertex_count == 0 {
-        return None;
+/// Plans `(sparse_base, sparse_count)` sub-ranges (global entry indices) so each dispatch stays
+/// within `max_workgroups_per_dim × 64` threads (one thread per sparse entry).
+pub fn plan_blendshape_scatter_chunks(
+    first_entry: u32,
+    entry_count: u32,
+    max_workgroups_per_dim: u32,
+) -> Vec<(u32, u32)> {
+    if entry_count == 0 {
+        return Vec::new();
     }
-    let align = u64::from(min_offset_alignment.max(1));
-    let stride = blendshape_shape_stride_bytes(vertex_count)?;
-    if stride > max_binding {
-        return None;
+    let max_entries = max_workgroups_per_dim.saturating_mul(64);
+    if max_entries == 0 {
+        return Vec::new();
     }
-    let g = gcd_u64(stride, align);
-    let align_shapes = u32::try_from(align / g).ok()?;
-    if align_shapes == 0 {
-        return None;
-    }
-    let mut max_chunk_shapes = u32::try_from(max_binding / stride).ok()?;
-    max_chunk_shapes = (max_chunk_shapes / align_shapes) * align_shapes;
-    if max_chunk_shapes == 0 {
-        return None;
-    }
-
     let mut out = Vec::new();
-    let mut start = 0u32;
-    while start < shape_count {
-        let remaining = shape_count - start;
-        let take = remaining.min(max_chunk_shapes);
-        out.push((start, take));
-        start = start.saturating_add(take);
+    let mut offset = 0u32;
+    while offset < entry_count {
+        let chunk = (entry_count - offset).min(max_entries);
+        out.push((first_entry.saturating_add(offset), chunk));
+        offset = offset.saturating_add(chunk);
     }
-    Some(out)
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use crate::assets::mesh::{BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE, BLENDSHAPE_SPARSE_ENTRY_SIZE};
+
     #[test]
-    fn chunk_plan_respects_max_binding() {
-        let vc = 1000u32;
-        let stride = blendshape_shape_stride_bytes(vc).unwrap();
-        let max_b = stride * 10;
-        let plan = plan_blendshape_bind_chunks(25, vc, max_b, 256).expect("plan");
-        let sum: u32 = plan.iter().map(|(_, n)| n).sum();
-        assert_eq!(sum, 25);
-        for (s, c) in &plan {
-            assert!(u64::from(*c) * stride <= max_b);
-            if *s > 0 {
-                assert_eq!(u64::from(*s) * stride % 256, 0);
-            }
-        }
+    fn scatter_chunks_cover_all_entries() {
+        let first = 10u32;
+        let n = 500u32;
+        let max_wg = 4u32;
+        let chunks = plan_blendshape_scatter_chunks(first, n, max_wg);
+        let sum: u32 = chunks.iter().map(|(_, c)| c).sum();
+        assert_eq!(sum, n);
+        assert_eq!(chunks.first().copied(), Some((10, 256)));
+        assert_eq!(chunks.last().copied(), Some((266, 244)));
     }
 
     #[test]
-    fn single_shape_when_fits() {
-        let plan = plan_blendshape_bind_chunks(1, 4096, 256 * 1024 * 1024, 256).expect("plan");
-        assert_eq!(plan, vec![(0, 1)]);
-    }
-
-    #[test]
-    fn rejects_when_one_shape_exceeds_limit() {
-        let stride = blendshape_shape_stride_bytes(1_000_000).unwrap();
-        assert!(
-            plan_blendshape_bind_chunks(2, 1_000_000, stride - 1, 256).is_none(),
-            "one shape must not fit"
-        );
+    fn sparse_fit_accepts_tiny_pack() {
+        let pack = BlendshapeGpuPack {
+            sparse_deltas: vec![0u8; BLENDSHAPE_SPARSE_ENTRY_SIZE],
+            shape_descriptor_bytes: vec![0u8; BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE],
+            shape_ranges: vec![(0, 1)],
+            num_blendshapes: 1,
+        };
+        assert!(blendshape_sparse_buffers_fit_device(&pack, 1024, 1024));
     }
 }

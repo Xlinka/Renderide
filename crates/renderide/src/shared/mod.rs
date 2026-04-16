@@ -12,8 +12,9 @@ pub mod shader_upload_extras;
 /// Automatically generated Renderite shared types and decode helpers.
 pub mod shared;
 
+pub use packing::polymorphic_decode_error::PolymorphicDecodeError;
 pub use packing::{
     default_entity_pool, enum_repr, memory_packable, memory_packer, memory_packer_entity_pool,
-    memory_unpacker, packed_bools, polymorphic_memory_packable_entity,
+    memory_unpacker, packed_bools, polymorphic_decode_error, polymorphic_memory_packable_entity,
 };
 pub use shared::*;

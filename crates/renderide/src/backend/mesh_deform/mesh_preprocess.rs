@@ -5,6 +5,8 @@
 //! to [`crate::assets::mesh::GpuMesh`] interleaved buffers is a follow-up; this module establishes
 //! bind group contracts and valid WGSL entry points.
 
+use std::num::NonZeroU64;
+
 use wgpu::util::DeviceExt;
 
 const SKINNING_WGSL: &str = include_str!(concat!(
@@ -40,13 +42,23 @@ fn skinning_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             storage_buffer_entry(4, false),
             storage_buffer_entry(5, true),
             storage_buffer_entry(6, false),
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(32),
+                },
+                count: None,
+            },
         ],
     })
 }
 
 fn blendshape_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("mesh_blendshape"),
+        label: Some("mesh_blendshape_scatter"),
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
@@ -60,8 +72,7 @@ fn blendshape_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout 
             },
             storage_buffer_entry(1, true),
             storage_buffer_entry(2, true),
-            storage_buffer_entry(3, true),
-            storage_buffer_entry(4, false),
+            storage_buffer_entry(3, false),
         ],
     })
 }
@@ -113,10 +124,10 @@ impl MeshPreprocessPipelines {
         });
         let blendshape_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("mesh_blendshape_pipeline"),
+                label: Some("mesh_blendshape_scatter_pipeline"),
                 layout: Some(&blend_layout),
                 module: &blend_shader,
-                entry_point: Some("blendshape_main"),
+                entry_point: Some("blendshape_scatter_main"),
                 compilation_options: Default::default(),
                 cache: None,
             });

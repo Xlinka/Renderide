@@ -7,8 +7,15 @@ use crate::shared::{
     VertexAttributeDescriptor, VertexAttributeFormat, VertexAttributeType,
 };
 
-/// Stride in bytes for one blendshape offset tuple in GPU storage (WGSL `vec3` alignment).
-pub const BLENDSHAPE_OFFSET_GPU_STRIDE: usize = 48;
+/// Bytes per sparse blendshape entry on the GPU:
+/// `vertex_index: u32` + `delta.xyz: f32` (12) — matches [`blendshape_scatter_main`] struct layout.
+pub const BLENDSHAPE_SPARSE_ENTRY_SIZE: usize = 16;
+
+/// Bytes per shape range row: `first_entry: u32`, `entry_count: u32`.
+pub const BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE: usize = 8;
+
+/// Deltas smaller than this magnitude (length squared) are dropped as non-influencing.
+pub const BLENDSHAPE_POSITION_EPSILON_SQ: f32 = 1e-14;
 
 fn vertex_format_size(format: VertexAttributeFormat) -> i32 {
     match format {
@@ -207,13 +214,32 @@ pub fn extract_bind_poses(raw: &[u8], bone_count: usize) -> Option<Vec<[[f32; 4]
     Some(poses)
 }
 
-/// Repacks host blendshape deltas into GPU storage (`BLENDSHAPE_OFFSET_GPU_STRIDE` per vertex per shape).
+/// GPU-ready sparse position deltas and a small per-shape descriptor table (`first_entry`, `entry_count`).
+///
+/// Normal and tangent streams from the host are not stored; the current scatter pass applies position
+/// deltas only.
+pub struct BlendshapeGpuPack {
+    /// Tightly packed rows of `vertex_index: u32` followed by `delta.xyz: f32` ([`BLENDSHAPE_SPARSE_ENTRY_SIZE`] bytes each).
+    pub sparse_deltas: Vec<u8>,
+    /// `num_blendshapes` rows of `(first_entry, entry_count)` as little-endian `u32` pairs ([`BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE`] bytes per row).
+    pub shape_descriptor_bytes: Vec<u8>,
+    /// Same ranges as [`Self::shape_descriptor_bytes`], kept for CPU scatter planning without parsing bytes.
+    pub shape_ranges: Vec<(u32, u32)>,
+    /// Logical blendshape slot count (`max(blendshape_index) + 1`).
+    pub num_blendshapes: i32,
+}
+
+/// Repacks host blendshape **position** deltas into sparse GPU storage (16 B per affected vertex),
+/// a small per-shape descriptor table, and CPU-side ranges for scatter dispatches.
+///
+/// Only [`BlendshapeDataFlags::POSITIONS`] channels contribute. Normal/tangent streams are consumed
+/// from the wire to advance offsets but are not uploaded.
 pub fn extract_blendshape_offsets(
     raw: &[u8],
     layout: &MeshBufferLayout,
     blendshape_buffers: &[BlendshapeBufferDescriptor],
     vertex_count: i32,
-) -> Option<(Vec<u8>, i32)> {
+) -> Option<BlendshapeGpuPack> {
     if blendshape_buffers.is_empty() || vertex_count <= 0 {
         return None;
     }
@@ -239,19 +265,16 @@ pub fn extract_blendshape_offsets(
         return None;
     }
 
-    let alloc_size = num_blendshapes
-        .checked_mul(vertex_count)?
-        .checked_mul(BLENDSHAPE_OFFSET_GPU_STRIDE)?;
-    let mut out = vec![0u8; alloc_size];
     const VECTOR3_BYTES: usize = 12;
-    const POSITION_OFFSET: usize = 0;
-    const NORMAL_OFFSET: usize = 16;
-    const TANGENT_OFFSET: usize = 32;
+    let mut per_shape: Vec<Vec<(u32, [f32; 3])>> = vec![Vec::new(); num_blendshapes];
 
     let mut byte_offset = layout.blendshape_data_start;
 
     for descriptor in blendshape_buffers {
         let bi = descriptor.blendshape_index.max(0) as usize;
+        if bi >= num_blendshapes {
+            continue;
+        }
 
         if descriptor.data_flags.positions() {
             let chunk_len = VECTOR3_BYTES * vertex_count;
@@ -259,11 +282,14 @@ pub fn extract_blendshape_offsets(
                 return None;
             }
             for v in 0..vertex_count {
-                let out_offset =
-                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + POSITION_OFFSET;
                 let src_offset = byte_offset + v * VECTOR3_BYTES;
-                out[out_offset..out_offset + VECTOR3_BYTES]
-                    .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);
+                let x = f32::from_le_bytes(raw[src_offset..src_offset + 4].try_into().ok()?);
+                let y = f32::from_le_bytes(raw[src_offset + 4..src_offset + 8].try_into().ok()?);
+                let z = f32::from_le_bytes(raw[src_offset + 8..src_offset + 12].try_into().ok()?);
+                let mag_sq = x * x + y * y + z * z;
+                if mag_sq > BLENDSHAPE_POSITION_EPSILON_SQ {
+                    per_shape[bi].push((v as u32, [x, y, z]));
+                }
             }
             byte_offset += chunk_len;
         }
@@ -273,13 +299,6 @@ pub fn extract_blendshape_offsets(
             if byte_offset + chunk_len > raw.len() {
                 return None;
             }
-            for v in 0..vertex_count {
-                let out_offset =
-                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + NORMAL_OFFSET;
-                let src_offset = byte_offset + v * VECTOR3_BYTES;
-                out[out_offset..out_offset + VECTOR3_BYTES]
-                    .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);
-            }
             byte_offset += chunk_len;
         }
 
@@ -288,18 +307,35 @@ pub fn extract_blendshape_offsets(
             if byte_offset + chunk_len > raw.len() {
                 return None;
             }
-            for v in 0..vertex_count {
-                let out_offset =
-                    (bi * vertex_count + v) * BLENDSHAPE_OFFSET_GPU_STRIDE + TANGENT_OFFSET;
-                let src_offset = byte_offset + v * VECTOR3_BYTES;
-                out[out_offset..out_offset + VECTOR3_BYTES]
-                    .copy_from_slice(&raw[src_offset..src_offset + VECTOR3_BYTES]);
-            }
             byte_offset += chunk_len;
         }
     }
 
-    Some((out, num_blendshapes as i32))
+    let mut sparse_deltas = Vec::new();
+    let mut shape_descriptor_bytes = vec![0u8; num_blendshapes * BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE];
+    let mut shape_ranges: Vec<(u32, u32)> = Vec::with_capacity(num_blendshapes);
+
+    for (s, entries) in per_shape.iter().enumerate() {
+        let first_entry = (sparse_deltas.len() / BLENDSHAPE_SPARSE_ENTRY_SIZE) as u32;
+        let count = entries.len() as u32;
+        for (vi, d) in entries {
+            sparse_deltas.extend_from_slice(&vi.to_le_bytes());
+            sparse_deltas.extend_from_slice(&d[0].to_le_bytes());
+            sparse_deltas.extend_from_slice(&d[1].to_le_bytes());
+            sparse_deltas.extend_from_slice(&d[2].to_le_bytes());
+        }
+        let base = s.saturating_mul(BLENDSHAPE_SHAPE_DESCRIPTOR_SIZE);
+        shape_descriptor_bytes[base..base + 4].copy_from_slice(&first_entry.to_le_bytes());
+        shape_descriptor_bytes[base + 4..base + 8].copy_from_slice(&count.to_le_bytes());
+        shape_ranges.push((first_entry, count));
+    }
+
+    Some(BlendshapeGpuPack {
+        sparse_deltas,
+        shape_descriptor_bytes,
+        shape_ranges,
+        num_blendshapes: num_blendshapes as i32,
+    })
 }
 
 /// Returns byte offset and size of the first attribute of `target` type in the interleaved vertex.
@@ -915,5 +951,58 @@ mod tests {
         assert!((rgba[1] - (64.0 / 255.0)).abs() < 1e-6);
         assert!((rgba[2] - (128.0 / 255.0)).abs() < 1e-6);
         assert!((rgba[3] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn extract_blendshape_sparse_keeps_nonzero_position_rows_only() {
+        use crate::shared::{
+            BlendshapeBufferDescriptor, BlendshapeDataFlags, IndexBufferFormat,
+            VertexAttributeDescriptor, VertexAttributeFormat, VertexAttributeType,
+        };
+        let vertex_count = 2i32;
+        let attrs = [
+            VertexAttributeDescriptor {
+                attribute: VertexAttributeType::Position,
+                format: VertexAttributeFormat::Float32,
+                dimensions: 3,
+            },
+            VertexAttributeDescriptor {
+                attribute: VertexAttributeType::Normal,
+                format: VertexAttributeFormat::Float32,
+                dimensions: 3,
+            },
+        ];
+        let stride = compute_vertex_stride(&attrs);
+        let sub = [SubmeshBufferDescriptor {
+            topology: SubmeshTopology::default(),
+            index_start: 0,
+            index_count: 3,
+            bounds: crate::shared::RenderBoundingBox::default(),
+        }];
+        let ic = compute_index_count(&sub);
+        let blend = [BlendshapeBufferDescriptor {
+            blendshape_index: 0,
+            frame_index: 0,
+            frame_weight: 1.0,
+            data_flags: BlendshapeDataFlags(BlendshapeDataFlags::POSITIONS),
+        }];
+        let layout = compute_mesh_buffer_layout(
+            stride,
+            vertex_count,
+            ic,
+            index_bytes_per_element(IndexBufferFormat::UInt16),
+            0,
+            0,
+            Some(&blend),
+        )
+        .expect("layout");
+        let mut full = vec![0u8; layout.total_buffer_length];
+        let off = layout.blendshape_data_start;
+        let ax = 1.0f32.to_le_bytes();
+        full[off..off + 4].copy_from_slice(&ax);
+        let pack = extract_blendshape_offsets(&full, &layout, &blend, vertex_count).expect("pack");
+        assert_eq!(pack.num_blendshapes, 1);
+        assert_eq!(pack.shape_ranges[0], (0, 1));
+        assert_eq!(pack.sparse_deltas.len(), BLENDSHAPE_SPARSE_ENTRY_SIZE);
     }
 }

@@ -4,6 +4,7 @@ use crate::shared::{SetTexture2DData, SetTexture2DFormat, TextureUploadHint};
 
 use super::super::decode::needs_rgba8_decode_before_upload;
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_tight_bytes_per_texel};
+use super::error::TextureUploadError;
 use super::mip_write_common::{choose_mip_start_bias, copy_layout_for_mip, is_rgba8_family};
 
 /// Describes a sub-rectangle within a full mip for tight row-major extraction (uncompressed).
@@ -36,16 +37,19 @@ pub(super) fn hint_region_is_empty(hint: &TextureUploadHint) -> bool {
 }
 
 /// Packs a tight row-major buffer for `write_texture` from a rectangular sub-region of a full mip.
-pub(super) fn pack_subrect_tight(full: &[u8], r: &MipSubrectCopy) -> Result<Vec<u8>, String> {
+pub(super) fn pack_subrect_tight(
+    full: &[u8],
+    r: &MipSubrectCopy,
+) -> Result<Vec<u8>, TextureUploadError> {
     let row_stride = (r.full_width as usize)
         .checked_mul(r.bpp)
-        .ok_or_else(|| "row_stride overflow".to_string())?;
+        .ok_or_else(|| TextureUploadError::from("row_stride overflow"))?;
     let row_len = (r.w as usize)
         .checked_mul(r.bpp)
-        .ok_or_else(|| "row_len overflow".to_string())?;
+        .ok_or_else(|| TextureUploadError::from("row_len overflow"))?;
     let total = row_len
         .checked_mul(r.h as usize)
-        .ok_or_else(|| "subrect total bytes overflow".to_string())?;
+        .ok_or_else(|| TextureUploadError::from("subrect total bytes overflow"))?;
     let mut out = Vec::new();
     out.try_reserve(total).map_err(|e| e.to_string())?;
     for row in 0..r.h {
@@ -56,10 +60,10 @@ pub(super) fn pack_subrect_tight(full: &[u8], r: &MipSubrectCopy) -> Result<Vec<
         let row_start = (y as usize)
             .checked_mul(row_stride)
             .and_then(|b| b.checked_add((r.x as usize).checked_mul(r.bpp)?))
-            .ok_or_else(|| "row_start overflow".to_string())?;
+            .ok_or_else(|| TextureUploadError::from("row_start overflow"))?;
         let end = row_start
             .checked_add(row_len)
-            .ok_or_else(|| "row_end overflow".to_string())?;
+            .ok_or_else(|| TextureUploadError::from("row_end overflow"))?;
         if end > full.len() {
             return Err("subrect row extends past mip buffer".into());
         }
@@ -82,7 +86,7 @@ struct TextureWriteSubregion<'a> {
 }
 
 /// Writes a tight sub-rectangle of texels into `texture` at the given mip and origin.
-fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), String> {
+fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), TextureUploadError> {
     let queue = w.queue;
     let texture = w.texture;
     let mip_level = w.mip_level;
@@ -110,14 +114,14 @@ fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), String> {
     };
     let (layout, expected_len) = copy_layout_for_mip(format, width, height)?;
     if bytes.len() != expected_len {
-        return Err(format!(
+        return Err(TextureUploadError::from(format!(
             "subregion mip data len {} != expected {} ({}x{} {:?})",
             bytes.len(),
             expected_len,
             width,
             height,
             format
-        ));
+        )));
     }
 
     queue.write_texture(
@@ -138,17 +142,15 @@ fn write_texture_subregion(w: TextureWriteSubregion<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// Sub-rect upload for mip0 when the host sets [`TextureUploadHint::has_region`].
+/// Returns [`None`] when this path should defer to the full mip chain (criteria not met).
 ///
-/// Returns [`None`] when the fast path does not apply (caller uses the full mip chain path).
-pub(super) fn try_write_texture2d_subregion(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
+/// Checked: flip, mip0-only descriptor, uncompressed host format, GPU RGBA8 family.
+fn subregion_fast_path_supported(
+    device: &wgpu::Device,
+    upload: &SetTexture2DData,
     fmt: &SetTexture2DFormat,
     wgpu_format: wgpu::TextureFormat,
-    upload: &SetTexture2DData,
-    raw: &[u8],
-) -> Option<Result<u32, String>> {
+) -> Option<()> {
     if upload.flip_y {
         return None;
     }
@@ -158,62 +160,105 @@ pub(super) fn try_write_texture2d_subregion(
     if upload.mip_map_sizes.len() != 1 || upload.mip_starts.len() != 1 {
         return None;
     }
-    if host_format_is_compressed(fmt.format) || needs_rgba8_decode_before_upload(fmt.format) {
+    if host_format_is_compressed(fmt.format) || needs_rgba8_decode_before_upload(device, fmt.format)
+    {
         return None;
     }
     if !is_rgba8_family(wgpu_format) {
         return None;
     }
+    Some(())
+}
 
-    let want = upload.data.length.max(0) as usize;
-    if raw.len() < want {
-        return Some(Err(format!(
-            "raw shorter than descriptor (need {want}, got {})",
-            raw.len()
-        )));
-    }
-    let payload = &raw[..want];
-
+/// Resolves descriptor offset and mip0 host bytes for the subregion fast path (bias, starts, tight mip extent).
+fn subregion_resolve_mip0_slice<'a>(
+    fmt: &SetTexture2DFormat,
+    upload: &SetTexture2DData,
+    payload: &'a [u8],
+) -> Result<(u32, u32, &'a [u8]), TextureUploadError> {
     let w = upload.mip_map_sizes[0].x.max(0) as u32;
     let h = upload.mip_map_sizes[0].y.max(0) as u32;
     if w == 0 || h == 0 {
-        return Some(Err("non-positive mip dimensions".into()));
+        return Err("non-positive mip dimensions".into());
     }
 
-    let tex_extent = texture.size();
-    if tex_extent.width != w || tex_extent.height != h {
-        return None;
-    }
-
-    let (start_bias, _) = match choose_mip_start_bias(fmt.format, upload, payload.len()) {
-        Ok(v) => v,
-        Err(e) => return Some(Err(e)),
-    };
+    let (start_bias, _) = choose_mip_start_bias(fmt.format, upload, payload.len())?;
 
     let start_raw = upload.mip_starts[0];
     if start_raw < 0 {
-        return Some(Err("negative mip_starts".into()));
+        return Err("negative mip_starts".into());
     }
     let start_abs = start_raw as usize;
     if start_abs < start_bias {
-        return Some(Err(format!(
+        return Err(TextureUploadError::from(format!(
             "mip 0 start {} is before descriptor offset {}",
             start_abs, start_bias
         )));
     }
     let start = start_abs - start_bias;
-    let host_len = match mip_byte_len(fmt.format, w, h) {
-        Some(l) => l as usize,
-        None => {
-            return Some(Err(format!(
-                "mip byte size unsupported for {:?}",
-                fmt.format
-            )));
-        }
-    };
-    let mip_src = match payload.get(start..start + host_len) {
-        Some(s) => s,
-        None => return Some(Err("mip 0 slice out of range".into())),
+    let host_len = mip_byte_len(fmt.format, w, h).ok_or_else(|| {
+        TextureUploadError::from(format!("mip byte size unsupported for {:?}", fmt.format))
+    })? as usize;
+    let mip_src = payload
+        .get(start..start + host_len)
+        .ok_or_else(|| TextureUploadError::from("mip 0 slice out of range"))?;
+    Ok((w, h, mip_src))
+}
+
+/// Interprets [`TextureUploadHint::region_data`] as a texel rectangle within a `w`×`h` mip.
+fn subregion_rect_from_hint(
+    hint: &TextureUploadHint,
+    w: u32,
+    h: u32,
+) -> Result<(u32, u32, u32, u32), TextureUploadError> {
+    let rx = hint.region_data.x.max(0) as u32;
+    let ry = hint.region_data.y.max(0) as u32;
+    let rw = hint.region_data.width.max(0) as u32;
+    let rh = hint.region_data.height.max(0) as u32;
+    if rw == 0 || rh == 0 {
+        return Err("region width/height must be positive".into());
+    }
+    if rx.saturating_add(rw) > w || ry.saturating_add(rh) > h {
+        return Err(TextureUploadError::from(format!(
+            "region {rw}x{rh} at ({rx}, {ry}) out of bounds for mip {w}x{h}",
+        )));
+    }
+    Ok((rx, ry, rw, rh))
+}
+
+/// Sub-rect upload for mip0 when the host sets [`TextureUploadHint::has_region`].
+///
+/// Returns [`None`] when the fast path does not apply (caller uses the full mip chain path).
+pub(super) fn try_write_texture2d_subregion(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    fmt: &SetTexture2DFormat,
+    wgpu_format: wgpu::TextureFormat,
+    upload: &SetTexture2DData,
+    raw: &[u8],
+) -> Option<Result<u32, TextureUploadError>> {
+    subregion_fast_path_supported(device, upload, fmt, wgpu_format)?;
+
+    let want = upload.data.length.max(0) as usize;
+    if raw.len() < want {
+        return Some(Err(TextureUploadError::from(format!(
+            "raw shorter than descriptor (need {want}, got {})",
+            raw.len()
+        ))));
+    }
+    let payload = &raw[..want];
+
+    let tex_extent = texture.size();
+    let w0 = upload.mip_map_sizes[0].x.max(0) as u32;
+    let h0 = upload.mip_map_sizes[0].y.max(0) as u32;
+    if tex_extent.width != w0 || tex_extent.height != h0 {
+        return None;
+    }
+
+    let (w, h, mip_src) = match subregion_resolve_mip0_slice(fmt, upload, payload) {
+        Ok(v) => v,
+        Err(e) => return Some(Err(e)),
     };
 
     let bpp = mip_tight_bytes_per_texel(mip_src.len(), w, h)?;
@@ -221,18 +266,10 @@ pub(super) fn try_write_texture2d_subregion(
         return None;
     }
 
-    let rx = upload.hint.region_data.x.max(0) as u32;
-    let ry = upload.hint.region_data.y.max(0) as u32;
-    let rw = upload.hint.region_data.width.max(0) as u32;
-    let rh = upload.hint.region_data.height.max(0) as u32;
-    if rw == 0 || rh == 0 {
-        return Some(Err("region width/height must be positive".into()));
-    }
-    if rx.saturating_add(rw) > w || ry.saturating_add(rh) > h {
-        return Some(Err(format!(
-            "region {rw}x{rh} at ({rx}, {ry}) out of bounds for mip {w}x{h}",
-        )));
-    }
+    let (rx, ry, rw, rh) = match subregion_rect_from_hint(&upload.hint, w, h) {
+        Ok(r) => r,
+        Err(e) => return Some(Err(e)),
+    };
 
     let packed = match pack_subrect_tight(
         mip_src,
@@ -249,6 +286,7 @@ pub(super) fn try_write_texture2d_subregion(
         Ok(p) => p,
         Err(e) => return Some(Err(e)),
     };
+
     match write_texture_subregion(TextureWriteSubregion {
         queue,
         texture,

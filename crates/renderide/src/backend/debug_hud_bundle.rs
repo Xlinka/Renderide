@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{
-    DebugHud, DebugHudInput, FrameDiagnosticsSnapshot, FrameTimingHudSnapshot,
+    DebugHud, DebugHudEncodeError, DebugHudInput, FrameDiagnosticsSnapshot, FrameTimingHudSnapshot,
     RendererInfoSnapshot, SceneTransformsSnapshot, TextureDebugSnapshot,
 };
 use crate::render_graph::{WorldMeshDrawStateRow, WorldMeshDrawStats};
@@ -201,7 +201,7 @@ impl DebugHudBundle {
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
         extent: (u32, u32),
-    ) -> Result<(), String> {
+    ) -> Result<(), DebugHudEncodeError> {
         let Some(hud) = self.hud.as_mut() else {
             return Ok(());
         };

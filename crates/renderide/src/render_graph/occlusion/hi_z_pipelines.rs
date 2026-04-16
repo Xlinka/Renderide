@@ -25,6 +25,129 @@ pub(crate) struct HiZPipelines {
     pub bgl_downsample: wgpu::BindGroupLayout,
 }
 
+/// Bind group layout: depth `D2` sample + mip0 R32F storage write.
+fn hi_z_create_bgl_mip0_desktop(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("hi_z_mip0_desktop"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::R32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Bind group layout: depth array sample + layer uniform + mip0 R32F storage write.
+fn hi_z_create_bgl_mip0_stereo(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("hi_z_mip0_stereo"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(16),
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::R32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// Bind group layout: adjacent pyramid mips + downsample dimensions uniform.
+fn hi_z_create_bgl_downsample(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("hi_z_downsample"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::ReadOnly,
+                    format: wgpu::TextureFormat::R32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: wgpu::TextureFormat::R32Float,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::COMPUTE,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: NonZeroU64::new(16),
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+fn hi_z_create_compute_pipeline(
+    device: &wgpu::Device,
+    label: &'static str,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+) -> wgpu::ComputePipeline {
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        module,
+        entry_point: Some("cs_main"),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
 impl HiZPipelines {
     pub(crate) fn get(device: &wgpu::Device) -> &'static Self {
         static CACHE: OnceLock<HiZPipelines> = OnceLock::new();
@@ -32,103 +155,9 @@ impl HiZPipelines {
     }
 
     fn new(device: &wgpu::Device) -> Self {
-        let bgl_mip0_desktop = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hi_z_mip0_desktop"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let bgl_mip0_stereo = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hi_z_mip0_stereo"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Depth,
-                        multisampled: false,
-                        view_dimension: wgpu::TextureViewDimension::D2Array,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let bgl_downsample = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("hi_z_downsample"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::ReadOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::StorageTexture {
-                        access: wgpu::StorageTextureAccess::WriteOnly,
-                        format: wgpu::TextureFormat::R32Float,
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-            ],
-        });
+        let bgl_mip0_desktop = hi_z_create_bgl_mip0_desktop(device);
+        let bgl_mip0_stereo = hi_z_create_bgl_mip0_stereo(device);
+        let bgl_downsample = hi_z_create_bgl_downsample(device);
 
         let layout_mip0_d = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("hi_z_mip0_desktop_layout"),
@@ -159,30 +188,12 @@ impl HiZPipelines {
             source: wgpu::ShaderSource::Wgsl(DOWNSAMPLE_SRC.into()),
         });
 
-        let mip0_desktop = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("hi_z_mip0_desktop"),
-            layout: Some(&layout_mip0_d),
-            module: &shader_m0d,
-            entry_point: Some("cs_main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let mip0_stereo = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("hi_z_mip0_stereo"),
-            layout: Some(&layout_mip0_s),
-            module: &shader_m0s,
-            entry_point: Some("cs_main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
-        let downsample = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("hi_z_downsample"),
-            layout: Some(&layout_ds),
-            module: &shader_ds,
-            entry_point: Some("cs_main"),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let mip0_desktop =
+            hi_z_create_compute_pipeline(device, "hi_z_mip0_desktop", &layout_mip0_d, &shader_m0d);
+        let mip0_stereo =
+            hi_z_create_compute_pipeline(device, "hi_z_mip0_stereo", &layout_mip0_s, &shader_m0s);
+        let downsample =
+            hi_z_create_compute_pipeline(device, "hi_z_downsample", &layout_ds, &shader_ds);
 
         Self {
             mip0_desktop,

@@ -18,7 +18,6 @@ pub struct ParseMaterialBatchOptions {
     /// When true, persist `set_float4x4` and capped float / float4 arrays into the store.
     pub persist_extended_payloads: bool,
     /// Reserved for future wire-telemetry (matrix / array opcodes).
-    #[allow(dead_code)]
     pub record_wire_metrics: bool,
 }
 
@@ -41,6 +40,19 @@ enum MaterialBatchTarget {
     PropertyBlock(i32),
 }
 
+/// Routes a parsed [`MaterialPropertyValue`] to the active material or property block.
+fn set_property_on_batch_target(
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    value: MaterialPropertyValue,
+) {
+    match target {
+        MaterialBatchTarget::Material(id) => store.set_material(id, property_id, value),
+        MaterialBatchTarget::PropertyBlock(id) => store.set_property_block(id, property_id, value),
+    }
+}
+
 fn select_target_kind(
     property_id: i32,
     select_target_index: &mut usize,
@@ -52,6 +64,145 @@ fn select_target_kind(
         MaterialBatchTarget::Material(property_id)
     } else {
         MaterialBatchTarget::PropertyBlock(property_id)
+    }
+}
+
+/// Reads a length-prefixed `f32` stream from the float side buffer and persists a capped array.
+fn apply_set_float_array_from_batch<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    options: &ParseMaterialBatchOptions,
+) {
+    let Some(len) = p.next_int() else {
+        return;
+    };
+    let len = len.max(0) as usize;
+    let mut out: Vec<f32> = Vec::new();
+    if options.persist_extended_payloads {
+        out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN));
+    }
+    for _ in 0..len {
+        let Some(f) = p.next_float() else {
+            break;
+        };
+        if options.persist_extended_payloads && out.len() < MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN {
+            out.push(f);
+        }
+    }
+    if options.persist_extended_payloads && !out.is_empty() {
+        set_property_on_batch_target(
+            store,
+            target,
+            property_id,
+            MaterialPropertyValue::FloatArray(out),
+        );
+    }
+}
+
+/// Reads a length-prefixed `float4` stream from the float4 side buffer and persists a capped array.
+fn apply_set_float4_array_from_batch<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    options: &ParseMaterialBatchOptions,
+) {
+    let Some(len) = p.next_int() else {
+        return;
+    };
+    let len = len.max(0) as usize;
+    let mut out: Vec<[f32; 4]> = Vec::new();
+    if options.persist_extended_payloads {
+        out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN));
+    }
+    for _ in 0..len {
+        let Some(v) = p.next_float4() else {
+            break;
+        };
+        if options.persist_extended_payloads && out.len() < MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN {
+            out.push(v);
+        }
+    }
+    if options.persist_extended_payloads && !out.is_empty() {
+        set_property_on_batch_target(
+            store,
+            target,
+            property_id,
+            MaterialPropertyValue::Float4Array(out),
+        );
+    }
+}
+
+/// Applies one material/property-block opcode after [`MaterialBatchTarget`] is active (excludes target switching).
+fn apply_material_batch_property_opcode<L: MaterialBatchBlobLoader + ?Sized>(
+    p: &mut BatchParser<'_, L>,
+    store: &mut MaterialPropertyStore,
+    target: MaterialBatchTarget,
+    property_id: i32,
+    ty: MaterialPropertyUpdateType,
+    options: &ParseMaterialBatchOptions,
+) {
+    match ty {
+        MaterialPropertyUpdateType::SelectTarget | MaterialPropertyUpdateType::UpdateBatchEnd => {}
+        MaterialPropertyUpdateType::SetShader => match target {
+            MaterialBatchTarget::Material(material_id) => {
+                store.set_shader_asset_for_material(material_id, property_id);
+            }
+            MaterialBatchTarget::PropertyBlock(_) => {}
+        },
+        MaterialPropertyUpdateType::SetRenderQueue
+        | MaterialPropertyUpdateType::SetInstancing
+        | MaterialPropertyUpdateType::SetRenderType => {}
+        MaterialPropertyUpdateType::SetFloat => {
+            if let Some(v) = p.next_float() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Float(v),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloat4 => {
+            if let Some(v) = p.next_float4() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Float4(v),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloat4x4 => {
+            if let Some(mat) = p.next_matrix() {
+                if options.persist_extended_payloads {
+                    set_property_on_batch_target(
+                        store,
+                        target,
+                        property_id,
+                        MaterialPropertyValue::Float4x4(mat),
+                    );
+                }
+            }
+        }
+        MaterialPropertyUpdateType::SetTexture => {
+            if let Some(packed) = p.next_int() {
+                set_property_on_batch_target(
+                    store,
+                    target,
+                    property_id,
+                    MaterialPropertyValue::Texture(packed),
+                );
+            }
+        }
+        MaterialPropertyUpdateType::SetFloatArray => {
+            apply_set_float_array_from_batch(p, store, target, property_id, options);
+        }
+        MaterialPropertyUpdateType::SetFloat4Array => {
+            apply_set_float4_array_from_batch(p, store, target, property_id, options);
+        }
     }
 }
 
@@ -103,148 +254,15 @@ pub fn parse_materials_update_batch_into_store(
                     material_update_count,
                 ));
             }
-            MaterialPropertyUpdateType::SetShader => match target {
-                MaterialBatchTarget::Material(material_id) => {
-                    store.set_shader_asset_for_material(material_id, update.property_id);
-                }
-                MaterialBatchTarget::PropertyBlock(_) => {}
-            },
-            MaterialPropertyUpdateType::SetRenderQueue
-            | MaterialPropertyUpdateType::SetInstancing
-            | MaterialPropertyUpdateType::SetRenderType => {}
-            MaterialPropertyUpdateType::SetFloat => {
-                if let Some(v) = p.next_float() {
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float(v),
-                            );
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float(v),
-                            );
-                        }
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetFloat4 => {
-                if let Some(v) = p.next_float4() {
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float4(v),
-                            );
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(
-                                id,
-                                update.property_id,
-                                MaterialPropertyValue::Float4(v),
-                            );
-                        }
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetFloat4x4 => {
-                if let Some(mat) = p.next_matrix() {
-                    if options.persist_extended_payloads {
-                        let v = MaterialPropertyValue::Float4x4(mat);
-                        match target {
-                            MaterialBatchTarget::Material(id) => {
-                                store.set_material(id, update.property_id, v);
-                            }
-                            MaterialBatchTarget::PropertyBlock(id) => {
-                                store.set_property_block(id, update.property_id, v);
-                            }
-                        }
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetTexture => {
-                if let Some(packed) = p.next_int() {
-                    let v = MaterialPropertyValue::Texture(packed);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetFloatArray => {
-                let Some(len) = p.next_int() else {
-                    continue;
-                };
-                #[allow(clippy::cast_sign_loss)]
-                let len = len.max(0) as usize;
-                let mut out: Vec<f32> = Vec::new();
-                if options.persist_extended_payloads {
-                    out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN));
-                }
-                for _ in 0..len {
-                    let Some(f) = p.next_float() else {
-                        break;
-                    };
-                    if options.persist_extended_payloads
-                        && out.len() < MATERIAL_BATCH_MAX_FLOAT_ARRAY_LEN
-                    {
-                        out.push(f);
-                    }
-                }
-                if options.persist_extended_payloads && !out.is_empty() {
-                    let v = MaterialPropertyValue::FloatArray(out);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
-                }
-            }
-            MaterialPropertyUpdateType::SetFloat4Array => {
-                let Some(len) = p.next_int() else {
-                    continue;
-                };
-                #[allow(clippy::cast_sign_loss)]
-                let len = len.max(0) as usize;
-                let mut out: Vec<[f32; 4]> = Vec::new();
-                if options.persist_extended_payloads {
-                    out.reserve(len.min(MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN));
-                }
-                for _ in 0..len {
-                    let Some(v) = p.next_float4() else {
-                        break;
-                    };
-                    if options.persist_extended_payloads
-                        && out.len() < MATERIAL_BATCH_MAX_FLOAT4_ARRAY_LEN
-                    {
-                        out.push(v);
-                    }
-                }
-                if options.persist_extended_payloads && !out.is_empty() {
-                    let v = MaterialPropertyValue::Float4Array(out);
-                    match target {
-                        MaterialBatchTarget::Material(id) => {
-                            store.set_material(id, update.property_id, v);
-                        }
-                        MaterialBatchTarget::PropertyBlock(id) => {
-                            store.set_property_block(id, update.property_id, v);
-                        }
-                    }
-                }
-            }
             MaterialPropertyUpdateType::UpdateBatchEnd => break,
+            other => apply_material_batch_property_opcode(
+                &mut p,
+                store,
+                target,
+                update.property_id,
+                other,
+                options,
+            ),
         }
     }
 }
@@ -359,7 +377,6 @@ mod tests {
 
     impl MaterialBatchBlobLoader for TestLoader {
         fn load_blob(&mut self, descriptor: &SharedMemoryBufferDescriptor) -> Option<Vec<u8>> {
-            #[allow(clippy::cast_sign_loss)]
             let i = descriptor.buffer_id.max(0) as usize;
             self.blobs.get(i).cloned()
         }
