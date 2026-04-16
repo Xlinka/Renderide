@@ -1,7 +1,9 @@
 //! GPU render targets for host [`crate::shared::SetRenderTextureFormat`] (Unity `RenderTexture` assets).
 //!
 //! Color textures use `RENDER_ATTACHMENT | TEXTURE_BINDING` so the same asset can be sampled from
-//! materials after the offscreen pass. Depth buffers are separate textures when `depth > 0`.
+//! materials after the offscreen pass. Depth buffers are separate textures when `depth > 0`; depth
+//! also includes `COPY_SRC` so [`crate::backend::frame_gpu::FrameGpuResources::copy_scene_depth_snapshot`]
+//! can copy scene depth for intersection / frame bindings (same as main `renderide-depth`).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -104,7 +106,9 @@ impl GpuRenderTexture {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         }));
         let dv = Arc::new(dt.create_view(&wgpu::TextureViewDescriptor::default()));
