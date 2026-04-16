@@ -360,14 +360,16 @@ impl RenderPass for WorldMeshForwardPass {
 
         let uniforms = if stereo_cluster {
             if let Some((left, right)) = cluster_frame_params_stereo(&hc, scene, (vw, vh)) {
-                left.frame_gpu_uniforms(camera_world, light_count_u, Some(&right))
+                left.frame_gpu_uniforms(camera_world, light_count_u, right.view_space_z_coeffs())
             } else if let Some(mono) = cluster_frame_params(&hc, scene, (vw, vh)) {
-                mono.frame_gpu_uniforms(camera_world, light_count_u, None)
+                let z = mono.view_space_z_coeffs();
+                mono.frame_gpu_uniforms(camera_world, light_count_u, z)
             } else {
                 FrameGpuUniforms::zeroed()
             }
         } else if let Some(mono) = cluster_frame_params(&hc, scene, (vw, vh)) {
-            mono.frame_gpu_uniforms(camera_world, light_count_u, None)
+            let z = mono.view_space_z_coeffs();
+            mono.frame_gpu_uniforms(camera_world, light_count_u, z)
         } else {
             FrameGpuUniforms::zeroed()
         };

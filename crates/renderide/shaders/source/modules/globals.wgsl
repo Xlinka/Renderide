@@ -32,16 +32,8 @@ struct GpuLight {
 /// Per-frame scene + clustered grid (matches [`crate::gpu::frame_globals::FrameGpuUniforms`]).
 struct FrameGlobals {
     camera_world_pos: vec4<f32>,
-    /// Left-eye (or mono) world -> view-space X coefficients.
-    view_space_x_coeffs: vec4<f32>,
-    /// Left-eye (or mono) world -> view-space Y coefficients.
-    view_space_y_coeffs: vec4<f32>,
     /// Left-eye (or mono) world -> view-space Z coefficients.
     view_space_z_coeffs: vec4<f32>,
-    /// Right-eye world -> view-space X coefficients (equals left in mono mode).
-    view_space_x_coeffs_right: vec4<f32>,
-    /// Right-eye world -> view-space Y coefficients (equals left in mono mode).
-    view_space_y_coeffs_right: vec4<f32>,
     /// Right-eye world -> view-space Z coefficients (equals left in mono mode).
     view_space_z_coeffs_right: vec4<f32>,
     cluster_count_x: u32,

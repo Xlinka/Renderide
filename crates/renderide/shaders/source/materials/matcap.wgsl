@@ -29,7 +29,13 @@ struct VertexOutput {
     @location(1) world_n: vec3<f32>,
     @location(2) world_t: vec3<f32>,
     @location(3) world_b: vec3<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
+    @location(4) view_x: vec3<f32>,
+    @location(5) view_y: vec3<f32>,
+}
+
+struct ViewBasis {
+    x: vec3<f32>,
+    y: vec3<f32>,
 }
 
 fn safe_normalize(v: vec3<f32>, fallback: vec3<f32>) -> vec3<f32> {
@@ -49,6 +55,27 @@ fn view_projection_for_draw(d: pd::PerDrawUniforms, view_idx: u32) -> mat4x4<f32
 #else
     return d.view_proj_left;
 #endif
+}
+
+fn projection_row_xyz(m: mat4x4<f32>, row: u32) -> vec3<f32> {
+    return vec3<f32>(m[0u][row], m[1u][row], m[2u][row]);
+}
+
+fn view_basis_from_view_projection(vp: mat4x4<f32>) -> ViewBasis {
+    let clip_x = projection_row_xyz(vp, 0u);
+    let clip_y = projection_row_xyz(vp, 1u);
+    let clip_w = projection_row_xyz(vp, 3u);
+
+    let cross_fallback = safe_normalize(cross(clip_x, clip_y), vec3<f32>(0.0, 0.0, 1.0));
+    let view_z = safe_normalize(-clip_w, cross_fallback);
+    let view_x = safe_normalize(clip_x - view_z * dot(clip_x, view_z), vec3<f32>(1.0, 0.0, 0.0));
+    let view_y_raw = clip_y - view_z * dot(clip_y, view_z);
+    let view_y = safe_normalize(
+        view_y_raw - view_x * dot(view_y_raw, view_x),
+        safe_normalize(cross(view_z, view_x), vec3<f32>(0.0, 1.0, 0.0)),
+    );
+
+    return ViewBasis(view_x, view_y);
 }
 
 @vertex
@@ -76,6 +103,7 @@ fn vs_main(
     let tangent_sign = select(1.0, -1.0, tangent.w < 0.0);
     let world_b = safe_normalize(cross(world_n, world_t) * tangent_sign, vec3<f32>(0.0, 0.0, 1.0));
     let vp = view_projection_for_draw(d, view_layer);
+    let basis = view_basis_from_view_projection(vp);
 
     var out: VertexOutput;
     out.clip_pos = vp * world_p;
@@ -83,22 +111,9 @@ fn vs_main(
     out.world_n = world_n;
     out.world_t = world_t;
     out.world_b = world_b;
-    out.view_layer = view_layer;
+    out.view_x = basis.x;
+    out.view_y = basis.y;
     return out;
-}
-
-fn view_space_normal(world_n: vec3<f32>, view_layer: u32) -> vec3<f32> {
-    let row_x = select(rg::frame.view_space_x_coeffs, rg::frame.view_space_x_coeffs_right, view_layer != 0u);
-    let row_y = select(rg::frame.view_space_y_coeffs, rg::frame.view_space_y_coeffs_right, view_layer != 0u);
-    let row_z = select(rg::frame.view_space_z_coeffs, rg::frame.view_space_z_coeffs_right, view_layer != 0u);
-    return safe_normalize(
-        vec3<f32>(
-            dot(row_x.xyz, world_n),
-            dot(row_y.xyz, world_n),
-            dot(row_z.xyz, world_n),
-        ),
-        vec3<f32>(0.0, 0.0, 1.0),
-    );
 }
 
 @fragment
@@ -107,7 +122,8 @@ fn fs_main(
     @location(1) world_n: vec3<f32>,
     @location(2) world_t: vec3<f32>,
     @location(3) world_b: vec3<f32>,
-    @location(4) @interpolate(flat) view_layer: u32,
+    @location(4) view_x: vec3<f32>,
+    @location(5) view_y: vec3<f32>,
 ) -> @location(0) vec4<f32> {
     let normal_ts = nd::decode_ts_normal_with_placeholder(
         textureSample(_NormalMap, _NormalMap_sampler, uv_normal).xyz,
@@ -118,8 +134,12 @@ fn fs_main(
         safe_normalize(world_b, vec3<f32>(0.0, 0.0, 1.0)),
         safe_normalize(world_n, vec3<f32>(0.0, 1.0, 0.0)),
     );
-    let n_view = view_space_normal(safe_normalize(tbn * normal_ts, world_n), view_layer);
-    let uv = n_view.xy * 0.5 + vec2<f32>(0.5);
+    let n_world = safe_normalize(tbn * normal_ts, world_n);
+    let n_view_xy = vec2<f32>(
+        dot(safe_normalize(view_x, vec3<f32>(1.0, 0.0, 0.0)), n_world),
+        dot(safe_normalize(view_y, vec3<f32>(0.0, 1.0, 0.0)), n_world),
+    );
+    let uv = n_view_xy * 0.5 + vec2<f32>(0.5);
     let col = textureSample(_MainTex, _MainTex_sampler, uv);
     return rg::retain_globals_additive(col);
 }

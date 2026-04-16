@@ -112,8 +112,6 @@ pub struct MaterialPipelinePropertyIds {
     stencil_write_mask: [i32; 2],
     color_mask: [i32; 3],
     z_write: [i32; 2],
-    z_test: [i32; 2],
-    cull: [i32; 4],
 }
 
 impl MaterialPipelinePropertyIds {
@@ -153,13 +151,6 @@ impl MaterialPipelinePropertyIds {
                 registry.intern("_colormask"),
             ],
             z_write: [registry.intern("_ZWrite"), registry.intern("ZWrite")],
-            z_test: [registry.intern("_ZTest"), registry.intern("ZTest")],
-            cull: [
-                registry.intern("_Cull"),
-                registry.intern("Cull"),
-                registry.intern("_Culling"),
-                registry.intern("Culling"),
-            ],
         }
     }
 }
@@ -205,10 +196,6 @@ pub struct MaterialRenderState {
     pub color_mask: Option<u8>,
     /// Unity `ZWrite` override. `None` preserves the shader pass default.
     pub depth_write: Option<bool>,
-    /// Unity `ZTest` override. `None` preserves the shader pass default.
-    pub depth_compare: Option<u8>,
-    /// Unity `Cull` override. `None` preserves the shader pass default.
-    pub cull_mode: Option<u8>,
 }
 
 impl MaterialRenderState {
@@ -225,18 +212,6 @@ impl MaterialRenderState {
     /// Applies the optional Unity depth-write override to a pass default.
     pub fn depth_write(self, fallback: bool) -> bool {
         self.depth_write.unwrap_or(fallback)
-    }
-
-    /// Applies the optional Unity depth-compare override to a pass default.
-    pub fn depth_compare(self, fallback: wgpu::CompareFunction) -> wgpu::CompareFunction {
-        self.depth_compare
-            .map(unity_depth_compare_function)
-            .unwrap_or(fallback)
-    }
-
-    /// Applies the optional Unity cull override to a pass default.
-    pub fn cull_mode(self, fallback: Option<wgpu::Face>) -> Option<wgpu::Face> {
-        self.cull_mode.map(unity_cull_mode).unwrap_or(fallback)
     }
 
     /// Converts the resolved material state into a wgpu stencil state.
@@ -320,29 +295,6 @@ fn unity_compare_function(value: u8) -> wgpu::CompareFunction {
     }
 }
 
-fn unity_depth_compare_function(value: u8) -> wgpu::CompareFunction {
-    match value {
-        1 => wgpu::CompareFunction::Never,
-        // Renderide's main depth path uses reverse-Z.
-        2 => wgpu::CompareFunction::Greater,
-        3 => wgpu::CompareFunction::Equal,
-        4 => wgpu::CompareFunction::GreaterEqual,
-        5 => wgpu::CompareFunction::Less,
-        6 => wgpu::CompareFunction::NotEqual,
-        7 => wgpu::CompareFunction::LessEqual,
-        8 => wgpu::CompareFunction::Always,
-        _ => wgpu::CompareFunction::Always,
-    }
-}
-
-fn unity_cull_mode(value: u8) -> Option<wgpu::Face> {
-    match value {
-        1 => Some(wgpu::Face::Front),
-        2 => Some(wgpu::Face::Back),
-        _ => None,
-    }
-}
-
 fn unity_stencil_operation(value: u8) -> wgpu::StencilOperation {
     match value {
         1 => wgpu::StencilOperation::Zero,
@@ -387,8 +339,6 @@ pub fn material_render_state_for_lookup(
     let color_mask = first_float_presence_by_pids(dict, lookup, &ids.color_mask).map(unity_u8);
     let depth_write = first_float_presence_by_pids(dict, lookup, &ids.z_write)
         .map(|v| v.round().clamp(0.0, 1.0) >= 0.5);
-    let depth_compare = first_float_presence_by_pids(dict, lookup, &ids.z_test).map(unity_u8);
-    let cull_mode = first_float_presence_by_pids(dict, lookup, &ids.cull).map(unity_u8);
 
     let stencil_present = stencil_ref.is_some()
         || stencil_comp.is_some()
@@ -409,8 +359,6 @@ pub fn material_render_state_for_lookup(
         stencil,
         color_mask,
         depth_write,
-        depth_compare,
-        cull_mode,
     }
 }
 
@@ -794,33 +742,6 @@ mod tests {
         let state = material_render_state_for_lookup(&dict, lookup, &ids);
         assert_eq!(state.depth_write, Some(true));
         assert!(state.depth_write(false));
-    }
-
-    #[test]
-    fn resolves_unity_cull_and_reverse_ztest_properties() {
-        let reg = PropertyIdRegistry::new();
-        let ids = MaterialPipelinePropertyIds::new(&reg);
-        let mut store = MaterialPropertyStore::new();
-        let cull = reg.intern("_Cull");
-        let ztest = reg.intern("_ZTest");
-        store.set_material(48, cull, MaterialPropertyValue::Float(2.0));
-        store.set_material(48, ztest, MaterialPropertyValue::Float(2.0));
-        let dict = MaterialDictionary::new(&store);
-        let lookup = MaterialPropertyLookupIds {
-            material_asset_id: 48,
-            mesh_property_block_slot0: None,
-        };
-
-        let state = material_render_state_for_lookup(&dict, lookup, &ids);
-
-        assert_eq!(
-            state.cull_mode(Some(wgpu::Face::Front)),
-            Some(wgpu::Face::Back)
-        );
-        assert_eq!(
-            state.depth_compare(wgpu::CompareFunction::GreaterEqual),
-            wgpu::CompareFunction::Greater
-        );
     }
 
     #[test]
