@@ -268,7 +268,7 @@ dependencies = [
  "getrandom 0.4.2",
  "interprocess",
  "libc",
- "libloading 0.8.9",
+ "libloading 0.9.0",
  "logger",
  "rfd",
  "serde_json",
