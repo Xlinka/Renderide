@@ -5,7 +5,8 @@ use crate::shared::{SetTexture2DData, SetTexture2DFormat};
 
 use super::super::decode::{decode_mip_to_rgba8, flip_mip_rows, needs_rgba8_decode_before_upload};
 use super::super::layout::{
-    host_format_is_compressed, mip_byte_len, mip_dimensions_at_level, mip_tight_bytes_per_texel,
+    flip_compressed_mip_block_rows_y, host_format_is_compressed, mip_byte_len,
+    mip_dimensions_at_level, mip_tight_bytes_per_texel,
 };
 use super::error::TextureUploadError;
 use super::mip_write_common::{
@@ -86,14 +87,17 @@ fn mip_src_to_upload_pixels<'a>(
         }
         flip_mip_rows(&mut v, gw, gh, bpp_host);
         std::borrow::Cow::Owned(v)
+    } else if flip && host_format_is_compressed(fmt.format) {
+        let v = flip_compressed_mip_block_rows_y(fmt.format, gw, gh, mip_src).ok_or_else(|| {
+            TextureUploadError::from(format!(
+                "texture {asset_id} mip {mip_index}: flip_y failed for compressed {:?} (len {} vs expected {:?})",
+                fmt.format,
+                mip_src.len(),
+                mip_byte_len(fmt.format, gw, gh)
+            ))
+        })?;
+        std::borrow::Cow::Owned(v)
     } else {
-        if flip && host_format_is_compressed(fmt.format) {
-            logger::warn!(
-                "texture {} mip {mip_index}: flip_y skipped for compressed {:?} GPU upload",
-                asset_id,
-                wgpu_format
-            );
-        }
         std::borrow::Cow::Borrowed(mip_src)
     };
     Ok(pixels)
@@ -389,13 +393,6 @@ impl TextureMipChainUploader {
         }
 
         let flip = self.flip;
-        if flip && host_format_is_compressed(fmt.format) && !is_rgba8_family(wgpu_format) {
-            logger::warn!(
-                "texture {}: flip_y unsupported for compressed GPU texture {:?}; mips may look upside-down",
-                upload.asset_id,
-                wgpu_format
-            );
-        }
 
         let tex_extent = self.tex_extent;
         let start_base = self.start_base;

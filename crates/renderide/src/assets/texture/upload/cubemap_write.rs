@@ -4,7 +4,8 @@ use crate::shared::{SetCubemapData, SetCubemapFormat};
 
 use super::super::decode::{decode_mip_to_rgba8, flip_mip_rows, needs_rgba8_decode_before_upload};
 use super::super::layout::{
-    host_format_is_compressed, mip_byte_len, mip_dimensions_at_level, mip_tight_bytes_per_texel,
+    flip_compressed_mip_block_rows_y, host_format_is_compressed, mip_byte_len,
+    mip_dimensions_at_level, mip_tight_bytes_per_texel,
 };
 use super::error::TextureUploadError;
 use super::mip_write_common::{is_rgba8_family, uncompressed_row_bytes, write_cubemap_face_mip};
@@ -127,13 +128,16 @@ fn cubemap_mip_src_to_upload_pixels<'a>(
             }
             flip_mip_rows(&mut v, w, h, bpp_host);
             std::borrow::Cow::Owned(v)
+        } else if flip && host_format_is_compressed(fmt.format) {
+            let v =
+                flip_compressed_mip_block_rows_y(fmt.format, w, h, mip_src).ok_or_else(|| {
+                    TextureUploadError::from(format!(
+                    "cubemap {asset_id} face {face} mip {mip_i}: flip_y failed for compressed {:?}",
+                    fmt.format
+                ))
+                })?;
+            std::borrow::Cow::Owned(v)
         } else {
-            if flip && host_format_is_compressed(fmt.format) {
-                logger::warn!(
-                    "cubemap {asset_id} mip {mip_i}: flip_y skipped for compressed {:?} GPU upload",
-                    wgpu_format
-                );
-            }
             std::borrow::Cow::Borrowed(mip_src)
         }
     };

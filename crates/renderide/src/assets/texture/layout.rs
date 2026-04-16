@@ -106,6 +106,41 @@ pub fn mip_byte_len(format: TextureFormat, width: u32, height: u32) -> Option<u6
     }
 }
 
+/// Reverses the vertical order of **block rows** in a tight-packed compressed mip (D3D-style layout:
+/// row-major blocks; see [`crate::assets::texture::decode::decode_bc1_to_rgba8`] outer `byi` loop).
+///
+/// Used when host data is top-down and [`crate::shared::SetTexture2DData::flip_y`] requests conversion
+/// to GPU bottom-up storage while the [`wgpu::TextureFormat`] is native block-compressed (texel row
+/// flips do not apply).
+pub fn flip_compressed_mip_block_rows_y(
+    format: TextureFormat,
+    width: u32,
+    height: u32,
+    mip_src: &[u8],
+) -> Option<Vec<u8>> {
+    let bpb = bytes_per_compressed_block(format)? as usize;
+    let (bw, bh) = block_extent(format);
+    let expected = mip_byte_len(format, width, height)? as usize;
+    if mip_src.len() != expected {
+        return None;
+    }
+    let blocks_x = width.div_ceil(bw);
+    let blocks_y = height.div_ceil(bh);
+    if blocks_y < 2 {
+        return Some(mip_src.to_vec());
+    }
+    let row_stride = (blocks_x as usize).checked_mul(bpb)?;
+    let mut out = vec![0u8; expected];
+    for byi in 0..blocks_y {
+        let src_off = (byi as usize).checked_mul(row_stride)?;
+        let dst_off = ((blocks_y - 1 - byi) as usize).checked_mul(row_stride)?;
+        let row = mip_src.get(src_off..src_off + row_stride)?;
+        out.get_mut(dst_off..dst_off + row_stride)?
+            .copy_from_slice(row);
+    }
+    Some(out)
+}
+
 /// Converts `mip_starts[i]` (after subtracting any descriptor rebasing bias) from host **linear texel**
 /// addressing into a **byte offset** into the tight-packed mip payload.
 ///
@@ -333,5 +368,31 @@ mod tests {
         assert_eq!(mip_dimensions_at_level(114, 200, 1), (57, 100));
         assert_eq!(mip_dimensions_at_level(114, 200, 2), (28, 50));
         assert_eq!(mip_dimensions_at_level(1, 1, 5), (1, 1));
+    }
+
+    #[test]
+    fn flip_bc1_block_rows_swaps_horizontal_block_bands() {
+        let w = 8u32;
+        let h = 8u32;
+        let mut mip = vec![0u8; mip_byte_len(TextureFormat::BC1, w, h).unwrap() as usize];
+        let row_b = (w.div_ceil(4) * 8) as usize;
+        mip[..row_b].fill(0x10);
+        mip[row_b..].fill(0x20);
+        let flipped =
+            flip_compressed_mip_block_rows_y(TextureFormat::BC1, w, h, &mip).expect("flip");
+        assert!(flipped[..row_b].iter().all(|&b| b == 0x20));
+        assert!(flipped[row_b..].iter().all(|&b| b == 0x10));
+    }
+
+    #[test]
+    fn flip_bc1_single_block_row_is_identity() {
+        let mip = vec![0xabu8; 8];
+        let out = flip_compressed_mip_block_rows_y(TextureFormat::BC1, 4, 4, &mip).expect("flip");
+        assert_eq!(out, mip);
+    }
+
+    #[test]
+    fn flip_compressed_wrong_len_returns_none() {
+        assert!(flip_compressed_mip_block_rows_y(TextureFormat::BC1, 4, 4, &[0u8; 4]).is_none());
     }
 }

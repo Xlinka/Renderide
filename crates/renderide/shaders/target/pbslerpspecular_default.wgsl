@@ -235,8 +235,8 @@ fn decode_ts_normal_sample_rawX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJXG64TNMFWF6ZDFMN
     if uniform_white_rgb {
         return s.xyz;
     }
-    let all_r_high: bool = (s.x > 0.98f);
-    let gb_close: bool = (abs((s.y - s.z)) < 0.03f);
+    let all_r_high: bool = (s.x >= 0.98039216f);
+    let gb_close: bool = (abs((s.y - s.z)) <= 0.03137255f);
     if all_r_high {
         local_1 = gb_close;
     } else {
