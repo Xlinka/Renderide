@@ -1,7 +1,11 @@
 //! Host [`crate::shared::OutputState`] cursor policy and winit grab/warp helpers.
 
-use glam::{IVec2, Vec2};
-use winit::dpi::{LogicalPosition, LogicalSize};
+use glam::IVec2;
+#[cfg(not(target_os = "macos"))]
+use glam::Vec2;
+use winit::dpi::LogicalPosition;
+#[cfg(not(target_os = "macos"))]
+use winit::dpi::LogicalSize;
 use winit::window::{CursorGrabMode, Window};
 
 use super::accumulator::WindowInputAccumulator;
@@ -26,6 +30,7 @@ fn warp_cursor_logical(window: &Window, p: &IVec2) -> Result<(), winit::error::E
 ///
 /// Call after [`apply_output_state_to_window`] when [`OutputState::lock_cursor`] is true so relative
 /// look and IPC [`crate::shared::MouseState::window_position`] stay aligned with the OS cursor.
+#[cfg(not(target_os = "macos"))]
 pub fn apply_per_frame_cursor_lock_when_locked(
     window: &Window,
     acc: &mut WindowInputAccumulator,
@@ -55,6 +60,16 @@ pub fn apply_per_frame_cursor_lock_when_locked(
         window.set_cursor_position(phys_center)?;
         acc.set_window_position_from_logical(Vec2::new(cx, cy), sf);
     }
+    Ok(())
+}
+
+/// apply_per_frame_cursor_lock_when_locked breaks most mouse input on macOS.
+#[cfg(target_os = "macos")]
+pub fn apply_per_frame_cursor_lock_when_locked(
+    _window: &Window,
+    _acc: &mut WindowInputAccumulator,
+    _lock_cursor_position: Option<IVec2>,
+) -> Result<(), winit::error::ExternalError> {
     Ok(())
 }
 
