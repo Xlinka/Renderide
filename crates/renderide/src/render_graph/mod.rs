@@ -80,12 +80,13 @@ pub use camera::{
 pub use camera::{DESKTOP_FOV_DEGREES_MAX, DESKTOP_FOV_DEGREES_MIN};
 pub use cluster_frame::{cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams};
 pub use compiled::{
-    CompileStats, CompiledRenderGraph, ExternalFrameTargets, ExternalOffscreenTargets, FrameView,
-    FrameViewTarget, OffscreenSingleViewExecuteSpec,
+    ColorAttachmentTemplate, CompileStats, CompiledRenderGraph, DepthAttachmentTemplate,
+    ExternalFrameTargets, ExternalOffscreenTargets, FrameView, FrameViewTarget,
+    OffscreenSingleViewExecuteSpec, RenderPassTemplate,
 };
 pub use context::{
-    GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer, ResolvedGraphTexture,
-    ResolvedImportedBuffer, ResolvedImportedTexture,
+    GraphRasterPassContext, GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer,
+    ResolvedGraphTexture, ResolvedImportedBuffer, ResolvedImportedTexture,
 };
 pub use error::{GraphBuildError, GraphExecuteError, RenderPassError, SetupError};
 pub use frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};

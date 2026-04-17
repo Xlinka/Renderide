@@ -8,6 +8,7 @@ use crate::gpu::GpuLimits;
 use super::frame_params::FrameRenderParams;
 use super::resources::{
     BufferHandle, ImportedBufferHandle, ImportedTextureHandle, TextureHandle,
+    TextureResourceHandle,
 };
 use super::transient_pool::TransientPool;
 
@@ -143,6 +144,15 @@ impl GraphResolvedResources {
         self.imported_buffers.get(handle.index())?.as_ref()
     }
 
+    pub(crate) fn texture_view(&self, handle: TextureResourceHandle) -> Option<&wgpu::TextureView> {
+        match handle {
+            TextureResourceHandle::Transient(handle) => {
+                Some(&self.transient_texture(handle)?.view)
+            }
+            TextureResourceHandle::Imported(handle) => Some(&self.imported_texture(handle)?.view),
+        }
+    }
+
     pub(crate) fn release_to_pool(&self, pool: &mut TransientPool) {
         let mut texture_ids = HashSet::new();
         for texture in self.transient_textures.iter().flatten() {
@@ -160,7 +170,7 @@ impl GraphResolvedResources {
 }
 
 /// Immutable GPU handles and mutable encoder for one frame’s recording.
-pub struct RenderPassContext<'a> {
+pub struct RenderPassContext<'a, 'encoder, 'frame> {
     /// WGPU device.
     pub device: &'a wgpu::Device,
     /// Effective limits for this frame (from [`crate::gpu::GpuContext::limits`]).
@@ -168,13 +178,31 @@ pub struct RenderPassContext<'a> {
     /// Submission queue (same mutex as [`crate::gpu::GpuContext::queue`]).
     pub queue: &'a Arc<Mutex<wgpu::Queue>>,
     /// Command encoder for this frame (all passes share one encoder in v1).
-    pub encoder: &'a mut wgpu::CommandEncoder,
+    pub encoder: &'encoder mut wgpu::CommandEncoder,
     /// Swapchain view when this frame acquired the surface; [`None`] for offscreen-only graphs.
     pub backbuffer: Option<&'a wgpu::TextureView>,
     /// Depth attachment for the main forward pass when configured.
     pub depth_view: Option<&'a wgpu::TextureView>,
     /// Scene + backend when the graph participates in mesh drawing.
-    pub frame: Option<&'a mut FrameRenderParams<'a>>,
+    pub frame: Option<&'frame mut FrameRenderParams<'a>>,
+    /// Typed graph resources resolved for this execution scope.
+    pub graph_resources: Option<&'a GraphResolvedResources>,
+}
+
+/// Context for raster passes whose `wgpu::RenderPass` is opened by the graph.
+pub struct GraphRasterPassContext<'a, 'frame> {
+    /// WGPU device.
+    pub device: &'a wgpu::Device,
+    /// Effective limits for this frame (from [`crate::gpu::GpuContext::limits`]).
+    pub gpu_limits: &'a GpuLimits,
+    /// Submission queue (same mutex as [`crate::gpu::GpuContext::queue`]).
+    pub queue: &'a Arc<Mutex<wgpu::Queue>>,
+    /// Swapchain view when this frame acquired the surface; [`None`] for offscreen-only graphs.
+    pub backbuffer: Option<&'a wgpu::TextureView>,
+    /// Depth attachment for the main forward pass when configured.
+    pub depth_view: Option<&'a wgpu::TextureView>,
+    /// Scene + backend when the graph participates in mesh drawing.
+    pub frame: Option<&'frame mut FrameRenderParams<'a>>,
     /// Typed graph resources resolved for this execution scope.
     pub graph_resources: Option<&'a GraphResolvedResources>,
 }

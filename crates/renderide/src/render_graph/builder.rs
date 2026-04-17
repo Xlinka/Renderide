@@ -3,8 +3,9 @@
 use std::collections::{HashMap, HashSet};
 
 use super::compiled::{
-    CompileStats, CompiledBufferResource, CompiledGroup, CompiledPassInfo, CompiledRenderGraph,
-    CompiledTextureResource, ResourceLifetime,
+    ColorAttachmentTemplate, CompileStats, CompiledBufferResource, CompiledGroup,
+    CompiledPassInfo, CompiledRenderGraph, CompiledTextureResource, DepthAttachmentTemplate,
+    RenderPassTemplate, ResourceLifetime,
 };
 use super::error::{GraphBuildError, SetupError};
 use super::ids::{GroupId, PassId};
@@ -597,6 +598,7 @@ fn compile_pass_info(setups: &[SetupEntry], ordered: &[usize]) -> Vec<CompiledPa
         .copied()
         .map(|idx| {
             let setup = &setups[idx];
+            let raster_template = compile_raster_template(&setup.setup);
             CompiledPassInfo {
                 id: setup.id,
                 name: setup.name.clone(),
@@ -604,9 +606,50 @@ fn compile_pass_info(setups: &[SetupEntry], ordered: &[usize]) -> Vec<CompiledPa
                 kind: setup.setup.kind,
                 accesses: setup.setup.accesses.clone(),
                 multiview_mask: setup.setup.multiview_mask,
+                raster_template,
             }
         })
         .collect()
+}
+
+fn compile_raster_template(setup: &PassSetup) -> Option<RenderPassTemplate> {
+    let mut color_attachments = Vec::new();
+    let mut depth_stencil_attachment = None;
+    for access in &setup.accesses {
+        let Some(texture_access) = access.access.texture() else {
+            continue;
+        };
+        let ResourceHandle::Texture(target) = access.resource else {
+            continue;
+        };
+        match texture_access {
+            TextureAccess::ColorAttachment {
+                load,
+                store,
+                resolve_to,
+            } => color_attachments.push(ColorAttachmentTemplate {
+                target,
+                load: *load,
+                store: *store,
+                resolve_to: *resolve_to,
+            }),
+            TextureAccess::DepthAttachment { depth, stencil } => {
+                depth_stencil_attachment = Some(DepthAttachmentTemplate {
+                    target,
+                    depth: *depth,
+                    stencil: *stencil,
+                });
+            }
+            _ => {}
+        }
+    }
+    (!color_attachments.is_empty() || depth_stencil_attachment.is_some()).then_some(
+        RenderPassTemplate {
+            color_attachments,
+            depth_stencil_attachment,
+            multiview_mask: setup.multiview_mask,
+        },
+    )
 }
 
 fn compile_groups(groups: &[GroupEntry], pass_info: &[CompiledPassInfo]) -> Vec<CompiledGroup> {
@@ -923,7 +966,10 @@ mod tests {
             Ok(())
         }
 
-        fn execute(&mut self, _ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {
+        fn execute(
+            &mut self,
+            _ctx: &mut RenderPassContext<'_, '_, '_>,
+        ) -> Result<(), RenderPassError> {
             Ok(())
         }
     }
@@ -951,6 +997,23 @@ mod tests {
                 resolve_to: None,
             },
             final_access: TextureAccess::Present,
+        }
+    }
+
+    fn depth_import() -> ImportedTextureDecl {
+        ImportedTextureDecl {
+            label: "depth",
+            source: ImportSource::FrameTarget(FrameTargetRole::DepthAttachment),
+            initial_access: TextureAccess::DepthAttachment {
+                depth: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                stencil: None,
+            },
+            final_access: TextureAccess::Sampled {
+                stages: wgpu::ShaderStages::COMPUTE,
+            },
         }
     }
 
@@ -1149,7 +1212,7 @@ mod tests {
             }
             fn execute(
                 &mut self,
-                _ctx: &mut RenderPassContext<'_>,
+                _ctx: &mut RenderPassContext<'_, '_, '_>,
             ) -> Result<(), RenderPassError> {
                 Ok(())
             }
@@ -1215,7 +1278,7 @@ mod tests {
             }
             fn execute(
                 &mut self,
-                _ctx: &mut RenderPassContext<'_>,
+                _ctx: &mut RenderPassContext<'_, '_, '_>,
             ) -> Result<(), RenderPassError> {
                 Ok(())
             }
@@ -1225,6 +1288,85 @@ mod tests {
         b.add_pass(Box::new(MvPass(bb)));
         let g = b.build().expect("build");
         assert_eq!(g.pass_info[0].multiview_mask.unwrap().get(), 3);
+        assert_eq!(
+            g.pass_info[0]
+                .raster_template
+                .as_ref()
+                .and_then(|template| template.multiview_mask)
+                .unwrap()
+                .get(),
+            3
+        );
+    }
+
+    #[test]
+    fn raster_template_records_color_depth_and_resolve_targets() {
+        struct RasterTemplatePass {
+            color: ImportedTextureHandle,
+            resolve: ImportedTextureHandle,
+            depth: ImportedTextureHandle,
+        }
+        impl RenderPass for RasterTemplatePass {
+            fn name(&self) -> &str {
+                "templated"
+            }
+            fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+                let mut r = b.raster();
+                r.color(
+                    self.color,
+                    wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::GREEN),
+                        store: wgpu::StoreOp::Discard,
+                    },
+                    Some(self.resolve),
+                );
+                r.depth(
+                    self.depth,
+                    wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.5),
+                        store: wgpu::StoreOp::Store,
+                    },
+                    None,
+                );
+                Ok(())
+            }
+            fn execute(
+                &mut self,
+                _ctx: &mut RenderPassContext<'_, '_, '_>,
+            ) -> Result<(), RenderPassError> {
+                Ok(())
+            }
+        }
+
+        let mut b = GraphBuilder::new();
+        let color = b.import_texture(backbuffer_import());
+        let resolve = b.import_texture(backbuffer_import());
+        let depth = b.import_texture(depth_import());
+        b.add_pass(Box::new(RasterTemplatePass {
+            color,
+            resolve,
+            depth,
+        }));
+
+        let g = b.build().expect("build");
+        let template = g.pass_info[0]
+            .raster_template
+            .as_ref()
+            .expect("raster template");
+        assert_eq!(template.color_attachments.len(), 1);
+        assert_eq!(
+            template.color_attachments[0].target,
+            TextureResourceHandle::Imported(color)
+        );
+        assert_eq!(
+            template.color_attachments[0].resolve_to,
+            Some(TextureResourceHandle::Imported(resolve))
+        );
+        assert_eq!(template.color_attachments[0].store, wgpu::StoreOp::Discard);
+        assert_eq!(
+            template.depth_stencil_attachment.as_ref().map(|d| d.target),
+            Some(TextureResourceHandle::Imported(depth))
+        );
     }
 
     #[test]

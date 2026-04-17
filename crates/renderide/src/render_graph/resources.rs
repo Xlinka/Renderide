@@ -565,3 +565,12 @@ pub(crate) enum AccessKind {
     Texture(TextureAccess),
     Buffer(BufferAccess),
 }
+
+impl AccessKind {
+    pub(crate) fn texture(&self) -> Option<&TextureAccess> {
+        match self {
+            Self::Texture(access) => Some(access),
+            Self::Buffer(_) => None,
+        }
+    }
+}

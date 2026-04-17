@@ -2,7 +2,7 @@
 
 use crate::present::{record_swapchain_clear_pass, SWAPCHAIN_CLEAR_COLOR};
 
-use crate::render_graph::context::RenderPassContext;
+use crate::render_graph::context::{GraphRasterPassContext, RenderPassContext};
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::pass::{PassBuilder, RenderPass};
 use crate::render_graph::resources::ImportedTextureHandle;
@@ -51,13 +51,25 @@ impl RenderPass for SwapchainClearPass {
         Ok(())
     }
 
-    fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {
+    fn execute(&mut self, ctx: &mut RenderPassContext<'_, '_, '_>) -> Result<(), RenderPassError> {
         let Some(view) = ctx.backbuffer else {
             return Err(RenderPassError::MissingBackbuffer {
                 pass: self.name().to_string(),
             });
         };
         record_swapchain_clear_pass(ctx.encoder, view, self.clear_color, Some("swapchain-clear"));
+        Ok(())
+    }
+
+    fn graph_managed_raster(&self) -> bool {
+        true
+    }
+
+    fn execute_graph_raster(
+        &mut self,
+        _ctx: &mut GraphRasterPassContext<'_, '_>,
+        _rpass: &mut wgpu::RenderPass<'_>,
+    ) -> Result<(), RenderPassError> {
         Ok(())
     }
 }

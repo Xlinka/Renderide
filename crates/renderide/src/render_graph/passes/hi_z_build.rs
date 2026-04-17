@@ -56,7 +56,7 @@ impl RenderPass for HiZBuildPass {
         Ok(())
     }
 
-    fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {
+    fn execute(&mut self, ctx: &mut RenderPassContext<'_, '_, '_>) -> Result<(), RenderPassError> {
         let Some(_depth) = ctx.depth_view else {
             return Ok(());
         };

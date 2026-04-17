@@ -115,7 +115,7 @@ impl RenderPass for MeshDeformPass {
         PassPhase::FrameGlobal
     }
 
-    fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {
+    fn execute(&mut self, ctx: &mut RenderPassContext<'_, '_, '_>) -> Result<(), RenderPassError> {
         let Some(frame) = ctx.frame.as_mut() else {
             return Ok(());
         };

@@ -12,8 +12,8 @@ use crate::scene::SceneCoordinator;
 use std::collections::HashMap;
 
 use super::context::{
-    GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer, ResolvedGraphTexture,
-    ResolvedImportedBuffer, ResolvedImportedTexture,
+    GraphRasterPassContext, GraphResolvedResources, RenderPassContext, ResolvedGraphBuffer,
+    ResolvedGraphTexture, ResolvedImportedBuffer, ResolvedImportedTexture,
 };
 use super::error::GraphExecuteError;
 use super::frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};
@@ -22,7 +22,8 @@ use super::pass::{GroupScope, PassKind, PassPhase, RenderPass};
 use super::resources::{
     BufferImportSource, BufferSizePolicy, FrameTargetRole, ImportedBufferDecl,
     ImportedBufferHandle, ImportedTextureDecl, ImportedTextureHandle, ImportSource,
-    ResourceAccess, TextureHandle, TransientBufferDesc, TransientExtent, TransientTextureDesc,
+    ResourceAccess, TextureHandle, TextureResourceHandle, TransientBufferDesc, TransientExtent,
+    TransientTextureDesc,
 };
 use super::transient_pool::{BufferKey, TextureKey};
 use super::world_mesh_draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
@@ -208,6 +209,43 @@ pub struct CompiledPassInfo {
     pub(crate) accesses: Vec<ResourceAccess>,
     /// Optional multiview mask for raster passes.
     pub multiview_mask: Option<std::num::NonZeroU32>,
+    /// Render-pass attachment template for graph-managed raster passes.
+    pub raster_template: Option<RenderPassTemplate>,
+}
+
+/// Compiled render-pass attachment template.
+#[derive(Clone, Debug)]
+pub struct RenderPassTemplate {
+    /// Color attachments in declaration order.
+    pub color_attachments: Vec<ColorAttachmentTemplate>,
+    /// Optional depth/stencil attachment.
+    pub depth_stencil_attachment: Option<DepthAttachmentTemplate>,
+    /// Optional multiview mask.
+    pub multiview_mask: Option<std::num::NonZeroU32>,
+}
+
+/// Color attachment template.
+#[derive(Clone, Debug)]
+pub struct ColorAttachmentTemplate {
+    /// Color target handle.
+    pub target: TextureResourceHandle,
+    /// Load operation.
+    pub load: wgpu::LoadOp<wgpu::Color>,
+    /// Store operation.
+    pub store: wgpu::StoreOp,
+    /// Optional resolve target.
+    pub resolve_to: Option<TextureResourceHandle>,
+}
+
+/// Depth/stencil attachment template.
+#[derive(Clone, Debug)]
+pub struct DepthAttachmentTemplate {
+    /// Depth/stencil target handle.
+    pub target: TextureResourceHandle,
+    /// Depth operations.
+    pub depth: wgpu::Operations<f32>,
+    /// Optional stencil operations.
+    pub stencil: Option<wgpu::Operations<u32>>,
 }
 
 /// Ordered compiled group.
@@ -370,6 +408,85 @@ fn resolve_buffer_size(size_policy: BufferSizePolicy, viewport_px: (u32, u32)) -
             .saturating_mul(bytes_per_px)
             .max(1),
     }
+}
+
+fn pass_info_raster_template(
+    pass_info: &[CompiledPassInfo],
+    pass_idx: usize,
+) -> Result<RenderPassTemplate, GraphExecuteError> {
+    let Some(info) = pass_info.get(pass_idx) else {
+        return Err(GraphExecuteError::MissingRasterTemplate {
+            pass: format!("pass#{pass_idx}"),
+        });
+    };
+    info.raster_template
+        .clone()
+        .ok_or_else(|| GraphExecuteError::MissingRasterTemplate {
+            pass: info.name.clone(),
+        })
+}
+
+fn execute_graph_managed_raster_pass(
+    pass: &mut dyn RenderPass,
+    template: &RenderPassTemplate,
+    graph_resources: &GraphResolvedResources,
+    encoder: &mut wgpu::CommandEncoder,
+    ctx: &mut GraphRasterPassContext<'_, '_>,
+) -> Result<(), GraphExecuteError> {
+    let mut color_attachments = Vec::with_capacity(template.color_attachments.len());
+    for color in &template.color_attachments {
+        let view = graph_resources
+            .texture_view(color.target)
+            .ok_or_else(|| GraphExecuteError::MissingGraphAttachment {
+                pass: pass.name().to_string(),
+                resource: format!("{:?}", color.target),
+            })?;
+        let resolve_target = match color.resolve_to {
+            Some(target) => Some(graph_resources.texture_view(target).ok_or_else(|| {
+                GraphExecuteError::MissingGraphAttachment {
+                    pass: pass.name().to_string(),
+                    resource: format!("{target:?}"),
+                }
+            })?),
+            None => None,
+        };
+        color_attachments.push(Some(wgpu::RenderPassColorAttachment {
+            view,
+            resolve_target,
+            ops: wgpu::Operations {
+                load: color.load,
+                store: color.store,
+            },
+            depth_slice: None,
+        }));
+    }
+
+    let depth_stencil_attachment = if let Some(depth) = &template.depth_stencil_attachment {
+        let view = graph_resources
+            .texture_view(depth.target)
+            .ok_or_else(|| GraphExecuteError::MissingGraphAttachment {
+                pass: pass.name().to_string(),
+                resource: format!("{:?}", depth.target),
+            })?;
+        Some(wgpu::RenderPassDepthStencilAttachment {
+            view,
+            depth_ops: Some(depth.depth),
+            stencil_ops: depth.stencil,
+        })
+    } else {
+        None
+    };
+
+    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("render-graph-raster"),
+        color_attachments: &color_attachments,
+        depth_stencil_attachment,
+        occlusion_query_set: None,
+        timestamp_writes: None,
+        multiview_mask: template.multiview_mask,
+    });
+    pass.execute_graph_raster(ctx, &mut rpass)?;
+    Ok(())
 }
 
 impl CompiledRenderGraph {
@@ -567,19 +684,39 @@ impl CompiledRenderGraph {
                 draw_filter,
                 prefetched,
             );
-            let mut ctx = RenderPassContext {
-                device,
-                gpu_limits,
-                queue: queue_arc,
-                encoder: &mut encoder,
-                backbuffer: resolved.backbuffer,
-                depth_view: Some(resolved.depth_view),
-                frame: Some(&mut frame_params),
-                graph_resources: Some(&graph_resources),
-            };
-            for pass in &mut self.passes {
+            for (pass_idx, pass) in self.passes.iter_mut().enumerate() {
                 if pass.phase() == PassPhase::PerView {
-                    pass.execute(&mut ctx)?;
+                    if pass.graph_managed_raster() {
+                        let template = pass_info_raster_template(&self.pass_info, pass_idx)?;
+                        let mut ctx = GraphRasterPassContext {
+                            device,
+                            gpu_limits,
+                            queue: queue_arc,
+                            backbuffer: resolved.backbuffer,
+                            depth_view: Some(resolved.depth_view),
+                            frame: Some(&mut frame_params),
+                            graph_resources: Some(&graph_resources),
+                        };
+                        execute_graph_managed_raster_pass(
+                            pass.as_mut(),
+                            &template,
+                            &graph_resources,
+                            &mut encoder,
+                            &mut ctx,
+                        )?;
+                    } else {
+                        let mut ctx = RenderPassContext {
+                            device,
+                            gpu_limits,
+                            queue: queue_arc,
+                            encoder: &mut encoder,
+                            backbuffer: resolved.backbuffer,
+                            depth_view: Some(resolved.depth_view),
+                            frame: Some(&mut frame_params),
+                            graph_resources: Some(&graph_resources),
+                        };
+                        pass.execute(&mut ctx)?;
+                    }
                 }
             }
         }
@@ -652,19 +789,39 @@ impl CompiledRenderGraph {
                     first.draw_filter.clone(),
                     None,
                 );
-                let mut ctx = RenderPassContext {
-                    device,
-                    gpu_limits,
-                    queue: queue_arc,
-                    encoder: &mut encoder,
-                    backbuffer: None,
-                    depth_view: None,
-                    frame: Some(&mut frame_params),
-                    graph_resources: Some(&graph_resources),
-                };
-                for pass in &mut self.passes {
+                for (pass_idx, pass) in self.passes.iter_mut().enumerate() {
                     if pass.phase() == PassPhase::FrameGlobal {
-                        pass.execute(&mut ctx)?;
+                        if pass.graph_managed_raster() {
+                            let template = pass_info_raster_template(&self.pass_info, pass_idx)?;
+                            let mut ctx = GraphRasterPassContext {
+                                device,
+                                gpu_limits,
+                                queue: queue_arc,
+                                backbuffer: None,
+                                depth_view: None,
+                                frame: Some(&mut frame_params),
+                                graph_resources: Some(&graph_resources),
+                            };
+                            execute_graph_managed_raster_pass(
+                                pass.as_mut(),
+                                &template,
+                                &graph_resources,
+                                &mut encoder,
+                                &mut ctx,
+                            )?;
+                        } else {
+                            let mut ctx = RenderPassContext {
+                                device,
+                                gpu_limits,
+                                queue: queue_arc,
+                                encoder: &mut encoder,
+                                backbuffer: None,
+                                depth_view: None,
+                                frame: Some(&mut frame_params),
+                                graph_resources: Some(&graph_resources),
+                            };
+                            pass.execute(&mut ctx)?;
+                        }
                     }
                 }
             }

@@ -122,6 +122,22 @@ pub enum GraphExecuteError {
     #[error("swapchain backbuffer missing for swapchain view")]
     MissingSwapchainView,
 
+    /// A graph-managed raster pass could not resolve one of its declared attachments.
+    #[error("pass `{pass}` could not resolve graph attachment `{resource}`")]
+    MissingGraphAttachment {
+        /// Pass name.
+        pass: String,
+        /// Resource label.
+        resource: String,
+    },
+
+    /// A pass opted into graph-managed raster execution but has no raster template.
+    #[error("pass `{pass}` opted into graph-managed raster execution without a raster template")]
+    MissingRasterTemplate {
+        /// Pass name.
+        pass: String,
+    },
+
     /// A pass returned an error while recording.
     #[error("pass execution failed: {0}")]
     Pass(#[from] RenderPassError),

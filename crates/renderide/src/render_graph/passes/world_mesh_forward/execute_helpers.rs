@@ -503,6 +503,44 @@ struct ForwardSubpassRecord<'a, 'b, 'c> {
     skin_cache: Option<*const GpuSkinCache>,
 }
 
+/// Draw state for a render pass that has already been opened.
+struct ForwardSubpassDrawRecord<'a, 'b, 'c> {
+    frame: &'a mut FrameRenderParams<'b>,
+    queue: &'a wgpu::Queue,
+    device: &'a wgpu::Device,
+    draws: &'c [WorldMeshDrawItem],
+    draw_indices: &'c [usize],
+    /// Deformed vertex streams; see [`super::encode::ForwardDrawBatch::skin_cache`].
+    skin_cache: Option<*const GpuSkinCache>,
+}
+
+fn record_world_mesh_forward_subpass(
+    rpass: &mut wgpu::RenderPass<'_>,
+    sub: ForwardSubpassDrawRecord<'_, '_, '_>,
+    bind_groups: &ForwardPassBindGroups<'_>,
+    cfg: &mut ForwardPassRasterConfig<'_>,
+) {
+    draw_subset(ForwardDrawBatch {
+        rpass,
+        draw_indices: sub.draw_indices,
+        draws: sub.draws,
+        backend: sub.frame.backend,
+        queue: sub.queue,
+        device: sub.device,
+        frame_bg: bind_groups.frame.as_ref(),
+        empty_bg: bind_groups.empty_material.as_ref(),
+        per_draw_bind_group: bind_groups.per_draw,
+        per_draw_storage: bind_groups.per_draw_storage,
+        per_draw_bind_group_layout: bind_groups.per_draw_layout,
+        pass_desc: cfg.pass_desc,
+        shader_perm: cfg.shader_perm,
+        warned_missing_embedded_bind: cfg.warned_missing_embedded_bind,
+        offscreen_write_render_texture_asset_id: cfg.offscreen_write_render_texture_asset_id,
+        supports_base_instance: cfg.supports_base_instance,
+        skin_cache: sub.skin_cache,
+    });
+}
+
 /// Opaque pass: clear color/depth, draw non-intersection items.
 fn encode_world_mesh_forward_opaque_pass(
     sub: ForwardSubpassRecord<'_, '_, '_>,
@@ -537,25 +575,19 @@ fn encode_world_mesh_forward_opaque_pass(
             None
         },
     });
-    draw_subset(ForwardDrawBatch {
-        rpass: &mut rpass,
-        draw_indices: sub.draw_indices,
-        draws: sub.draws,
-        backend: sub.frame.backend,
-        queue: sub.queue,
-        device: sub.device,
-        frame_bg: bind_groups.frame.as_ref(),
-        empty_bg: bind_groups.empty_material.as_ref(),
-        per_draw_bind_group: bind_groups.per_draw,
-        per_draw_storage: bind_groups.per_draw_storage,
-        per_draw_bind_group_layout: bind_groups.per_draw_layout,
-        pass_desc: cfg.pass_desc,
-        shader_perm: cfg.shader_perm,
-        warned_missing_embedded_bind: cfg.warned_missing_embedded_bind,
-        offscreen_write_render_texture_asset_id: cfg.offscreen_write_render_texture_asset_id,
-        supports_base_instance: cfg.supports_base_instance,
-        skin_cache: sub.skin_cache,
-    });
+    record_world_mesh_forward_subpass(
+        &mut rpass,
+        ForwardSubpassDrawRecord {
+            frame: sub.frame,
+            queue: sub.queue,
+            device: sub.device,
+            draws: sub.draws,
+            draw_indices: sub.draw_indices,
+            skin_cache: sub.skin_cache,
+        },
+        bind_groups,
+        cfg,
+    );
 }
 
 /// Intersection subpass after depth snapshot (load preserved depth/color).
@@ -592,25 +624,19 @@ fn encode_world_mesh_forward_intersection_pass(
             None
         },
     });
-    draw_subset(ForwardDrawBatch {
-        rpass: &mut rpass,
-        draw_indices: sub.draw_indices,
-        draws: sub.draws,
-        backend: sub.frame.backend,
-        queue: sub.queue,
-        device: sub.device,
-        frame_bg: bind_groups.frame.as_ref(),
-        empty_bg: bind_groups.empty_material.as_ref(),
-        per_draw_bind_group: bind_groups.per_draw,
-        per_draw_storage: bind_groups.per_draw_storage,
-        per_draw_bind_group_layout: bind_groups.per_draw_layout,
-        pass_desc: cfg.pass_desc,
-        shader_perm: cfg.shader_perm,
-        warned_missing_embedded_bind: cfg.warned_missing_embedded_bind,
-        offscreen_write_render_texture_asset_id: cfg.offscreen_write_render_texture_asset_id,
-        supports_base_instance: cfg.supports_base_instance,
-        skin_cache: sub.skin_cache,
-    });
+    record_world_mesh_forward_subpass(
+        &mut rpass,
+        ForwardSubpassDrawRecord {
+            frame: sub.frame,
+            queue: sub.queue,
+            device: sub.device,
+            draws: sub.draws,
+            draw_indices: sub.draw_indices,
+            skin_cache: sub.skin_cache,
+        },
+        bind_groups,
+        cfg,
+    );
 }
 
 /// Opaque and optional intersection subpasses for mesh forward.

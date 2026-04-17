@@ -2,7 +2,7 @@
 
 use std::num::NonZeroU32;
 
-use super::context::RenderPassContext;
+use super::context::{GraphRasterPassContext, RenderPassContext};
 use super::error::{RenderPassError, SetupError};
 use super::resources::{
     BufferAccess, BufferHandle, BufferResourceHandle, ImportedBufferHandle,
@@ -283,7 +283,23 @@ pub trait RenderPass: Send {
     ///
     /// Runtime execution still routes through the existing command encoder while the graph-owned
     /// resource allocator is brought online; setup data is already the source of scheduling truth.
-    fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError>;
+    fn execute(&mut self, ctx: &mut RenderPassContext<'_, '_, '_>) -> Result<(), RenderPassError>;
+
+    /// Whether this raster pass expects the graph to open `wgpu::RenderPass` from setup data.
+    ///
+    /// Existing legacy raster passes return `false` until their encode helpers are ported.
+    fn graph_managed_raster(&self) -> bool {
+        false
+    }
+
+    /// Records commands into a graph-owned raster pass.
+    fn execute_graph_raster(
+        &mut self,
+        _ctx: &mut GraphRasterPassContext<'_, '_>,
+        _rpass: &mut wgpu::RenderPass<'_>,
+    ) -> Result<(), RenderPassError> {
+        Ok(())
+    }
 
     /// Scheduling phase for multi-view execution. Defaults to per-view.
     fn phase(&self) -> PassPhase {
