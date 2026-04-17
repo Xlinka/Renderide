@@ -326,6 +326,7 @@ fn frame_render_params_from_resolved<'a>(
         transform_draw_filter,
         offscreen_write_render_texture_asset_id: resolved.offscreen_write_render_texture_asset_id,
         prefetched_world_mesh_draws,
+        prepared_world_mesh_forward: None,
         occlusion_view: resolved.occlusion_view,
         sample_count: resolved.sample_count,
         msaa_color_view: resolved.msaa_color_view.clone(),

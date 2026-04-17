@@ -25,13 +25,18 @@ use crate::render_graph::camera::{
     effective_head_output_clip_planes, reverse_z_orthographic, reverse_z_perspective,
 };
 use crate::render_graph::cluster_frame::{cluster_frame_params, cluster_frame_params_stereo};
-use crate::render_graph::frame_params::{FrameRenderParams, HostCameraFrame};
+use crate::render_graph::frame_params::{
+    FrameRenderParams, HostCameraFrame, PreparedWorldMeshForwardFrame,
+    WorldMeshForwardPipelineState,
+};
 use crate::render_graph::world_mesh_draw_prep::{
     collect_and_sort_world_mesh_draws, DrawCollectionContext, WorldMeshDrawCollection,
     WorldMeshDrawItem,
 };
 use crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR;
-use crate::render_graph::{clamp_desktop_fov_degrees, WorldMeshCullInput};
+use crate::render_graph::{
+    build_world_mesh_cull_proj_params, clamp_desktop_fov_degrees, WorldMeshCullInput,
+};
 use crate::render_graph::{
     world_mesh_draw_state_rows_from_sorted, world_mesh_draw_stats_from_sorted,
 };
@@ -44,13 +49,6 @@ use super::vp::compute_per_draw_vp_triple;
 /// Minimum draws before parallelizing per-draw VP / model uniform packing (rayon overhead).
 const PER_DRAW_VP_PARALLEL_MIN_DRAWS: usize = 256;
 
-/// Multiview, pipeline description, and shader permutation for mesh forward encoding.
-pub(super) struct WorldMeshForwardPipeline {
-    pub use_multiview: bool,
-    pub pass_desc: MaterialPipelineDesc,
-    pub shader_perm: ShaderPermutation,
-}
-
 /// Resolves multiview use, [`MaterialPipelineDesc`], and [`ShaderPermutation`].
 pub(super) fn resolve_pass_config(
     hc: HostCameraFrame,
@@ -59,7 +57,7 @@ pub(super) fn resolve_pass_config(
     depth_stencil_format: wgpu::TextureFormat,
     gpu_limits: &GpuLimits,
     sample_count: u32,
-) -> WorldMeshForwardPipeline {
+) -> WorldMeshForwardPipelineState {
     let use_multiview = multiview_stereo
         && hc.vr_active
         && hc.stereo_view_proj.is_some()
@@ -84,7 +82,7 @@ pub(super) fn resolve_pass_config(
         ShaderPermutation(0)
     };
 
-    WorldMeshForwardPipeline {
+    WorldMeshForwardPipelineState {
         use_multiview,
         pass_desc,
         shader_perm,
@@ -359,6 +357,95 @@ pub(super) fn write_frame_uniforms_and_cluster(
     backend
         .frame_resources
         .write_frame_uniform_and_lights_from_scratch(queue, &uniforms);
+}
+
+/// Collects forward draws and uploads per-view data. Returns `None` when required per-draw
+/// resources are unavailable, matching the legacy pass's early-out behavior.
+pub(super) fn prepare_world_mesh_forward_frame(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    gpu_limits: &GpuLimits,
+    frame: &mut FrameRenderParams<'_>,
+) -> Option<PreparedWorldMeshForwardFrame> {
+    let supports_base_instance = gpu_limits.supports_base_instance;
+    let hc = frame.host_camera;
+    let pipeline = resolve_pass_config(
+        hc,
+        frame.multiview_stereo,
+        frame.surface_format,
+        if frame.sample_count > 1 {
+            wgpu::TextureFormat::Depth32Float
+        } else {
+            frame.depth_texture.format()
+        },
+        gpu_limits,
+        frame.sample_count,
+    );
+    let use_multiview = pipeline.use_multiview;
+    let shader_perm = pipeline.shader_perm;
+
+    let culling = if hc.suppress_occlusion_temporal {
+        None
+    } else {
+        let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
+        let depth_mode = frame.output_depth_mode();
+        let view_id = frame.occlusion_view;
+        let hi_z_temporal = frame.backend.occlusion.hi_z_temporal_snapshot(view_id);
+        let hi_z = frame.backend.occlusion.hi_z_cull_data(depth_mode, view_id);
+        Some(WorldMeshCullInput {
+            proj: cull_proj,
+            host_camera: &hc,
+            hi_z,
+            hi_z_temporal,
+        })
+    };
+
+    let collection = take_or_collect_world_mesh_draws(frame, culling.as_ref(), shader_perm);
+    capture_hi_z_temporal_after_collect(frame, culling.as_ref(), hc);
+
+    maybe_set_world_mesh_draw_stats(
+        frame.backend,
+        &collection,
+        &collection.items,
+        supports_base_instance,
+        shader_perm,
+        frame.offscreen_write_render_texture_asset_id,
+    );
+
+    let draws = collection.items;
+    let (render_context, world_proj, overlay_proj) =
+        compute_view_projections(frame.scene, hc, frame.viewport_px, &draws);
+
+    if !pack_and_upload_per_draw_slab(
+        device,
+        queue,
+        frame,
+        render_context,
+        world_proj,
+        overlay_proj,
+        &draws,
+    ) {
+        return None;
+    }
+
+    write_frame_uniforms_and_cluster(
+        device,
+        queue,
+        frame.backend,
+        hc,
+        frame.scene,
+        frame.viewport_px,
+        use_multiview,
+    );
+
+    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(&draws);
+    Some(PreparedWorldMeshForwardFrame {
+        draws,
+        regular_indices,
+        intersect_indices,
+        pipeline,
+        supports_base_instance,
+    })
 }
 
 /// Clears color and depth when there are no draws (offscreen RTs still get defined clears).
@@ -644,9 +731,7 @@ fn encode_world_mesh_forward_intersection_pass(
 /// Returns `false` if required bind groups are missing (caller returns `Ok(())`).
 pub(super) fn encode_world_mesh_forward_draw_passes(
     ctx: ForwardPassEncodeFrame<'_, '_>,
-    draws: &[WorldMeshDrawItem],
-    pipeline: &WorldMeshForwardPipeline,
-    supports_base_instance: bool,
+    prepared: &PreparedWorldMeshForwardFrame,
     views: ForwardPassEncodeViews<'_>,
 ) -> bool {
     let encoder = ctx.encoder;
@@ -661,9 +746,11 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
         msaa_depth_resolve,
     } = views;
 
-    let pass_desc = &pipeline.pass_desc;
-    let shader_perm = pipeline.shader_perm;
-    let use_multiview = pipeline.use_multiview;
+    let draws = &prepared.draws;
+    let pass_desc = &prepared.pipeline.pass_desc;
+    let shader_perm = prepared.pipeline.shader_perm;
+    let use_multiview = prepared.pipeline.use_multiview;
+    let supports_base_instance = prepared.supports_base_instance;
     let Some((per_draw_bg, per_draw_storage, per_draw_layout)) =
         frame.backend.frame_resources.per_draw.as_ref().map(|d| {
             (
@@ -680,7 +767,8 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
     let (vw, vh) = frame.viewport_px;
     let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
 
-    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(draws);
+    let regular_indices = &prepared.regular_indices;
+    let intersect_indices = &prepared.intersect_indices;
 
     let mut warned_missing_embedded_bind = false;
     let Some((frame_bg_arc, empty_bg_arc)) = frame
@@ -737,7 +825,7 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
             queue,
             device,
             draws,
-            draw_indices: &regular_indices,
+            draw_indices: regular_indices,
             skin_cache,
         },
         ForwardPassAttachments {
@@ -819,7 +907,7 @@ pub(super) fn encode_world_mesh_forward_draw_passes(
             queue,
             device,
             draws,
-            draw_indices: &intersect_indices,
+            draw_indices: intersect_indices,
             skin_cache,
         },
         ForwardPassAttachments {

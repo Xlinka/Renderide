@@ -34,14 +34,11 @@ use crate::render_graph::pass::{PassBuilder, RenderPass};
 use crate::render_graph::resources::{
     BufferAccess, ImportedBufferHandle, ImportedTextureHandle, StorageAccess,
 };
-use crate::render_graph::{build_world_mesh_cull_proj_params, WorldMeshCullInput};
 
 use execute_helpers::{
-    capture_hi_z_temporal_after_collect, compute_view_projections, encode_clear_only_pass,
-    encode_msaa_depth_resolve_after_clear_only, encode_world_mesh_forward_draw_passes,
-    maybe_set_world_mesh_draw_stats, pack_and_upload_per_draw_slab, resolve_pass_config,
-    take_or_collect_world_mesh_draws, write_frame_uniforms_and_cluster, ForwardPassEncodeFrame,
-    ForwardPassEncodeViews,
+    encode_clear_only_pass, encode_msaa_depth_resolve_after_clear_only,
+    encode_world_mesh_forward_draw_passes, prepare_world_mesh_forward_frame,
+    ForwardPassEncodeFrame, ForwardPassEncodeViews,
 };
 
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
@@ -156,83 +153,17 @@ impl RenderPass for WorldMeshForwardPass {
             });
         };
 
-        let supports_base_instance = ctx.gpu_limits.supports_base_instance;
-        let hc = frame.host_camera;
-        let pipeline = resolve_pass_config(
-            hc,
-            frame.multiview_stereo,
-            frame.surface_format,
-            if frame.sample_count > 1 {
-                wgpu::TextureFormat::Depth32Float
-            } else {
-                frame.depth_texture.format()
-            },
-            ctx.gpu_limits,
-            frame.sample_count,
-        );
-        let use_multiview = pipeline.use_multiview;
-        let shader_perm = pipeline.shader_perm;
-
-        let culling = if hc.suppress_occlusion_temporal {
-            None
-        } else {
-            let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
-            let depth_mode = frame.output_depth_mode();
-            let view_id = frame.occlusion_view;
-            let hi_z_temporal = frame.backend.occlusion.hi_z_temporal_snapshot(view_id);
-            let hi_z = frame.backend.occlusion.hi_z_cull_data(depth_mode, view_id);
-            Some(WorldMeshCullInput {
-                proj: cull_proj,
-                host_camera: &hc,
-                hi_z,
-                hi_z_temporal,
-            })
-        };
-
-        let collection = take_or_collect_world_mesh_draws(frame, culling.as_ref(), shader_perm);
-        capture_hi_z_temporal_after_collect(frame, culling.as_ref(), hc);
-
-        maybe_set_world_mesh_draw_stats(
-            frame.backend,
-            &collection,
-            &collection.items,
-            supports_base_instance,
-            shader_perm,
-            frame.offscreen_write_render_texture_asset_id,
-        );
-
-        let draws = collection.items;
-
-        let (render_context, world_proj, overlay_proj) =
-            compute_view_projections(frame.scene, hc, frame.viewport_px, &draws);
-
         let queue_guard = ctx
             .queue
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let queue = &*queue_guard;
 
-        if !pack_and_upload_per_draw_slab(
-            ctx.device,
-            queue,
-            frame,
-            render_context,
-            world_proj,
-            overlay_proj,
-            &draws,
-        ) {
+        frame.prepared_world_mesh_forward =
+            prepare_world_mesh_forward_frame(ctx.device, queue, ctx.gpu_limits, frame);
+        let Some(prepared) = frame.prepared_world_mesh_forward.take() else {
             return Ok(());
-        }
-
-        write_frame_uniforms_and_cluster(
-            ctx.device,
-            queue,
-            frame.backend,
-            hc,
-            frame.scene,
-            frame.viewport_px,
-            use_multiview,
-        );
+        };
 
         let msaa_color = frame.msaa_color_view.clone();
         let msaa_depth = frame.msaa_depth_view.clone();
@@ -246,14 +177,14 @@ impl RenderPass for WorldMeshForwardPass {
 
         let msaa_depth_resolve = frame.backend.msaa_depth_resolve.clone();
 
-        if draws.is_empty() {
+        if prepared.draws.is_empty() {
             encode_clear_only_pass(
                 ctx.encoder,
                 color_view,
                 depth_raster,
-                pipeline.pass_desc.depth_stencil_format,
+                prepared.pipeline.pass_desc.depth_stencil_format,
                 resolve_swapchain,
-                use_multiview,
+                prepared.pipeline.use_multiview,
             );
             encode_msaa_depth_resolve_after_clear_only(
                 ctx.device,
@@ -271,9 +202,7 @@ impl RenderPass for WorldMeshForwardPass {
                 frame,
                 queue,
             },
-            &draws,
-            &pipeline,
-            supports_base_instance,
+            &prepared,
             ForwardPassEncodeViews {
                 color_view,
                 depth_raster_view: depth_raster,
