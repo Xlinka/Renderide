@@ -19,10 +19,12 @@ use crate::render_graph::cluster_frame::{
     cluster_frame_params, cluster_frame_params_stereo, ClusterFrameParams,
 };
 use crate::render_graph::context::RenderPassContext;
-use crate::render_graph::error::RenderPassError;
+use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::frame_params::HostCameraFrame;
-use crate::render_graph::pass::RenderPass;
-use crate::render_graph::resources::{PassResources, ResourceSlot};
+use crate::render_graph::pass::{PassBuilder, RenderPass};
+use crate::render_graph::resources::{
+    BufferAccess, BufferHandle, ImportedBufferHandle, StorageAccess,
+};
 use crate::scene::SceneCoordinator;
 
 /// CPU layout for the compute shader `ClusterParams` uniform (WGSL `struct` + tail pad).
@@ -236,22 +238,31 @@ fn clustered_light_eye_params_for_viewport(
 /// Builds per-cluster light lists before the world forward pass.
 #[derive(Debug)]
 pub struct ClusteredLightPass {
+    resources: ClusteredLightGraphResources,
     logged_active_once: bool,
     /// Last [`crate::backend::cluster_gpu::ClusterBufferCache::version`] used for compute bind group; recreated when cluster buffers reallocate.
     cached_cluster_bind_version: Option<u64>,
     cached_compute_bind_group: Option<wgpu::BindGroup>,
 }
 
-impl Default for ClusteredLightPass {
-    fn default() -> Self {
-        Self::new()
-    }
+/// Graph resources used by [`ClusteredLightPass`].
+#[derive(Clone, Copy, Debug)]
+pub struct ClusteredLightGraphResources {
+    /// Imported light storage buffer.
+    pub lights: ImportedBufferHandle,
+    /// Imported per-cluster light-count storage buffer.
+    pub cluster_light_counts: ImportedBufferHandle,
+    /// Imported per-cluster light-index storage buffer.
+    pub cluster_light_indices: ImportedBufferHandle,
+    /// Transient uniform buffer for per-eye cluster parameters.
+    pub params: BufferHandle,
 }
 
 impl ClusteredLightPass {
     /// Creates a clustered light pass (pipeline is created lazily on first execute).
-    pub fn new() -> Self {
+    pub fn new(resources: ClusteredLightGraphResources) -> Self {
         Self {
+            resources,
             logged_active_once: false,
             cached_cluster_bind_version: None,
             cached_compute_bind_group: None,
@@ -332,11 +343,37 @@ impl RenderPass for ClusteredLightPass {
         "ClusteredLight"
     }
 
-    fn resources(&self) -> PassResources {
-        PassResources {
-            reads: Vec::new(),
-            writes: vec![ResourceSlot::ClusterBuffers, ResourceSlot::LightBuffer],
-        }
+    fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+        b.compute();
+        b.import_buffer(
+            self.resources.lights,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::COMPUTE,
+                access: StorageAccess::ReadOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.cluster_light_counts,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::COMPUTE,
+                access: StorageAccess::WriteOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.cluster_light_indices,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::COMPUTE,
+                access: StorageAccess::WriteOnly,
+            },
+        );
+        b.write_buffer(
+            self.resources.params,
+            BufferAccess::Uniform {
+                stages: wgpu::ShaderStages::COMPUTE,
+                dynamic_offset: true,
+            },
+        );
+        Ok(())
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {

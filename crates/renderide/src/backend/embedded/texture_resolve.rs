@@ -392,8 +392,9 @@ pub(crate) fn sampler_from_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
     use std::sync::Arc;
+
+    use hashbrown::HashMap;
 
     use crate::assets::material::PropertyIdRegistry;
     use crate::backend::embedded::layout::{EmbeddedSharedKeywordIds, StemEmbeddedPropertyIds};

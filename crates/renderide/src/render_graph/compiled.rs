@@ -12,7 +12,12 @@ use crate::scene::SceneCoordinator;
 use super::context::RenderPassContext;
 use super::error::GraphExecuteError;
 use super::frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};
-use super::pass::{PassPhase, RenderPass};
+use super::ids::{GroupId, PassId};
+use super::pass::{GroupScope, PassKind, PassPhase, RenderPass};
+use super::resources::{
+    ImportedBufferDecl, ImportedTextureDecl, ResourceAccess, TransientBufferDesc,
+    TransientTextureDesc,
+};
 use super::world_mesh_draw_prep::{CameraTransformDrawFilter, WorldMeshDrawCollection};
 
 /// Inputs for [`CompiledRenderGraph::execute_offscreen_single_view`] and
@@ -117,12 +122,98 @@ impl<'a> FrameView<'a> {
 }
 
 /// Statistics emitted when building a [`CompiledRenderGraph`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CompileStats {
     /// Number of passes in the flattened schedule.
     pub pass_count: usize,
     /// Number of topological levels (waves); a parallelism hint for future scheduling.
     pub topo_levels: usize,
+    /// Number of passes culled because their writes could not reach an import/export.
+    pub culled_count: usize,
+    /// Number of declared transient texture handles.
+    pub transient_texture_count: usize,
+    /// Number of physical transient texture slots after lifetime aliasing.
+    pub transient_texture_slots: usize,
+    /// Number of declared transient buffer handles.
+    pub transient_buffer_count: usize,
+    /// Number of physical transient buffer slots after lifetime aliasing.
+    pub transient_buffer_slots: usize,
+    /// Number of imported texture declarations.
+    pub imported_texture_count: usize,
+    /// Number of imported buffer declarations.
+    pub imported_buffer_count: usize,
+}
+
+/// Inclusive pass-index lifetime for one transient resource in the retained schedule.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResourceLifetime {
+    /// First retained pass index that touches the resource.
+    pub first_pass: usize,
+    /// Last retained pass index that touches the resource.
+    pub last_pass: usize,
+}
+
+impl ResourceLifetime {
+    /// Returns true when two lifetimes do not overlap.
+    pub fn disjoint(self, other: Self) -> bool {
+        self.last_pass < other.first_pass || other.last_pass < self.first_pass
+    }
+}
+
+/// Compiled metadata for a transient texture handle.
+#[derive(Clone, Debug)]
+pub struct CompiledTextureResource {
+    /// Original descriptor.
+    pub desc: TransientTextureDesc,
+    /// Usage union across retained pass declarations.
+    pub usage: wgpu::TextureUsages,
+    /// Retained-schedule lifetime.
+    pub lifetime: Option<ResourceLifetime>,
+    /// Physical alias slot assigned by the compiler.
+    pub physical_slot: usize,
+}
+
+/// Compiled metadata for a transient buffer handle.
+#[derive(Clone, Debug)]
+pub struct CompiledBufferResource {
+    /// Original descriptor.
+    pub desc: TransientBufferDesc,
+    /// Usage union across retained pass declarations.
+    pub usage: wgpu::BufferUsages,
+    /// Retained-schedule lifetime.
+    pub lifetime: Option<ResourceLifetime>,
+    /// Physical alias slot assigned by the compiler.
+    pub physical_slot: usize,
+}
+
+/// Compiled setup metadata for one retained pass.
+#[derive(Clone, Debug)]
+pub struct CompiledPassInfo {
+    /// Original pass id in the builder.
+    pub id: PassId,
+    /// Pass name.
+    pub name: String,
+    /// Group id.
+    pub group: GroupId,
+    /// Command kind.
+    pub kind: PassKind,
+    /// Declared accesses.
+    pub(crate) accesses: Vec<ResourceAccess>,
+    /// Optional multiview mask for raster passes.
+    pub multiview_mask: Option<std::num::NonZeroU32>,
+}
+
+/// Ordered compiled group.
+#[derive(Clone, Debug)]
+pub struct CompiledGroup {
+    /// Group id.
+    pub id: GroupId,
+    /// Group label.
+    pub name: &'static str,
+    /// Execution scope.
+    pub scope: GroupScope,
+    /// Indices into [`CompiledRenderGraph::pass_info`].
+    pub pass_indices: Vec<usize>,
 }
 
 /// Immutable execution schedule produced by [`super::GraphBuilder::build`].
@@ -132,11 +223,23 @@ pub struct CompileStats {
 /// one submit per view so `wgpu::Queue::write_buffer` work in passes is ordered before each view’s GPU work.
 pub struct CompiledRenderGraph {
     pub(super) passes: Vec<Box<dyn RenderPass>>,
-    /// `true` when any pass writes [`super::resources::ResourceSlot::Backbuffer`] — frame execution
+    /// `true` when any pass writes an imported frame color target; frame execution
     /// acquires the swapchain once and presents after submit.
     pub needs_surface_acquire: bool,
     /// Build-time stats for tests and future profiling hooks.
     pub compile_stats: CompileStats,
+    /// Ordered groups and retained pass membership.
+    pub groups: Vec<CompiledGroup>,
+    /// Retained pass metadata in execution order.
+    pub pass_info: Vec<CompiledPassInfo>,
+    /// Compiled transient texture metadata.
+    pub transient_textures: Vec<CompiledTextureResource>,
+    /// Compiled transient buffer metadata.
+    pub transient_buffers: Vec<CompiledBufferResource>,
+    /// Imported texture declarations.
+    pub imported_textures: Vec<ImportedTextureDecl>,
+    /// Imported buffer declarations.
+    pub imported_buffers: Vec<ImportedBufferDecl>,
 }
 
 struct ResolvedView<'a> {

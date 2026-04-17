@@ -10,9 +10,8 @@ use rayon::prelude::*;
 
 use crate::backend::mesh_deform::{EntryNeed, GpuSkinCache};
 use crate::render_graph::context::RenderPassContext;
-use crate::render_graph::error::RenderPassError;
-use crate::render_graph::pass::{PassPhase, RenderPass};
-use crate::render_graph::resources::PassResources;
+use crate::render_graph::error::{RenderPassError, SetupError};
+use crate::render_graph::pass::{PassBuilder, PassPhase, RenderPass};
 use crate::resources::MeshPool;
 use crate::scene::{RenderSpaceId, SceneCoordinator};
 
@@ -106,11 +105,10 @@ impl RenderPass for MeshDeformPass {
         "MeshDeform"
     }
 
-    fn resources(&self) -> PassResources {
-        PassResources {
-            reads: Vec::new(),
-            writes: Vec::new(),
-        }
+    fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+        b.compute();
+        b.cull_exempt();
+        Ok(())
     }
 
     fn phase(&self) -> PassPhase {

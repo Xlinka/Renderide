@@ -29,9 +29,11 @@ mod execute_helpers;
 mod vp;
 
 use crate::render_graph::context::RenderPassContext;
-use crate::render_graph::error::RenderPassError;
-use crate::render_graph::pass::RenderPass;
-use crate::render_graph::resources::{PassResources, ResourceSlot};
+use crate::render_graph::error::{RenderPassError, SetupError};
+use crate::render_graph::pass::{PassBuilder, RenderPass};
+use crate::render_graph::resources::{
+    BufferAccess, ImportedBufferHandle, ImportedTextureHandle, StorageAccess,
+};
 use crate::render_graph::{build_world_mesh_cull_proj_params, WorldMeshCullInput};
 
 use execute_helpers::{
@@ -43,13 +45,34 @@ use execute_helpers::{
 };
 
 /// Clears the backbuffer and depth, then draws meshes with material-batched raster pipelines.
-#[derive(Debug, Default)]
-pub struct WorldMeshForwardPass;
+#[derive(Debug)]
+pub struct WorldMeshForwardPass {
+    resources: WorldMeshForwardGraphResources,
+}
+
+/// Graph resources used by [`WorldMeshForwardPass`].
+#[derive(Clone, Copy, Debug)]
+pub struct WorldMeshForwardGraphResources {
+    /// Imported frame color target.
+    pub color: ImportedTextureHandle,
+    /// Imported frame depth target.
+    pub depth: ImportedTextureHandle,
+    /// Imported cluster light-count storage buffer.
+    pub cluster_light_counts: ImportedBufferHandle,
+    /// Imported cluster light-index storage buffer.
+    pub cluster_light_indices: ImportedBufferHandle,
+    /// Imported light storage buffer.
+    pub lights: ImportedBufferHandle,
+    /// Imported per-draw storage slab.
+    pub per_draw_slab: ImportedBufferHandle,
+    /// Imported frame uniform buffer.
+    pub frame_uniforms: ImportedBufferHandle,
+}
 
 impl WorldMeshForwardPass {
     /// Creates a world mesh forward pass instance.
-    pub fn new() -> Self {
-        Self
+    pub fn new(resources: WorldMeshForwardGraphResources) -> Self {
+        Self { resources }
     }
 }
 
@@ -58,11 +81,62 @@ impl RenderPass for WorldMeshForwardPass {
         "WorldMeshForward"
     }
 
-    fn resources(&self) -> PassResources {
-        PassResources {
-            reads: vec![ResourceSlot::ClusterBuffers, ResourceSlot::LightBuffer],
-            writes: vec![ResourceSlot::Backbuffer, ResourceSlot::Depth],
+    fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+        {
+            let mut r = b.raster();
+            r.color(
+                self.resources.color,
+                wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(crate::present::SWAPCHAIN_CLEAR_COLOR),
+                    store: wgpu::StoreOp::Store,
+                },
+                Option::<ImportedTextureHandle>::None,
+            );
+            r.depth(
+                self.resources.depth,
+                wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(crate::render_graph::MAIN_FORWARD_DEPTH_CLEAR),
+                    store: wgpu::StoreOp::Store,
+                },
+                None,
+            );
         }
+        b.import_buffer(
+            self.resources.cluster_light_counts,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::FRAGMENT,
+                access: StorageAccess::ReadOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.cluster_light_indices,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::FRAGMENT,
+                access: StorageAccess::ReadOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.lights,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::FRAGMENT,
+                access: StorageAccess::ReadOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.per_draw_slab,
+            BufferAccess::Storage {
+                stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                access: StorageAccess::ReadOnly,
+            },
+        );
+        b.import_buffer(
+            self.resources.frame_uniforms,
+            BufferAccess::Uniform {
+                stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                dynamic_offset: false,
+            },
+        );
+        Ok(())
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {

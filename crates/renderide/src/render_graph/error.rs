@@ -1,9 +1,45 @@
-//! Errors for graph build, pass execution, and frame submission.
+//! Errors for graph build, pass setup, pass execution, and frame submission.
 
 use crate::present::PresentClearError;
 
 use super::ids::PassId;
-use super::resources::ResourceSlot;
+use super::resources::{BufferHandle, ImportedBufferHandle, ImportedTextureHandle, TextureHandle};
+
+/// Setup-time validation errors reported by a [`super::RenderPass`].
+#[derive(Debug, thiserror::Error)]
+pub enum SetupError {
+    /// Raster passes must declare at least one attachment.
+    #[error("raster pass declared no color or depth attachments")]
+    RasterWithoutAttachments,
+
+    /// Compute/copy passes cannot declare color or depth attachments.
+    #[error("non-raster pass declared a color or depth attachment")]
+    NonRasterPassHasAttachment,
+
+    /// Callback passes are reserved for side-effect-only work and cannot declare graph accesses.
+    #[error("callback pass declared graph resource accesses")]
+    CallbackPassHasAccesses,
+
+    /// A pass referenced a transient texture handle unknown to the graph.
+    #[error("unknown transient texture handle {0:?}")]
+    UnknownTexture(TextureHandle),
+
+    /// A pass referenced a transient buffer handle unknown to the graph.
+    #[error("unknown transient buffer handle {0:?}")]
+    UnknownBuffer(BufferHandle),
+
+    /// A pass referenced an imported texture handle unknown to the graph.
+    #[error("unknown imported texture handle {0:?}")]
+    UnknownImportedTexture(ImportedTextureHandle),
+
+    /// A pass referenced an imported buffer handle unknown to the graph.
+    #[error("unknown imported buffer handle {0:?}")]
+    UnknownImportedBuffer(ImportedBufferHandle),
+
+    /// Pass-specific setup failure.
+    #[error("{0}")]
+    Message(String),
+}
 
 /// Errors that can occur when building a render graph.
 #[derive(Debug, thiserror::Error)]
@@ -12,13 +48,33 @@ pub enum GraphBuildError {
     #[error("cycle detected in render graph")]
     CycleDetected,
 
-    /// A pass reads a resource slot that no earlier pass produces.
-    #[error("pass {pass:?} reads {slot:?} but no earlier pass writes it")]
+    /// A pass id in an explicit edge is outside this builder.
+    #[error("edge references pass outside graph: {from:?} -> {to:?}")]
+    InvalidEdge {
+        /// Source pass.
+        from: PassId,
+        /// Destination pass.
+        to: PassId,
+    },
+
+    /// A pass reads a transient resource that no earlier pass produces.
+    #[error("pass {pass:?} reads transient resource `{resource}` but no earlier pass writes it")]
     MissingDependency {
         /// Pass that requires the missing dependency.
         pass: PassId,
-        /// Resource slot that has no producer.
-        slot: ResourceSlot,
+        /// Human-readable resource label.
+        resource: String,
+    },
+
+    /// Pass setup failed.
+    #[error("setup failed for pass {pass:?} `{name}`: {source}")]
+    Setup {
+        /// Pass id.
+        pass: PassId,
+        /// Pass name.
+        name: String,
+        /// Setup validation error.
+        source: SetupError,
     },
 }
 

@@ -1,5 +1,5 @@
-//! Compile-time validated **render graph**: pass ordering, resource flow checks, and a single
-//! command-encode path per frame (v1).
+//! Compile-time validated **render graph** with typed handles, setup-time access declarations,
+//! pass culling, and transient alias planning.
 //!
 //! **Hi-Z-related code:** CPU helpers for mip layout, depth readback unpacking, and screen-space
 //! occlusion tests live in [`hi_z_cpu`] and [`hi_z_occlusion`]. GPU pyramid build, staging, and
@@ -7,20 +7,12 @@
 //!
 //! ## Responsibilities
 //!
-//! - **[`GraphBuilder`]** — register [`RenderPass`] nodes, optional [`GraphBuilder::add_pass_if`],
-//!   edges, then [`GraphBuilder::build`] for a topological order and producer/consumer validation.
-//! - **[`CompiledRenderGraph`]** — immutable schedule; [`CompiledRenderGraph::execute`] acquires
-//!   the swapchain at most once when any pass writes [`ResourceSlot::Backbuffer`], records all
-//!   passes into one encoder, submits, and presents.
+//! - **[`GraphBuilder`]** declares transient resources/imports, groups, and [`RenderPass`] nodes,
+//!   then calls each pass's setup hook to derive resource-ordering edges.
+//! - **[`CompiledRenderGraph`]** stores the retained schedule, transient usage unions,
+//!   lifetime-based alias slots, and the existing frame execution entry points.
 //!
-//! ## Phase 2 (not implemented here)
-//!
-//! - Nested subgraphs / phase labels.
-//! - Real GPU resource handles and automatic barriers per slot.
-//! - Multiple encoders, parallel recording, and async compute queue routing.
-//! - Graph reuse across frames with invalidation keys (resolution, MSAA, toggles).
-//!
-//! ## Frame pipeline (v1 ordering)
+//! ## Frame pipeline
 //!
 //! Runtime and passes combine to the following **logical** phases each frame (some CPU-side,
 //! some GPU passes in [`passes`]):
@@ -56,6 +48,7 @@ mod resources;
 mod reverse_z_depth;
 mod secondary_camera;
 mod skinning_palette;
+mod transient_pool;
 mod world_mesh_cull;
 mod world_mesh_cull_eval;
 mod world_mesh_draw_prep;
@@ -91,7 +84,7 @@ pub use compiled::{
     FrameViewTarget, OffscreenSingleViewExecuteSpec,
 };
 pub use context::RenderPassContext;
-pub use error::{GraphBuildError, GraphExecuteError, RenderPassError};
+pub use error::{GraphBuildError, GraphExecuteError, RenderPassError, SetupError};
 pub use frame_params::{FrameRenderParams, HostCameraFrame, OcclusionViewId};
 pub use frustum::{
     mesh_bounds_degenerate_for_cull, mesh_bounds_max_half_extent, world_aabb_from_local_bounds,
@@ -106,10 +99,16 @@ pub use hi_z_cpu::{
 pub use hi_z_occlusion::{
     hi_z_view_proj_matrices, mesh_fully_occluded_in_hiz, stereo_hiz_keeps_draw,
 };
-pub use ids::PassId;
+pub use ids::{GroupId, PassId};
 pub use output_depth_mode::OutputDepthMode;
-pub use pass::{PassPhase, RenderPass};
-pub use resources::{PassResources, ResourceSlot};
+pub use pass::{GroupScope, PassBuilder, PassKind, PassPhase, RenderPass};
+pub use resources::{
+    BufferAccess, BufferHandle, BufferImportSource, BufferSizePolicy, FrameTargetRole,
+    HistorySlotId, ImportedBufferDecl, ImportedBufferHandle, ImportedTextureDecl,
+    ImportedTextureHandle, ImportSource, StorageAccess, TextureAccess, TextureHandle,
+    TextureResourceHandle, TransientBufferDesc, TransientExtent, TransientTextureDesc,
+};
+pub use transient_pool::{BufferKey, TextureKey, TransientPool, TransientPoolMetrics};
 pub use reverse_z_depth::{
     main_forward_depth_stencil_format, MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE,
 };
@@ -123,10 +122,141 @@ pub use world_mesh_cull::{
 /// Builds the default graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
 pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError> {
     let mut builder = GraphBuilder::new();
+    let color = builder.import_texture(ImportedTextureDecl {
+        label: "frame_color",
+        source: ImportSource::FrameTarget(FrameTargetRole::ColorAttachment),
+        initial_access: TextureAccess::ColorAttachment {
+            load: wgpu::LoadOp::Load,
+            store: wgpu::StoreOp::Store,
+            resolve_to: None,
+        },
+        final_access: TextureAccess::Present,
+    });
+    let depth = builder.import_texture(ImportedTextureDecl {
+        label: "frame_depth",
+        source: ImportSource::FrameTarget(FrameTargetRole::DepthAttachment),
+        initial_access: TextureAccess::DepthAttachment {
+            depth: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+            stencil: None,
+        },
+        final_access: TextureAccess::Sampled {
+            stages: wgpu::ShaderStages::COMPUTE,
+        },
+    });
+    let hi_z_current = builder.import_texture(ImportedTextureDecl {
+        label: "hi_z_current",
+        source: ImportSource::PingPong(HistorySlotId::HiZ),
+        initial_access: TextureAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE,
+            access: StorageAccess::WriteOnly,
+        },
+        final_access: TextureAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE,
+            access: StorageAccess::WriteOnly,
+        },
+    });
+    let lights = builder.import_buffer(ImportedBufferDecl {
+        label: "lights",
+        source: BufferImportSource::BackendFrameResource("lights"),
+        initial_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+        final_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+    });
+    let cluster_light_counts = builder.import_buffer(ImportedBufferDecl {
+        label: "cluster_light_counts",
+        source: BufferImportSource::BackendFrameResource("cluster_light_counts"),
+        initial_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::WriteOnly,
+        },
+        final_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+    });
+    let cluster_light_indices = builder.import_buffer(ImportedBufferDecl {
+        label: "cluster_light_indices",
+        source: BufferImportSource::BackendFrameResource("cluster_light_indices"),
+        initial_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::WriteOnly,
+        },
+        final_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+    });
+    let per_draw_slab = builder.import_buffer(ImportedBufferDecl {
+        label: "per_draw_slab",
+        source: BufferImportSource::BackendFrameResource("per_draw_slab"),
+        initial_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+        final_access: BufferAccess::Storage {
+            stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            access: StorageAccess::ReadOnly,
+        },
+    });
+    let frame_uniforms = builder.import_buffer(ImportedBufferDecl {
+        label: "frame_uniforms",
+        source: BufferImportSource::BackendFrameResource("frame_uniforms"),
+        initial_access: BufferAccess::Uniform {
+            stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            dynamic_offset: false,
+        },
+        final_access: BufferAccess::Uniform {
+            stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            dynamic_offset: false,
+        },
+    });
+    let cluster_params = builder.create_buffer(TransientBufferDesc {
+        label: "cluster_params",
+        size_policy: BufferSizePolicy::Fixed(crate::backend::CLUSTER_PARAMS_UNIFORM_SIZE * 2),
+        base_usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        alias: true,
+    });
+    let hi_z_readback = builder.create_buffer(TransientBufferDesc {
+        label: "hi_z_readback_staging",
+        size_policy: BufferSizePolicy::PerViewport { bytes_per_px: 4 },
+        base_usage: wgpu::BufferUsages::COPY_DST,
+        alias: true,
+    });
     let deform = builder.add_pass(Box::new(passes::MeshDeformPass::new()));
-    let clustered = builder.add_pass(Box::new(passes::ClusteredLightPass::new()));
-    let forward = builder.add_pass(Box::new(passes::WorldMeshForwardPass::new()));
-    let hiz = builder.add_pass(Box::new(passes::HiZBuildPass::new()));
+    let clustered = builder.add_pass(Box::new(passes::ClusteredLightPass::new(
+        passes::ClusteredLightGraphResources {
+            lights,
+            cluster_light_counts,
+            cluster_light_indices,
+            params: cluster_params,
+        },
+    )));
+    let forward = builder.add_pass(Box::new(passes::WorldMeshForwardPass::new(
+        passes::WorldMeshForwardGraphResources {
+            color,
+            depth,
+            cluster_light_counts,
+            cluster_light_indices,
+            lights,
+            per_draw_slab,
+            frame_uniforms,
+        },
+    )));
+    let hiz = builder.add_pass(Box::new(passes::HiZBuildPass::new(
+        passes::HiZBuildGraphResources {
+            depth,
+            hi_z_current,
+            readback_staging: hi_z_readback,
+        },
+    )));
     builder.add_edge(deform, clustered);
     builder.add_edge(clustered, forward);
     builder.add_edge(forward, hiz);

@@ -3,34 +3,33 @@
 use crate::present::{record_swapchain_clear_pass, SWAPCHAIN_CLEAR_COLOR};
 
 use crate::render_graph::context::RenderPassContext;
-use crate::render_graph::error::RenderPassError;
-use crate::render_graph::pass::RenderPass;
-use crate::render_graph::resources::{PassResources, ResourceSlot};
+use crate::render_graph::error::{RenderPassError, SetupError};
+use crate::render_graph::pass::{PassBuilder, RenderPass};
+use crate::render_graph::resources::ImportedTextureHandle;
 
 /// Clears the acquired backbuffer to a solid color (default [`SWAPCHAIN_CLEAR_COLOR`]).
 #[derive(Debug)]
 pub struct SwapchainClearPass {
     /// Clear color for the swapchain load op.
     pub clear_color: wgpu::Color,
+    target: ImportedTextureHandle,
 }
 
 impl SwapchainClearPass {
     /// Default clear color matches [`SWAPCHAIN_CLEAR_COLOR`].
-    pub fn new() -> Self {
+    pub fn new(target: ImportedTextureHandle) -> Self {
         Self {
             clear_color: SWAPCHAIN_CLEAR_COLOR,
+            target,
         }
     }
 
     /// Full control over the clear color (HDR or branding).
-    pub fn with_clear_color(clear_color: wgpu::Color) -> Self {
-        Self { clear_color }
-    }
-}
-
-impl Default for SwapchainClearPass {
-    fn default() -> Self {
-        Self::new()
+    pub fn with_clear_color(target: ImportedTextureHandle, clear_color: wgpu::Color) -> Self {
+        Self {
+            clear_color,
+            target,
+        }
     }
 }
 
@@ -39,11 +38,17 @@ impl RenderPass for SwapchainClearPass {
         "SwapchainClear"
     }
 
-    fn resources(&self) -> PassResources {
-        PassResources {
-            reads: Vec::new(),
-            writes: vec![ResourceSlot::Backbuffer],
-        }
+    fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+        let mut r = b.raster();
+        r.color(
+            self.target,
+            wgpu::Operations {
+                load: wgpu::LoadOp::Clear(self.clear_color),
+                store: wgpu::StoreOp::Store,
+            },
+            Option::<ImportedTextureHandle>::None,
+        );
+        Ok(())
     }
 
     fn execute(&mut self, ctx: &mut RenderPassContext<'_>) -> Result<(), RenderPassError> {
