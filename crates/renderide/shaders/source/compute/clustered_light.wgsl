@@ -43,12 +43,12 @@ struct ClusterParams {
 @group(0) @binding(2) var<storage, read_write> cluster_light_counts: array<u32>;
 @group(0) @binding(3) var<storage, read_write> cluster_light_indices: array<u32>;
 
-const MAX_LIGHTS_PER_TILE: u32 = 32u;
+const MAX_LIGHTS_PER_TILE: u32 = 64u;
 
 /// Inflate the cull radius so the tile band at exactly `range` (where windowed falloff lands on zero)
 /// is also reachable from neighboring tiles — kills any residual hard step at the cluster boundary
 /// without admitting visibly more lights per tile.
-const CULL_RADIUS_INFLATION: f32 = 1.05;
+const CULL_RADIUS_INFLATION: f32 = 1.15;
 
 struct TileAabb {
     min_v: vec3f,
@@ -76,10 +76,14 @@ fn get_cluster_aabb(cluster_x: u32, cluster_y: u32, cluster_z: u32) -> TileAabb 
     let tile_near = -near * pow(far / near, z / num_z);
     let tile_far = -near * pow(far / near, (z + 1.0) / num_z);
 
-    let px_min = f32(cluster_x * params.tile_size) + 0.5;
-    let px_max = f32((cluster_x + 1u) * params.tile_size) - 0.5;
-    let py_min = f32(cluster_y * params.tile_size) + 0.5;
-    let py_max = f32((cluster_y + 1u) * params.tile_size) - 0.5;
+    // Use integer-pixel tile bounds (no 0.5 inset) so the AABB covers the exact pixel range that
+    // `cluster_xy_from_frag` in `pbs_cluster.wgsl` assigns to this tile. A prior 0.5-pixel inset on
+    // both edges left a 1-pixel-wide band of fragments that mapped to this tile but fell outside
+    // this AABB — producing visibly pixelated seams where lights reach the neighbor's AABB only.
+    let px_min = f32(cluster_x * params.tile_size);
+    let px_max = min(f32((cluster_x + 1u) * params.tile_size), w);
+    let py_min = f32(cluster_y * params.tile_size);
+    let py_max = min(f32((cluster_y + 1u) * params.tile_size), h);
     let ndc_left = 2.0 * px_min / w - 1.0;
     let ndc_right = 2.0 * px_max / w - 1.0;
     let ndc_top = 1.0 - 2.0 * py_min / h;

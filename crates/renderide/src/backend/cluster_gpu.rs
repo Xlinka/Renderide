@@ -10,9 +10,12 @@ use crate::gpu::GpuLimits;
 /// Screen tile size in pixels (DOOM-style cluster grid XY).
 pub const TILE_SIZE: u32 = 16;
 /// Exponential depth slice count (view-space Z bins).
-pub const CLUSTER_COUNT_Z: u32 = 24;
-/// Maximum lights assigned to a single cluster (buffer index order).
-pub const MAX_LIGHTS_PER_TILE: u32 = 32;
+pub const CLUSTER_COUNT_Z: u32 = 32;
+/// Maximum lights assigned to a single cluster (buffer index order). Keep in sync with
+/// `MAX_LIGHTS_PER_TILE` in `shaders/source/modules/pbs_cluster.wgsl` and
+/// `shaders/source/compute/clustered_light.wgsl`. Bumped from 32 to reduce far-cluster overflow
+/// that produced dark "splotches" in scenes with many lights.
+pub const MAX_LIGHTS_PER_TILE: u32 = 64;
 /// Uniform buffer size for clustered light compute `ClusterParams` (WGSL layout + tail padding).
 pub const CLUSTER_PARAMS_UNIFORM_SIZE: u64 = 256;
 
