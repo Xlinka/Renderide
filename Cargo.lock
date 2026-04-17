@@ -1236,11 +1236,10 @@ name = "interprocess"
 version = "0.1.0"
 dependencies = [
  "base64",
- "bytemuck",
  "libc",
  "memmap2",
- "thiserror 2.0.18",
  "sha2",
+ "thiserror 2.0.18",
  "windows-sys 0.61.2",
 ]
 

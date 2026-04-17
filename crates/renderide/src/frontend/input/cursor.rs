@@ -63,7 +63,11 @@ pub fn apply_per_frame_cursor_lock_when_locked(
     Ok(())
 }
 
-/// apply_per_frame_cursor_lock_when_locked breaks most mouse input on macOS.
+/// Host cursor lock without per-frame warping.
+///
+/// On macOS this is intentionally a no-op: reapplying center warps every frame breaks relative mouse
+/// input with winit. Grab and visibility for [`OutputState::lock_cursor`] are still applied from
+/// [`apply_output_state_to_window`]; only continuous re-centering is omitted.
 #[cfg(target_os = "macos")]
 pub fn apply_per_frame_cursor_lock_when_locked(
     _window: &Window,
@@ -74,7 +78,8 @@ pub fn apply_per_frame_cursor_lock_when_locked(
 }
 
 /// Applies host [`OutputState`] to the winit window (IME, grab transitions, warps). Use
-/// [`apply_per_frame_cursor_lock_when_locked`] each frame while locked for continuous re-centering.
+/// [`apply_per_frame_cursor_lock_when_locked`] each frame while locked for continuous re-centering
+/// (a no-op on macOS; see that function’s documentation).
 pub fn apply_output_state_to_window(
     window: &Window,
     state: &OutputState,
