@@ -757,8 +757,6 @@ fn encode_msaa_depth_resolve_for_frame(
 
 /// MSAA views resolved from the graph's transient resources for one forward pass execution.
 pub(super) struct ForwardMsaaResolvedViews {
-    /// Multisampled color attachment view.
-    pub color_view: wgpu::TextureView,
     /// Multisampled depth attachment view.
     pub depth_view: wgpu::TextureView,
     /// R32Float intermediate used by the MSAA depth resolve shader.
@@ -782,7 +780,7 @@ pub(super) fn resolve_forward_msaa_views(
         return None;
     }
     let graph_resources = graph_resources?;
-    let color = graph_resources.transient_texture(resources.msaa_color)?;
+    graph_resources.transient_texture(resources.msaa_color)?;
     let depth = graph_resources.transient_texture(resources.msaa_depth)?;
     let r32 = graph_resources.transient_texture(resources.msaa_depth_r32)?;
 
@@ -790,7 +788,6 @@ pub(super) fn resolve_forward_msaa_views(
         let depth_layers = first_two_layer_views(depth)?;
         let r32_layers = first_two_layer_views(r32)?;
         Some(ForwardMsaaResolvedViews {
-            color_view: color.view.clone(),
             depth_view: depth.view.clone(),
             depth_resolve_r32_view: r32.view.clone(),
             is_array: true,
@@ -799,7 +796,6 @@ pub(super) fn resolve_forward_msaa_views(
         })
     } else {
         Some(ForwardMsaaResolvedViews {
-            color_view: color.view.clone(),
             depth_view: depth.view.clone(),
             depth_resolve_r32_view: r32.view.clone(),
             is_array: false,

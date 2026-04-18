@@ -112,23 +112,6 @@ pub struct MsaaStereoTargets {
     pub color_format: wgpu::TextureFormat,
 }
 
-/// Single-sample `R32Float` 2-layer array temp used when resolving the stereo MSAA depth.
-///
-/// The compute pass writes per eye via `layer_views`; the fullscreen multiview blit samples the
-/// whole `D2Array` via `array_view` and writes into the stereo `Depth32Float` target.
-pub(crate) struct MsaaStereoDepthResolveR32 {
-    /// Owning 2-layer `R32Float` texture. Kept to document ownership and anchor lifetime of the
-    /// derived views; wgpu refcounts the underlying object so the field is intentionally not read.
-    #[allow(dead_code)]
-    pub(crate) texture: wgpu::Texture,
-    /// `D2Array` sampled view for the multiview blit source.
-    pub(crate) array_view: wgpu::TextureView,
-    /// Per-eye (`D2`, single-layer) storage views for the compute pass.
-    pub(crate) layer_views: [wgpu::TextureView; 2],
-    /// Pixel extent per eye `(width, height)`.
-    pub(crate) extent: (u32, u32),
-}
-
 /// GPU stack for presentation and future render passes.
 pub struct GpuContext {
     /// Adapter metadata from construction (for diagnostics).
@@ -165,8 +148,6 @@ pub struct GpuContext {
     /// Single-sample R32Float resolve temp for MSAA depth → depth blit ([`crate::gpu::MsaaDepthResolveResources`]).
     msaa_depth_resolve_r32: Option<(wgpu::Texture, wgpu::TextureView)>,
     msaa_depth_resolve_r32_extent: (u32, u32),
-    /// Stereo R32Float resolve temp (2 layers) for MSAA depth → stereo depth blit.
-    msaa_stereo_depth_resolve_r32: Option<MsaaStereoDepthResolveR32>,
     /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
     frame_timing: FrameCpuGpuTimingHandle,
 }
@@ -307,7 +288,6 @@ impl GpuContext {
             msaa_stereo_targets: None,
             msaa_depth_resolve_r32: None,
             msaa_depth_resolve_r32_extent: (0, 0),
-            msaa_stereo_depth_resolve_r32: None,
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -375,7 +355,6 @@ impl GpuContext {
             msaa_stereo_targets: None,
             msaa_depth_resolve_r32: None,
             msaa_depth_resolve_r32_extent: (0, 0),
-            msaa_stereo_depth_resolve_r32: None,
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -422,13 +401,12 @@ impl GpuContext {
         self.msaa_depth_resolve_r32_extent = (0, 0);
     }
 
-    /// Frees the stereo MSAA color + depth targets and R32F resolve temp.
+    /// Frees the stereo MSAA color + depth targets.
     ///
     /// Call when the OpenXR swapchain is recreated (resolution change, loss) so the next frame
     /// reallocates at the correct extent.
     pub fn reset_msaa_stereo_targets(&mut self) {
         self.msaa_stereo_targets = None;
-        self.msaa_stereo_depth_resolve_r32 = None;
     }
 
     /// Borrows the configured surface for acquire/submit.
@@ -716,16 +694,6 @@ impl GpuContext {
         self.msaa_targets.as_ref()
     }
 
-    /// View of the R32F MSAA depth resolve temp when [`Self::ensure_msaa_depth_resolve_r32_view`] has run.
-    pub(crate) fn msaa_depth_resolve_r32_view_ref(&self) -> Option<&wgpu::TextureView> {
-        self.msaa_depth_resolve_r32.as_ref().map(|(_, v)| v)
-    }
-
-    /// Multisampled targets when MSAA is active for the swapchain path.
-    pub(crate) fn msaa_targets_ref(&self) -> Option<&MsaaTargets> {
-        self.msaa_targets.as_ref()
-    }
-
     /// Ensures 2-layer (D2Array) multisampled color/depth targets for the OpenXR stereo path.
     ///
     /// - `requested_samples` is clamped against [`Self::msaa_supported_sample_counts_stereo`].
@@ -813,69 +781,6 @@ impl GpuContext {
             });
         }
         self.msaa_stereo_targets.as_ref()
-    }
-
-    /// Ensures a 2-layer [`wgpu::TextureFormat::R32Float`] temp for stereo MSAA depth resolve.
-    ///
-    /// Matches the per-eye extent of [`Self::ensure_msaa_stereo_targets`]; reallocates on size change.
-    pub(crate) fn ensure_msaa_stereo_depth_resolve(
-        &mut self,
-        extent: (u32, u32),
-    ) -> Option<&MsaaStereoDepthResolveR32> {
-        let w = extent.0.max(1);
-        let h = extent.1.max(1);
-        let needs = self
-            .msaa_stereo_depth_resolve_r32
-            .as_ref()
-            .is_none_or(|r| r.extent != (w, h));
-        if needs {
-            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-depth-resolve-r32-stereo"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 2,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let array_view = texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("renderide-msaa-depth-resolve-r32-stereo-array"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(2),
-                ..Default::default()
-            });
-            let layer_views = [0u32, 1u32].map(|layer| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some("renderide-msaa-depth-resolve-r32-stereo-layer"),
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
-            });
-            self.msaa_stereo_depth_resolve_r32 = Some(MsaaStereoDepthResolveR32 {
-                texture,
-                array_view,
-                layer_views,
-                extent: (w, h),
-            });
-        }
-        self.msaa_stereo_depth_resolve_r32.as_ref()
-    }
-
-    /// Multisampled 2-layer targets when stereo MSAA is active for the OpenXR path.
-    pub(crate) fn msaa_stereo_targets_ref(&self) -> Option<&MsaaStereoTargets> {
-        self.msaa_stereo_targets.as_ref()
-    }
-
-    /// R32F resolve temp for stereo MSAA depth when [`Self::ensure_msaa_stereo_depth_resolve`] has run.
-    pub(crate) fn msaa_stereo_depth_resolve_ref(&self) -> Option<&MsaaStereoDepthResolveR32> {
-        self.msaa_stereo_depth_resolve_r32.as_ref()
     }
 
     /// Ensures a [`wgpu::TextureFormat::Depth32Float`] attachment exists for the current surface extent.

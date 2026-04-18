@@ -1,11 +1,29 @@
 //! Per–render-space state mirrored from [`crate::shared::RenderSpaceUpdate`].
 
 use super::render_overrides::{RenderMaterialOverrideEntry, RenderTransformOverrideEntry};
-use crate::shared::{RenderSpaceUpdate, RenderTransform};
+use crate::shared::{LayerType, RenderSpaceUpdate, RenderTransform};
 
 use super::camera_apply::CameraRenderableEntry;
 use super::ids::RenderSpaceId;
 use super::mesh_renderable::{SkinnedMeshRenderer, StaticMeshRenderer};
+
+/// One host layer component / assignment anchored to a transform node.
+#[derive(Debug, Clone, Copy)]
+pub struct LayerAssignmentEntry {
+    /// Dense transform index the layer assignment is attached to.
+    pub node_id: i32,
+    /// Host layer value inherited by descendant renderers until another assignment overrides it.
+    pub layer: LayerType,
+}
+
+impl Default for LayerAssignmentEntry {
+    fn default() -> Self {
+        Self {
+            node_id: -1,
+            layer: LayerType::Hidden,
+        }
+    }
+}
 
 /// One host render space: flags, root/view TRS, dense transform arena, and mesh renderable tables.
 #[derive(Debug)]
@@ -36,6 +54,8 @@ pub struct RenderSpaceState {
     pub skinned_mesh_renderers: Vec<SkinnedMeshRenderer>,
     /// Host camera components (secondary cameras, render texture targets).
     pub cameras: Vec<CameraRenderableEntry>,
+    /// Host layer components. Resolved onto mesh renderers each frame by closest ancestor.
+    pub layer_assignments: Vec<LayerAssignmentEntry>,
     /// Render-context-local transform substitutions from the host.
     pub render_transform_overrides: Vec<RenderTransformOverrideEntry>,
     /// Render-context-local material substitutions from the host.
@@ -75,6 +95,7 @@ impl Default for RenderSpaceState {
             static_mesh_renderers: Vec::new(),
             skinned_mesh_renderers: Vec::new(),
             cameras: Vec::new(),
+            layer_assignments: Vec::new(),
             render_transform_overrides: Vec::new(),
             render_material_overrides: Vec::new(),
         }

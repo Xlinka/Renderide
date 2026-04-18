@@ -65,13 +65,14 @@ fn collect_deform_work_for_space(
     scene: &SceneCoordinator,
     mesh_pool: &MeshPool,
     space_id: RenderSpaceId,
-) -> Vec<DeformWorkItem> {
-    let mut work = Vec::new();
+    work: &mut Vec<DeformWorkItem>,
+) {
+    work.clear();
     let Some(space) = scene.space(space_id) else {
-        return work;
+        return;
     };
     if !space.is_active {
-        return work;
+        return;
     }
     for r in &space.static_mesh_renderers {
         if r.mesh_asset_id < 0 {
@@ -114,7 +115,6 @@ fn collect_deform_work_for_space(
             blend_weights: r.blend_shape_weights.clone(),
         });
     }
-    work
 }
 
 impl RenderPass for MeshDeformPass {
@@ -156,23 +156,38 @@ impl RenderPass for MeshDeformPass {
                     .saturating_add(space.skinned_mesh_renderers.len());
             }
         }
-        // Scope `scene` + `mesh_pool` so the rayon closure only captures `Sync` refs, not
-        // [`crate::backend::RenderBackend`] (contains `RefCell`, imgui, non-`Sync` graph passes).
-        let work: Vec<DeformWorkItem> = {
+        self.mesh_deform_space_ids_scratch.clear();
+        self.mesh_deform_space_ids_scratch
+            .extend(frame.scene.render_space_ids());
+        let space_count = self.mesh_deform_space_ids_scratch.len();
+        if self.mesh_deform_chunks_scratch.len() < space_count {
+            self.mesh_deform_chunks_scratch
+                .resize_with(space_count, Vec::new);
+        } else {
+            self.mesh_deform_chunks_scratch.truncate(space_count);
+        }
+
+        {
+            let space_ids = &self.mesh_deform_space_ids_scratch;
+            let chunks = &mut self.mesh_deform_chunks_scratch;
             let scene = frame.scene;
             let mesh_pool = frame.backend.mesh_pool();
-            let space_ids: Vec<RenderSpaceId> = scene.render_space_ids().collect();
-            let work_chunks: Vec<Vec<DeformWorkItem>> = space_ids
+            // Scope `scene` + `mesh_pool` so the rayon closure only captures `Sync` refs, not
+            // [`crate::backend::RenderBackend`] (contains `RefCell`, imgui, non-`Sync` graph passes).
+            space_ids
                 .par_iter()
                 .copied()
-                .map(|space_id| collect_deform_work_for_space(scene, mesh_pool, space_id))
-                .collect();
-            let mut work: Vec<DeformWorkItem> = Vec::with_capacity(est);
-            for chunk in work_chunks {
-                work.extend(chunk);
-            }
-            work
-        };
+                .zip(chunks.par_iter_mut())
+                .for_each(|(space_id, chunk)| {
+                    collect_deform_work_for_space(scene, mesh_pool, space_id, chunk);
+                });
+        }
+
+        self.mesh_deform_work_scratch.clear();
+        self.mesh_deform_work_scratch.reserve(est);
+        for chunk in &mut self.mesh_deform_chunks_scratch {
+            self.mesh_deform_work_scratch.append(chunk);
+        }
 
         let skin_cache_ptr = frame
             .backend
@@ -181,6 +196,7 @@ impl RenderPass for MeshDeformPass {
             .map(|c| c as *mut GpuSkinCache);
 
         let Some((pre, scratch)) = frame.backend.mesh_deform_pre_and_scratch() else {
+            self.mesh_deform_work_scratch.clear();
             return Ok(());
         };
 
@@ -196,10 +212,11 @@ impl RenderPass for MeshDeformPass {
         let head_output_transform = frame.host_camera.head_output_transform;
 
         let Some(skin_cache_raw) = skin_cache_ptr else {
+            self.mesh_deform_work_scratch.clear();
             return Ok(());
         };
 
-        for item in work {
+        for item in self.mesh_deform_work_scratch.drain(..) {
             let need = EntryNeed {
                 needs_blend: deform_needs_blend_snapshot(&item.mesh),
                 needs_skin: deform_needs_skin_snapshot(&item.mesh, item.skinned.as_deref()),

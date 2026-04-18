@@ -7,7 +7,7 @@ use glam::Mat4;
 
 use crate::assets::material::MaterialPropertyLookupIds;
 use crate::materials::{MaterialBlendMode, MaterialRenderState, RasterPipelineKind};
-use crate::scene::{MeshMaterialSlot, RenderSpaceId, StaticMeshRenderer};
+use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};
 
 /// Selective / exclude transform lists for secondary cameras (Unity `CameraRenderer.Render` semantics).
 #[derive(Clone, Debug, Default)]
@@ -28,6 +28,57 @@ impl CameraTransformDrawFilter {
             !self.exclude.contains(&node_id)
         }
     }
+
+    /// Returns `true` if `node_id` should be rendered, treating filter entries as transform roots.
+    ///
+    /// Host camera selective/exclude lists are transform ids. Dashboard and UI cameras commonly list
+    /// a parent transform, so child renderers must inherit that decision.
+    pub fn passes_scene_node(
+        &self,
+        scene: &SceneCoordinator,
+        space_id: RenderSpaceId,
+        node_id: i32,
+    ) -> bool {
+        if let Some(only) = &self.only {
+            if only.is_empty() {
+                return false;
+            }
+            node_or_ancestor_in_set(scene, space_id, node_id, only)
+        } else {
+            if self.exclude.is_empty() {
+                return true;
+            }
+            !node_or_ancestor_in_set(scene, space_id, node_id, &self.exclude)
+        }
+    }
+}
+
+fn node_or_ancestor_in_set(
+    scene: &SceneCoordinator,
+    space_id: RenderSpaceId,
+    node_id: i32,
+    set: &HashSet<i32>,
+) -> bool {
+    if node_id < 0 || set.is_empty() {
+        return false;
+    }
+    let Some(space) = scene.space(space_id) else {
+        return false;
+    };
+    let mut cursor = node_id;
+    for _ in 0..space.nodes.len() {
+        if set.contains(&cursor) {
+            return true;
+        }
+        let Some(&parent) = space.node_parents.get(cursor as usize) else {
+            return false;
+        };
+        if parent < 0 || parent == cursor || parent as usize >= space.nodes.len() {
+            return false;
+        }
+        cursor = parent;
+    }
+    false
 }
 
 /// Builds a filter from a host [`crate::scene::CameraRenderableEntry`].
@@ -151,5 +202,56 @@ pub fn resolved_material_slots<'a>(
             }]),
             None => Cow::Borrowed(&[]),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hashbrown::HashSet;
+
+    use crate::scene::{RenderSpaceId, SceneCoordinator};
+    use crate::shared::RenderTransform;
+
+    use super::CameraTransformDrawFilter;
+
+    fn seeded_scene() -> (SceneCoordinator, RenderSpaceId) {
+        let mut scene = SceneCoordinator::new();
+        let id = RenderSpaceId(17);
+        scene.test_seed_space_identity_worlds(
+            id,
+            vec![
+                RenderTransform::default(),
+                RenderTransform::default(),
+                RenderTransform::default(),
+            ],
+            vec![-1, 0, 1],
+        );
+        (scene, id)
+    }
+
+    #[test]
+    fn selective_filter_matches_descendants_of_selected_transform() {
+        let (scene, space_id) = seeded_scene();
+        let filter = CameraTransformDrawFilter {
+            only: Some(HashSet::from_iter([1])),
+            exclude: HashSet::new(),
+        };
+
+        assert!(!filter.passes_scene_node(&scene, space_id, 0));
+        assert!(filter.passes_scene_node(&scene, space_id, 1));
+        assert!(filter.passes_scene_node(&scene, space_id, 2));
+    }
+
+    #[test]
+    fn exclude_filter_matches_descendants_of_excluded_transform() {
+        let (scene, space_id) = seeded_scene();
+        let filter = CameraTransformDrawFilter {
+            only: None,
+            exclude: HashSet::from_iter([1]),
+        };
+
+        assert!(filter.passes_scene_node(&scene, space_id, 0));
+        assert!(!filter.passes_scene_node(&scene, space_id, 1));
+        assert!(!filter.passes_scene_node(&scene, space_id, 2));
     }
 }

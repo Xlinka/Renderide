@@ -13,6 +13,10 @@ use crate::shared::{FrameSubmitData, RenderSpaceUpdate};
 use super::camera_apply;
 use super::error::SceneError;
 use super::ids::RenderSpaceId;
+use super::layer_apply::{
+    apply_layer_update, fixup_layer_assignments_for_transform_removals,
+    resolve_mesh_layers_from_assignments,
+};
 use super::lights::{
     apply_light_renderables_update, apply_lights_buffer_renderers_update, LightCache, ResolvedLight,
 };
@@ -285,6 +289,11 @@ impl SceneCoordinator {
                 &transform_removals,
             )?;
         }
+        fixup_layer_assignments_for_transform_removals(space, &transform_removals);
+        if let Some(ref layer_update) = update.layers_update {
+            apply_layer_update(space, shm, layer_update, update.id)?;
+        }
+        resolve_mesh_layers_from_assignments(space);
         if let Some(ref rtu) = update.render_transform_overrides_update {
             apply_render_transform_overrides_update(
                 space,

@@ -86,7 +86,7 @@ fn push_draws_for_renderer(
     draw: StaticMeshDrawSource<'_>,
 ) {
     if let Some(f) = ctx.transform_filter {
-        if !f.passes(draw.renderer.node_id) {
+        if !f.passes_scene_node(ctx.scene, draw.space_id, draw.renderer.node_id) {
             return;
         }
     }

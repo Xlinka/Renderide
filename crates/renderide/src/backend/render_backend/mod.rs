@@ -497,20 +497,4 @@ impl RenderBackend {
         let scratch = self.mesh_deform_scratch.as_mut()?;
         Some((pre, scratch))
     }
-
-    /// Preprocess pipelines, deform scratch, and skin cache for [`crate::render_graph::passes::MeshDeformPass`].
-    ///
-    /// Single method so callers avoid overlapping borrows of [`RenderBackend`].
-    pub(crate) fn mesh_deform_pass_refs(
-        &mut self,
-    ) -> Option<(
-        &MeshPreprocessPipelines,
-        &mut MeshDeformScratch,
-        &mut GpuSkinCache,
-    )> {
-        let pre = self.mesh_preprocess.as_ref()?;
-        let scratch = self.mesh_deform_scratch.as_mut()?;
-        let skin_cache = self.frame_resources.skin_cache_mut()?;
-        Some((pre, scratch, skin_cache))
-    }
 }
