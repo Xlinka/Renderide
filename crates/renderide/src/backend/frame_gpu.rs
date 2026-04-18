@@ -45,6 +45,20 @@ pub struct FrameGpuResources {
 /// Default scene color snapshot format used when no grab pass has been triggered yet.
 const DEFAULT_SCENE_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
+/// [`wgpu::TextureAspect`] for [`wgpu::CommandEncoder::copy_texture_to_texture`] when copying depth
+/// textures.
+///
+/// Combined depth-stencil formats require [`wgpu::TextureAspect::All`] on both source and destination
+/// so the copy covers the full plane (wgpu: copy source aspects must refer to all aspects of the
+/// source texture format).
+fn depth_copy_aspect_for_texture_to_texture(format: wgpu::TextureFormat) -> wgpu::TextureAspect {
+    if format.has_stencil_aspect() {
+        wgpu::TextureAspect::All
+    } else {
+        wgpu::TextureAspect::DepthOnly
+    }
+}
+
 impl FrameGpuResources {
     /// Layout for `@group(0)`: uniform frame + lights + cluster counts + cluster indices +
     /// single-view / multiview scene depth snapshots.
@@ -578,6 +592,7 @@ impl FrameGpuResources {
             depth_or_array_layers: if multiview { 2 } else { 1 },
         };
         let format = source_depth.format();
+        let copy_aspect = depth_copy_aspect_for_texture_to_texture(format);
         if multiview {
             self.ensure_scene_depth_array(device, (width, height), format);
             encoder.copy_texture_to_texture(
@@ -585,13 +600,13 @@ impl FrameGpuResources {
                     texture: source_depth,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::DepthOnly,
+                    aspect: copy_aspect,
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.scene_depth_array.0,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::DepthOnly,
+                    aspect: copy_aspect,
                 },
                 extent,
             );
@@ -602,13 +617,13 @@ impl FrameGpuResources {
                     texture: source_depth,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::DepthOnly,
+                    aspect: copy_aspect,
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.scene_depth_2d.0,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::DepthOnly,
+                    aspect: copy_aspect,
                 },
                 extent,
             );
