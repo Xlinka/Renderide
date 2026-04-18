@@ -13,6 +13,14 @@ mod tables;
 use helpers::{default_vec4_for_field, first_float_by_pids, keyword_float_enabled_by_pid};
 use tables::default_f32_for_field;
 
+fn default_vec4_for_embedded_field(field_name: &str, ids: &StemEmbeddedPropertyIds) -> [f32; 4] {
+    let field_name = helpers::shader_writer_unescaped_field_name(field_name);
+    if ids.stem.as_ref().starts_with("unlitdistancelerp_") && field_name == "_FarColor" {
+        return [1.0, 1.0, 1.0, 1.0];
+    }
+    default_vec4_for_field(field_name)
+}
+
 /// Packs `UI_TextUnlit`-style `_TextMode`: explicit `0`/`1`/`2`, else keyword floats `MSDF` / `SDF` / `RASTER`, else `0` (MSDF default).
 fn packed_text_mode_f32(
     store: &MaterialPropertyStore,
@@ -214,7 +222,7 @@ pub(crate) fn build_embedded_uniform_bytes(
         let pid = *ids.uniform_field_ids.get(field_name)?;
         match field.kind {
             ReflectedUniformScalarKind::Vec4 => {
-                let default = default_vec4_for_field(field_name);
+                let default = default_vec4_for_embedded_field(field_name, ids);
                 let mut v = default;
                 if let Some(MaterialPropertyValue::Float4(c)) = store.get_merged(lookup, pid) {
                     v = *c;
@@ -491,6 +499,7 @@ mod text_uniform_packing_tests {
             [1.0, 1.0, 1.0, 0.5]
         );
         assert_eq!(default_vec4_for_field("_Rect"), [0.0, 0.0, 1.0, 1.0]);
+        assert_eq!(default_vec4_for_field("_Point"), [0.0, 0.0, 0.0, 0.0]);
         assert_eq!(default_vec4_for_field("_OverlayTint"), [1.0, 1.0, 1.0, 0.5]);
         assert_eq!(
             default_vec4_for_field("_BehindFarColor"),
@@ -501,6 +510,14 @@ mod text_uniform_packing_tests {
             2.0
         );
         assert_eq!(default_f32_for_field("_Exp", &store, lookup(5), &ids), 1.0);
+        assert_eq!(
+            default_f32_for_field("_Distance", &store, lookup(5), &ids),
+            1.0
+        );
+        assert_eq!(
+            default_f32_for_field("_Transition", &store, lookup(5), &ids),
+            0.1
+        );
         assert_eq!(
             default_f32_for_field("_GammaCurve", &store, lookup(5), &ids),
             2.2
@@ -517,6 +534,23 @@ mod text_uniform_packing_tests {
         assert_eq!(
             default_f32_for_field("_ColorMask", &store, lookup(5), &ids),
             15.0
+        );
+    }
+
+    #[test]
+    fn unlit_distance_lerp_far_color_defaults_to_white() {
+        let reg = PropertyIdRegistry::new();
+        let generic_ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let distance_lerp_ids =
+            StemEmbeddedPropertyIds::minimal_for_tests_with_stem(&reg, "unlitdistancelerp_default");
+
+        assert_eq!(
+            default_vec4_for_embedded_field("_FarColor", &generic_ids),
+            [0.0, 0.0, 0.0, 1.0]
+        );
+        assert_eq!(
+            default_vec4_for_embedded_field("_FarColor", &distance_lerp_ids),
+            [1.0, 1.0, 1.0, 1.0]
         );
     }
 

@@ -176,6 +176,8 @@ pub(super) fn default_f32_for_field(
         | "_SrcBlendBase"
         | "_SrcBlendAdd" => 1.0,
         "_Exp" | "_Exp0" | "_Exp1" | "_PolarPow" | "_LerpPolarPow" => 1.0,
+        "_Distance" => 1.0,
+        "_Transition" => 0.1,
         "_MaxIntensity" => 4.0,
         "_Parallax" => 0.02,
         "_GammaCurve" => 2.2,

@@ -348,6 +348,14 @@ mod tests {
     }
 
     #[test]
+    fn resolves_unlit_distance_lerp_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("UnlitDistanceLerp").as_deref(),
+            Some("unlitdistancelerp_default")
+        );
+    }
+
+    #[test]
     fn resolves_xiexe_toon2_cutout_from_shader_lab_name() {
         assert_eq!(
             embedded_default_stem_for_unity_name("Xiexe/Toon2.0/XSToon2.0_Cutout").as_deref(),
