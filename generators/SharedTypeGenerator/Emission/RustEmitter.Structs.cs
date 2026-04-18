@@ -55,7 +55,7 @@ public partial class RustEmitter
         {
             using (_w.BeginMethod("pack", "", null, ["&mut self", "packer: &mut MemoryPacker<'_>"], isPublic: false))
                 PackEmitter.EmitExplicitPack(_w, _logger, type.CSharpName, orderedFields, needsTrailingPadding ? type.PaddingBytes : 0);
-            using (_w.BeginMethod("unpack", "", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
+            using (_w.BeginMethod("unpack", "Result<(), WireDecodeError>", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
                 PackEmitter.EmitExplicitUnpack(_w, _logger, type.CSharpName, orderedFields, needsTrailingPadding ? type.PaddingBytes : 0);
         }
 
@@ -95,7 +95,7 @@ public partial class RustEmitter
         {
             using (_w.BeginMethod("pack", "", null, ["&mut self", "packer: &mut MemoryPacker<'_>"], isPublic: false))
                 PackEmitter.EmitPack(_w, _logger, type.CSharpName, type.PackSteps, type.Fields);
-            using (_w.BeginMethod("unpack", "", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
+            using (_w.BeginMethod("unpack", "Result<(), WireDecodeError>", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
                 PackEmitter.EmitUnpack(_w, _logger, type.CSharpName, type.PackSteps, type.Fields, type.UnpackOnlySteps);
         }
     }
@@ -129,7 +129,7 @@ public partial class RustEmitter
             {
                 using (_w.BeginMethod("pack", "", null, ["&mut self", "packer: &mut MemoryPacker<'_>"], isPublic: false))
                     PackEmitter.EmitPack(_w, _logger, type.CSharpName, type.PackSteps, type.Fields);
-                using (_w.BeginMethod("unpack", "", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
+                using (_w.BeginMethod("unpack", "Result<(), WireDecodeError>", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
                     PackEmitter.EmitUnpack(_w, _logger, type.CSharpName, type.PackSteps, type.Fields, type.UnpackOnlySteps);
             }
         }

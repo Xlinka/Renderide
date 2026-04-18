@@ -257,17 +257,15 @@ mod tests {
     #[test]
     fn parse_host_command_renderer_args() {
         let cmd = parse_host_command("-QueueName q -QueueCapacity 4096");
-        if let HostCommand::StartRenderer(args) = cmd {
-            assert_eq!(
-                args,
-                vec!["-QueueName", "q", "-QueueCapacity", "4096"]
-                    .into_iter()
-                    .map(String::from)
-                    .collect::<Vec<_>>()
-            );
-        } else {
-            panic!("expected StartRenderer, got {cmd:?}");
-        }
+        assert!(matches!(
+            cmd,
+            HostCommand::StartRenderer(ref args)
+                if args
+                    == &vec!["-QueueName", "q", "-QueueCapacity", "4096"]
+                        .into_iter()
+                        .map(String::from)
+                        .collect::<Vec<_>>()
+        ));
     }
 
     #[test]

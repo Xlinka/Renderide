@@ -60,7 +60,7 @@ impl BootstrapQueues {
             BOOTSTRAP_QUEUE_CAPACITY,
             true,
         )
-        .map_err(|e| BootstrapError::Interprocess(format!("incoming queue options: {e}")))?;
+        .map_err(BootstrapError::QueueOptionsInvalid)?;
 
         let outgoing_opts = QueueOptions::with_path_and_destroy(
             &outgoing_name,
@@ -68,15 +68,11 @@ impl BootstrapQueues {
             BOOTSTRAP_QUEUE_CAPACITY,
             true,
         )
-        .map_err(|e| BootstrapError::Interprocess(format!("outgoing queue options: {e}")))?;
+        .map_err(BootstrapError::QueueOptionsInvalid)?;
 
         let factory = QueueFactory::new();
-        let incoming = factory
-            .create_subscriber(incoming_opts)
-            .map_err(|e| BootstrapError::Interprocess(format!("create_subscriber: {e}")))?;
-        let outgoing = factory
-            .create_publisher(outgoing_opts)
-            .map_err(|e| BootstrapError::Interprocess(format!("create_publisher: {e}")))?;
+        let incoming = factory.create_subscriber(incoming_opts)?;
+        let outgoing = factory.create_publisher(outgoing_opts)?;
 
         Ok(Self { incoming, outgoing })
     }

@@ -21,7 +21,7 @@ pub fn unpack_appended_shader_logical_name(trailing: &[u8]) -> Option<String> {
     }
     let mut pool = DefaultEntityPool;
     let mut unpacker = MemoryUnpacker::new(trailing, &mut pool);
-    unpacker.read_str()
+    unpacker.read_str().ok().flatten()
 }
 
 #[cfg(test)]
@@ -50,7 +50,9 @@ mod tests {
         let mut pool = DefaultEntityPool;
         let mut unpacker = MemoryUnpacker::new(&buf[..after_upload], &mut pool);
         let mut decoded = ShaderUpload::default();
-        decoded.unpack(&mut unpacker);
+        decoded
+            .unpack(&mut unpacker)
+            .expect("unpack stock ShaderUpload");
         assert_eq!(decoded.asset_id, 9);
         assert_eq!(
             unpack_appended_shader_logical_name(&buf[after_upload..payload_len]).as_deref(),

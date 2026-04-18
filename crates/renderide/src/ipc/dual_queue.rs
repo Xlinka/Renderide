@@ -9,7 +9,7 @@ use crate::connection::{publisher_queue_name, subscriber_queue_name, ConnectionP
 use crate::shared::{
     decode_renderer_command, default_entity_pool::DefaultEntityPool, memory_packer::MemoryPacker,
     memory_unpacker::MemoryUnpacker, polymorphic_memory_packable_entity::PolymorphicEncode,
-    PolymorphicDecodeError, RendererCommand,
+    RendererCommand, WireDecodeError,
 };
 
 const SEND_BUFFER_CAP: usize = 65536;
@@ -23,6 +23,8 @@ pub struct DualQueueIpc {
     background_subscriber: Subscriber,
     primary_publisher: Publisher,
     background_publisher: Publisher,
+    /// Reused across [`Self::poll_into`] calls so optional heap types during decode do not allocate a fresh pool each message.
+    entity_pool: DefaultEntityPool,
     send_buffer: Vec<u8>,
     /// Count of dropped primary sends since last successful send (consecutive backpressure).
     primary_drops_since_log: u32,
@@ -49,6 +51,7 @@ impl DualQueueIpc {
             background_subscriber: background_sub,
             primary_publisher: primary_pub,
             background_publisher: background_pub,
+            entity_pool: DefaultEntityPool,
             send_buffer: vec![0u8; SEND_BUFFER_CAP],
             primary_drops_since_log: 0,
             background_drops_since_log: 0,
@@ -83,13 +86,13 @@ impl DualQueueIpc {
         self.background_drops_since_log
     }
 
-    /// Drains both subscribers and returns decoded commands (Primary first, then Background; each
-    /// channel fully drained in order).
-    pub fn poll(&mut self) -> Vec<RendererCommand> {
-        let mut commands = Vec::new();
-        drain_subscriber(&mut self.primary_subscriber, &mut commands);
-        drain_subscriber(&mut self.background_subscriber, &mut commands);
-        commands
+    /// Drains both subscribers into `out` (Primary first, then Background; each channel fully drained in order).
+    ///
+    /// Clears `out` then drains both subscribers so each tick starts from an empty batch.
+    pub fn poll_into(&mut self, out: &mut Vec<RendererCommand>) {
+        out.clear();
+        drain_subscriber(&mut self.primary_subscriber, &mut self.entity_pool, out);
+        drain_subscriber(&mut self.background_subscriber, &mut self.entity_pool, out);
     }
 
     /// Encodes and sends a command on the **Primary** publisher (frame handshake, init, etc.).
@@ -174,10 +177,13 @@ fn encode_command(cmd: &mut RendererCommand, buf: &mut [u8]) -> usize {
     total_len - packer.remaining_len()
 }
 
-fn drain_subscriber(sub: &mut Subscriber, out: &mut Vec<RendererCommand>) {
+fn drain_subscriber(
+    sub: &mut Subscriber,
+    pool: &mut DefaultEntityPool,
+    out: &mut Vec<RendererCommand>,
+) {
     while let Some(msg) = sub.try_dequeue() {
-        let mut pool = DefaultEntityPool;
-        let mut unpacker = MemoryUnpacker::new(&msg, &mut pool);
+        let mut unpacker = MemoryUnpacker::new(&msg, pool);
         match decode_renderer_command(&mut unpacker) {
             Ok(cmd) => out.push(cmd),
             Err(e) => log_invalid_renderer_command(e),
@@ -185,7 +191,7 @@ fn drain_subscriber(sub: &mut Subscriber, out: &mut Vec<RendererCommand>) {
     }
 }
 
-fn log_invalid_renderer_command(err: PolymorphicDecodeError) {
+fn log_invalid_renderer_command(err: WireDecodeError) {
     logger::warn!("IPC: dropped message ({err})");
 }
 

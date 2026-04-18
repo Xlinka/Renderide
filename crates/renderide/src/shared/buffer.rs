@@ -9,6 +9,7 @@ use super::packing::memory_packable::MemoryPackable;
 use super::packing::memory_packer::MemoryPacker;
 use super::packing::memory_packer_entity_pool::MemoryPackerEntityPool;
 use super::packing::memory_unpacker::MemoryUnpacker;
+use super::packing::wire_decode_error::WireDecodeError;
 
 /// Identifies a subrange of a shared buffer: which mapping, capacity hint, start offset, and span length (all in bytes).
 #[derive(Clone, Copy, Debug, Default, Pod, Zeroable)]
@@ -40,10 +41,14 @@ impl MemoryPackable for SharedMemoryBufferDescriptor {
         packer.write(&self.length);
     }
 
-    fn unpack<P: MemoryPackerEntityPool>(&mut self, unpacker: &mut MemoryUnpacker<'_, '_, P>) {
-        self.buffer_id = unpacker.read();
-        self.buffer_capacity = unpacker.read();
-        self.offset = unpacker.read();
-        self.length = unpacker.read();
+    fn unpack<P: MemoryPackerEntityPool>(
+        &mut self,
+        unpacker: &mut MemoryUnpacker<'_, '_, P>,
+    ) -> Result<(), WireDecodeError> {
+        self.buffer_id = unpacker.read()?;
+        self.buffer_capacity = unpacker.read()?;
+        self.offset = unpacker.read()?;
+        self.length = unpacker.read()?;
+        Ok(())
     }
 }
