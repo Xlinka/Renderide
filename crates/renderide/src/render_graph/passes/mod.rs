@@ -14,6 +14,5 @@ pub use mesh_deform::MeshDeformPass;
 pub use swapchain_clear::SwapchainClearPass;
 pub use world_mesh_forward::{
     WorldMeshDepthSnapshotPass, WorldMeshForwardDepthResolvePass, WorldMeshForwardGraphResources,
-    WorldMeshForwardIntersectPass, WorldMeshForwardOpaquePass, WorldMeshForwardPass,
-    WorldMeshForwardPreparePass,
+    WorldMeshForwardIntersectPass, WorldMeshForwardOpaquePass, WorldMeshForwardPreparePass,
 };

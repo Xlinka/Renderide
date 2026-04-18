@@ -1,6 +1,6 @@
 //! Per-draw view–projection and model matrices for world mesh forward shading.
 //!
-//! See module docs on [`super::WorldMeshForwardPass`] for VR vs overlay rules.
+//! See module docs on [`super::WorldMeshForwardOpaquePass`] for VR vs overlay rules.
 
 use glam::Mat4;
 

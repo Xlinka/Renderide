@@ -1,7 +1,7 @@
 //! Hierarchical depth (Hi-Z) occlusion culling subsystem.
 //!
 //! Owns GPU pyramid state per logical view ([`OcclusionViewId`]), CPU readback snapshots, and
-//! temporal view/projection data used by [`crate::render_graph::passes::WorldMeshForwardPass`] and
+//! temporal view/projection data used by [`crate::render_graph::passes::WorldMeshForwardOpaquePass`] and
 //! [`crate::render_graph::passes::HiZBuildPass`].
 
 use std::num::NonZeroUsize;

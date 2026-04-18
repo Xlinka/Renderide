@@ -1,6 +1,6 @@
 //! View–projection parameters for CPU frustum culling of world mesh draws.
 //!
-//! Values match [`super::passes::world_mesh_forward::WorldMeshForwardPass`] per-space `view` and
+//! Values match [`super::passes::world_mesh_forward::WorldMeshForwardOpaquePass`] per-space `view` and
 //! global projection state (`HostCameraFrame`, viewport aspect, clip planes). When
 //! [`HostCameraFrame::secondary_camera_world_to_view`] is set, frustum and Hi-Z temporal paths use
 //! that world-to-view (same as the forward pass) instead of [`view_matrix_for_world_mesh_render_space`].

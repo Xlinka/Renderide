@@ -150,7 +150,7 @@ pub struct FrameRenderParams<'a> {
     /// same pass (wgpu forbids `TEXTURE_BINDING` + `RENDER_ATTACHMENT` on one subresource); embedded
     /// bind resolves fall back to a white placeholder for this id.
     pub offscreen_write_render_texture_asset_id: Option<i32>,
-    /// When set (e.g. secondary RT cameras), [`crate::render_graph::passes::WorldMeshForwardPass`] skips
+    /// When set (e.g. secondary RT cameras), the world-mesh forward path skips
     /// draw collection and uses this list instead.
     pub prefetched_world_mesh_draws: Option<WorldMeshDrawCollection>,
     /// Prepared forward state for multi-node world-mesh forward execution.

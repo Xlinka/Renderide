@@ -8,12 +8,14 @@ mod cache;
 mod embedded_raster_pipeline;
 mod embedded_shader_stem;
 mod family;
+mod material_pass_tables;
 mod material_passes;
 mod material_property_binding;
 mod pipeline_build_error;
 mod pipeline_kind;
 pub(crate) mod raster_pipeline;
 mod registry;
+mod render_state;
 mod resolve_raster;
 mod router;
 mod wgsl;
@@ -40,13 +42,16 @@ pub use embedded_shader_stem::{
 pub use family::MaterialPipelineDesc;
 pub use material_passes::{
     default_pass, default_pass_for_blend_mode, material_blend_mode_for_lookup,
-    material_render_state_for_lookup, materialized_pass_for_blend_mode, MaterialBlendMode,
-    MaterialCullOverride, MaterialDepthOffsetState, MaterialPassDesc, MaterialPassState,
-    MaterialPipelinePropertyIds, MaterialRenderState, MaterialStencilState, COLOR_WRITES_NONE,
+    materialized_pass_for_blend_mode, MaterialBlendMode, MaterialPassDesc, MaterialPassState,
+    MaterialPipelinePropertyIds, COLOR_WRITES_NONE,
 };
 pub use material_property_binding::MaterialPropertyGpuLayout;
 pub use pipeline_build_error::PipelineBuildError;
 pub use pipeline_kind::RasterPipelineKind;
+pub use render_state::{
+    material_render_state_for_lookup, MaterialCullOverride, MaterialDepthOffsetState,
+    MaterialRenderState, MaterialStencilState,
+};
 
 /// Naga reflection: composed WGSL → `wgpu` bind layouts, uniform block layout, stem fingerprints.
 pub use wgsl_reflect::{

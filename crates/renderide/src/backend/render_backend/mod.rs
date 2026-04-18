@@ -363,7 +363,7 @@ impl RenderBackend {
         self.debug_hud.set_main_enabled(enabled);
     }
 
-    /// Whether main debug HUD is on (mesh-draw stats for [`crate::render_graph::passes::WorldMeshForwardPass`]).
+    /// Whether main debug HUD is on (mesh-draw stats for [`crate::render_graph::passes::WorldMeshForwardOpaquePass`]).
     pub(crate) fn debug_hud_main_enabled(&self) -> bool {
         self.debug_hud.main_enabled()
     }

@@ -7,8 +7,9 @@ use crate::pipelines::ShaderPermutation;
 use super::cache::{MaterialPipelineCache, MaterialPipelineSet};
 use super::embedded_shader_stem::embedded_default_stem_for_unity_name;
 use super::family::MaterialPipelineDesc;
-use super::material_passes::{MaterialBlendMode, MaterialRenderState};
+use super::material_passes::MaterialBlendMode;
 use super::pipeline_kind::RasterPipelineKind;
+use super::render_state::MaterialRenderState;
 use super::resolve_raster::resolve_raster_pipeline;
 use super::router::MaterialRouter;
 

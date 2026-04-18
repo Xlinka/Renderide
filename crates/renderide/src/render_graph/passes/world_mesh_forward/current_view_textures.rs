@@ -1,0 +1,63 @@
+//! Debug HUD: current-view 2D texture asset ids derived from sorted world-mesh draws.
+
+use crate::assets::material::MaterialPropertyStore;
+use crate::backend::EmbeddedMaterialBindResources;
+use crate::backend::RenderBackend;
+use crate::materials::RasterPipelineKind;
+use crate::render_graph::world_mesh_draw_prep::WorldMeshDrawItem;
+
+/// Texture2D asset ids bound for one embedded-stem draw (from reflection layout).
+fn per_material_texture2d_asset_ids_for_draw(
+    bind: &EmbeddedMaterialBindResources,
+    stem: &str,
+    store: &MaterialPropertyStore,
+    item: &WorldMeshDrawItem,
+) -> Vec<i32> {
+    bind.texture2d_asset_ids_for_stem(stem, store, item.lookup_ids)
+}
+
+/// Collects texture ids for embedded-stem draws in order (may contain duplicates across draws).
+fn per_pass_texture2d_asset_ids_from_draws(
+    backend: &RenderBackend,
+    draws: &[WorldMeshDrawItem],
+) -> Vec<i32> {
+    let Some(bind) = backend.embedded_material_bind() else {
+        return Vec::new();
+    };
+    let Some(registry) = backend.material_registry() else {
+        return Vec::new();
+    };
+    let store = backend.material_property_store();
+    let mut out = Vec::new();
+    for item in draws {
+        if !matches!(item.batch_key.pipeline, RasterPipelineKind::EmbeddedStem(_)) {
+            continue;
+        }
+        let Some(stem) = registry.stem_for_shader_asset(item.batch_key.shader_asset_id) else {
+            continue;
+        };
+        out.extend(per_material_texture2d_asset_ids_for_draw(
+            bind, stem, store, item,
+        ));
+    }
+    out
+}
+
+/// Stable dedupe preserving first-seen order.
+fn dedup_visible_texture_asset_ids(ids: Vec<i32>) -> Vec<i32> {
+    let mut out = Vec::new();
+    for id in ids {
+        if !out.contains(&id) {
+            out.push(id);
+        }
+    }
+    out
+}
+
+/// Asset ids for 2D textures referenced by embedded materials in the current sorted draw list.
+pub(super) fn current_view_texture2d_asset_ids_from_draws(
+    backend: &RenderBackend,
+    draws: &[WorldMeshDrawItem],
+) -> Vec<i32> {
+    dedup_visible_texture_asset_ids(per_pass_texture2d_asset_ids_from_draws(backend, draws))
+}

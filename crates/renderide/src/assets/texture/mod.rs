@@ -7,6 +7,8 @@
 mod decode;
 mod format;
 mod layout;
+#[cfg(test)]
+mod layout_tests;
 mod unpack;
 mod upload;
 

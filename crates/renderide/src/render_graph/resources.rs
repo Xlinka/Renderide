@@ -624,11 +624,39 @@ pub struct ImportedTextureDecl {
     pub final_access: TextureAccess,
 }
 
+/// Known backend [`FrameResourceManager`](crate::backend::FrameResourceManager) buffers wired into the render graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum BackendFrameBufferKind {
+    /// Packed lights storage for clustered forward.
+    Lights,
+    /// Per-tile light counts (clustered forward).
+    ClusterLightCounts,
+    /// Per-tile light index lists (clustered forward).
+    ClusterLightIndices,
+    /// Per-draw uniform slab (`@group(2)`).
+    PerDrawSlab,
+    /// Per-frame uniform buffer (`@group(0)`).
+    FrameUniforms,
+}
+
+impl BackendFrameBufferKind {
+    /// Debug label matching [`ImportedBufferDecl::label`] for this kind.
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Lights => "lights",
+            Self::ClusterLightCounts => "cluster_light_counts",
+            Self::ClusterLightIndices => "cluster_light_indices",
+            Self::PerDrawSlab => "per_draw_slab",
+            Self::FrameUniforms => "frame_uniforms",
+        }
+    }
+}
+
 /// Buffer import source.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BufferImportSource {
-    /// Backend frame resource buffer.
-    BackendFrameResource(&'static str),
+    /// Backend frame resource buffer resolved at execute time.
+    BackendFrameResource(BackendFrameBufferKind),
     /// Externally owned buffer.
     External,
     /// Ping-pong history slot.

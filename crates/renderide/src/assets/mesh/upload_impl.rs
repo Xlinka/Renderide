@@ -20,6 +20,14 @@ use super::layout::{
     MeshBufferLayout,
 };
 
+/// Tangent plus UV1–UV3 optional vertex buffers from extended stream upload.
+type ExtendedVertexStreams = (
+    Option<Arc<wgpu::Buffer>>,
+    Option<Arc<wgpu::Buffer>>,
+    Option<Arc<wgpu::Buffer>>,
+    Option<Arc<wgpu::Buffer>>,
+);
+
 /// Interleaved VB, IB, and layout-derived scalars after validation.
 pub(super) struct CoreBuffers {
     pub vb: wgpu::Buffer,
@@ -237,12 +245,7 @@ pub(super) fn upload_extended_vertex_streams(
     vc_usize: usize,
     vertex_stride_us: usize,
     vertex_attributes: &[VertexAttributeDescriptor],
-) -> (
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-) {
+) -> ExtendedVertexStreams {
     let tangent_buffer = vertex_float4_stream_bytes(
         vertex_slice,
         vc_usize,
@@ -276,12 +279,7 @@ pub(super) fn upload_default_extended_vertex_streams(
     device: &wgpu::Device,
     asset_id: i32,
     vc_usize: usize,
-) -> (
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-    Option<Arc<wgpu::Buffer>>,
-) {
+) -> ExtendedVertexStreams {
     if vc_usize == 0 {
         return (None, None, None, None);
     }

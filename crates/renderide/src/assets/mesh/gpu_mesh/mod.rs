@@ -1,20 +1,20 @@
 //! GPU-resident mesh buffers; an optional CPU vertex copy is kept only until lazy extended streams build.
 
+mod update;
+
 use std::fmt;
 use std::sync::Arc;
 
 use crate::shared::{
-    MeshUploadData, MeshUploadHintFlag, RenderBoundingBox, VertexAttributeDescriptor,
-    VertexAttributeType,
+    MeshUploadData, RenderBoundingBox, VertexAttributeDescriptor, VertexAttributeType,
 };
 use glam::Mat4;
 
 use super::layout::{
-    color_float4_stream_bytes, compute_index_count, compute_vertex_stride, extract_bind_poses,
-    extract_blendshape_offsets, extract_float3_position_normal_as_vec4_streams,
-    split_bone_weights_tail_for_gpu, synthetic_bone_data_for_blendshape_only,
-    uv0_float2_stream_bytes, vertex_float2_stream_bytes, vertex_float4_stream_bytes,
-    MeshBufferLayout,
+    color_float4_stream_bytes, extract_bind_poses, extract_blendshape_offsets,
+    extract_float3_position_normal_as_vec4_streams, split_bone_weights_tail_for_gpu,
+    synthetic_bone_data_for_blendshape_only, uv0_float2_stream_bytes, vertex_float2_stream_bytes,
+    vertex_float4_stream_bytes, MeshBufferLayout,
 };
 
 use crate::gpu::GpuLimits;
@@ -22,18 +22,15 @@ use crate::gpu::GpuLimits;
 use super::upload_impl::{
     create_core_vertex_index_buffers, extract_derived_vertex_streams, padded_sparse_bytes,
     resident_bytes_for_mesh_upload, upload_blendshape_buffer, upload_bone_and_skin_buffers,
-    upload_default_extended_vertex_streams, upload_extended_vertex_streams,
     validate_mesh_upload_layout,
 };
 
 use super::gpu_mesh_hints::{
-    blendshape_descriptor_count, derived_streams_compatible_for_in_place,
-    mesh_upload_hint_any_selective, mesh_upload_hint_touches_vertex_streams,
-    validated_submesh_ranges, wgpu_index_format,
+    blendshape_descriptor_count, derived_streams_compatible_for_in_place, validated_submesh_ranges,
 };
 
 #[derive(Clone)]
-struct ExtendedVertexStreamSource {
+pub(super) struct ExtendedVertexStreamSource {
     vertex_bytes: Arc<[u8]>,
     vertex_attributes: Arc<[VertexAttributeDescriptor]>,
 }
@@ -117,7 +114,7 @@ pub struct GpuMesh {
 }
 
 /// Validates sparse blendshape GPU buffers and scatter ranges against a fresh [`extract_blendshape_offsets`] pass.
-fn blendshape_and_deform_buffers_match_for_in_place(
+pub(super) fn blendshape_and_deform_buffers_match_for_in_place(
     mesh: &GpuMesh,
     data: &MeshUploadData,
     layout: &MeshBufferLayout,
@@ -165,7 +162,7 @@ fn blendshape_and_deform_buffers_match_for_in_place(
 }
 
 /// Real skeleton (`bone_count > 0`): validates bone buffer sizes against `layout` / split weights.
-fn compatible_for_in_place_real_skeleton(
+pub(super) fn compatible_for_in_place_real_skeleton(
     mesh: &GpuMesh,
     data: &MeshUploadData,
     layout: &MeshBufferLayout,
@@ -205,7 +202,7 @@ fn compatible_for_in_place_real_skeleton(
 }
 
 /// Blendshape-only synthetic bone layout: single bind pose + split indices/weights.
-fn compatible_for_in_place_synthetic_blendshape_skeleton(
+pub(super) fn compatible_for_in_place_synthetic_blendshape_skeleton(
     mesh: &GpuMesh,
     data: &MeshUploadData,
     vertex_slice: &[u8],
@@ -241,14 +238,14 @@ fn compatible_for_in_place_synthetic_blendshape_skeleton(
 }
 
 /// Shared host layout and GPU mesh handles for in-place mesh buffer writes (VB, IB, bones).
-struct MeshInPlaceWriteContext<'a> {
-    mesh: &'a GpuMesh,
-    queue: &'a wgpu::Queue,
-    raw: &'a [u8],
-    layout: &'a MeshBufferLayout,
-    data: &'a MeshUploadData,
-    vertex_count: usize,
-    vertex_stride: usize,
+pub(super) struct MeshInPlaceWriteContext<'a> {
+    pub(super) mesh: &'a GpuMesh,
+    pub(super) queue: &'a wgpu::Queue,
+    pub(super) raw: &'a [u8],
+    pub(super) layout: &'a MeshBufferLayout,
+    pub(super) data: &'a MeshUploadData,
+    pub(super) vertex_count: usize,
+    pub(super) vertex_stride: usize,
 }
 
 fn has_extended_vertex_attribute(attrs: &[VertexAttributeDescriptor]) -> bool {
@@ -263,7 +260,7 @@ fn has_extended_vertex_attribute(attrs: &[VertexAttributeDescriptor]) -> bool {
     })
 }
 
-fn extended_vertex_stream_source_from_raw(
+pub(super) fn extended_vertex_stream_source_from_raw(
     raw: &[u8],
     data: &MeshUploadData,
     layout: &MeshBufferLayout,
@@ -278,7 +275,7 @@ fn extended_vertex_stream_source_from_raw(
     })
 }
 
-fn extended_vertex_stream_bytes(mesh: &GpuMesh) -> u64 {
+pub(super) fn extended_vertex_stream_bytes(mesh: &GpuMesh) -> u64 {
     [
         mesh.tangent_buffer.as_ref(),
         mesh.uv1_buffer.as_ref(),
@@ -292,7 +289,7 @@ fn extended_vertex_stream_bytes(mesh: &GpuMesh) -> u64 {
 }
 
 /// Writes interleaved VB then optional derived position/normal/uv/color streams.
-fn write_in_place_vertex_and_derived_streams(
+pub(super) fn write_in_place_vertex_and_derived_streams(
     ctx: &MeshInPlaceWriteContext<'_>,
     write_vertex: bool,
 ) {
@@ -381,7 +378,7 @@ fn write_in_place_vertex_and_derived_streams(
 }
 
 /// Writes index buffer slice when `write_ib` is set.
-fn write_in_place_index_buffer(
+pub(super) fn write_in_place_index_buffer(
     mesh: &GpuMesh,
     queue: &wgpu::Queue,
     raw: &[u8],
@@ -397,7 +394,7 @@ fn write_in_place_index_buffer(
 }
 
 /// Writes bone/synthetic bone buffers from `raw` according to hint flags.
-fn write_in_place_bone_buffers(
+pub(super) fn write_in_place_bone_buffers(
     ctx: &MeshInPlaceWriteContext<'_>,
     needs_bone_buffers: bool,
     synthetic_bones: bool,
@@ -464,7 +461,7 @@ fn write_in_place_bone_buffers(
 }
 
 /// Sparse blendshape GPU buffers and CPU ranges (`write_buffer` for both storage blobs).
-fn write_in_place_blendshape_buffer(
+pub(super) fn write_in_place_blendshape_buffer(
     mesh: &GpuMesh,
     queue: &wgpu::Queue,
     raw: &[u8],
@@ -570,302 +567,6 @@ impl GpuMesh {
             has_skeleton: data.bone_count > 0,
             skinning_bind_matrices: bone_skin.skinning_bind_matrices,
             resident_bytes,
-        })
-    }
-
-    /// `true` when [`Self::positions_buffer`] and [`Self::normals_buffer`] exist for the debug mesh path.
-    pub fn debug_streams_ready(&self) -> bool {
-        self.positions_buffer.is_some() && self.normals_buffer.is_some()
-    }
-
-    /// Returns whether this mesh has every GPU stream needed to produce world-space skinned output.
-    pub fn supports_world_space_skin_deform(&self, bone_transform_indices: Option<&[i32]>) -> bool {
-        bone_transform_indices.is_some()
-            && self.has_skeleton
-            && self.normals_buffer.is_some()
-            && self.bone_indices_buffer.is_some()
-            && self.bone_weights_vec4_buffer.is_some()
-            && !self.skinning_bind_matrices.is_empty()
-    }
-
-    /// Creates tangent / UV1-3 streams the first time an embedded shader needs them.
-    pub(crate) fn ensure_extended_vertex_streams(&mut self, device: &wgpu::Device) -> bool {
-        if self.tangent_buffer.is_some()
-            && self.uv1_buffer.is_some()
-            && self.uv2_buffer.is_some()
-            && self.uv3_buffer.is_some()
-        {
-            return true;
-        }
-
-        let old_bytes = extended_vertex_stream_bytes(self);
-        let vc_usize = self.vertex_count as usize;
-        let (tangent_buffer, uv1_buffer, uv2_buffer, uv3_buffer) =
-            if let Some(source) = self.extended_vertex_stream_source.as_ref() {
-                upload_extended_vertex_streams(
-                    device,
-                    self.asset_id,
-                    source.vertex_bytes.as_ref(),
-                    vc_usize,
-                    self.vertex_stride as usize,
-                    source.vertex_attributes.as_ref(),
-                )
-            } else {
-                upload_default_extended_vertex_streams(device, self.asset_id, vc_usize)
-            };
-
-        if tangent_buffer.is_none()
-            || uv1_buffer.is_none()
-            || uv2_buffer.is_none()
-            || uv3_buffer.is_none()
-        {
-            return false;
-        }
-
-        //perf xlinka: pay the 40 bytes/vertex only for meshes that hit extended shaders.
-        self.tangent_buffer = tangent_buffer;
-        self.uv1_buffer = uv1_buffer;
-        self.uv2_buffer = uv2_buffer;
-        self.uv3_buffer = uv3_buffer;
-        let new_bytes = extended_vertex_stream_bytes(self);
-        self.resident_bytes = self
-            .resident_bytes
-            .saturating_sub(old_bytes)
-            .saturating_add(new_bytes);
-        self.extended_vertex_stream_source = None;
-        true
-    }
-
-    /// Whether `data`/`layout` match this mesh's buffer sizes and optional derived streams so we can
-    /// [`Self::write_in_place`] instead of allocating new buffers.
-    pub(crate) fn compatible_for_in_place_update(
-        &self,
-        data: &MeshUploadData,
-        layout: &MeshBufferLayout,
-        raw: &[u8],
-    ) -> bool {
-        if raw.len() < layout.total_buffer_length {
-            return false;
-        }
-        let use_blendshapes =
-            data.upload_hint.flags.blendshapes() && !data.blendshape_buffers.is_empty();
-        let vertex_stride = compute_vertex_stride(&data.vertex_attributes).max(1) as u32;
-        let index_count = compute_index_count(&data.submeshes);
-        let index_count_u32 = index_count.max(0) as u32;
-        if self.vertex_stride != vertex_stride
-            || self.vertex_count != data.vertex_count.max(0) as u32
-            || self.index_count != index_count_u32
-            || self.index_format != wgpu_index_format(data.index_buffer_format)
-        {
-            return false;
-        }
-        if self.vertex_buffer.size() != layout.vertex_size as u64
-            || self.index_buffer.size() != layout.index_buffer_length as u64
-        {
-            return false;
-        }
-
-        let vc_usize = data.vertex_count.max(0) as usize;
-        let vertex_stride_us = vertex_stride as usize;
-        let vertex_slice = &raw[..layout.vertex_size];
-
-        let needs_bone_buffers = data.bone_count > 0 || (use_blendshapes && data.vertex_count > 0);
-
-        let no_gpu_bones = self.bone_counts_buffer.is_none()
-            && self.bone_indices_buffer.is_none()
-            && self.bone_weights_vec4_buffer.is_none()
-            && self.bind_poses_buffer.is_none();
-        let no_gpu_blend = self.blendshape_sparse_buffer.is_none()
-            && self.blendshape_shape_descriptor_buffer.is_none()
-            && self.num_blendshapes == 0
-            && self.blendshape_sparse_ranges.is_empty();
-
-        let data_static = data.bone_count == 0 && !use_blendshapes;
-        let gpu_static =
-            !self.has_skeleton && self.num_blendshapes == 0 && no_gpu_bones && no_gpu_blend;
-
-        if data_static && gpu_static {
-            return derived_streams_compatible_for_in_place(
-                self,
-                vertex_slice,
-                data,
-                vc_usize,
-                vertex_stride_us,
-            );
-        }
-
-        if self.has_skeleton != (data.bone_count > 0) {
-            return false;
-        }
-
-        if !blendshape_and_deform_buffers_match_for_in_place(
-            self,
-            data,
-            layout,
-            raw,
-            use_blendshapes,
-        ) {
-            return false;
-        }
-
-        if !needs_bone_buffers {
-            if self.bone_counts_buffer.is_some()
-                || self.bind_poses_buffer.is_some()
-                || self.bone_indices_buffer.is_some()
-                || self.bone_weights_vec4_buffer.is_some()
-            {
-                return false;
-            }
-            return derived_streams_compatible_for_in_place(
-                self,
-                vertex_slice,
-                data,
-                vc_usize,
-                vertex_stride_us,
-            );
-        }
-
-        if data.bone_count > 0 {
-            return compatible_for_in_place_real_skeleton(
-                self,
-                data,
-                layout,
-                raw,
-                vc_usize,
-                vertex_stride_us,
-                vertex_slice,
-            );
-        }
-
-        if use_blendshapes && data.vertex_count > 0 {
-            return compatible_for_in_place_synthetic_blendshape_skeleton(
-                self,
-                data,
-                vertex_slice,
-                vc_usize,
-                vertex_stride_us,
-            );
-        }
-
-        false
-    }
-
-    /// Overwrites vertex, index, and optional bone/blendshape/derived stream data using
-    /// [`wgpu::Queue::write_buffer`], honoring [`MeshUploadHintFlag`] when set (otherwise full writes).
-    pub(crate) fn write_in_place(
-        &self,
-        queue: &wgpu::Queue,
-        raw: &[u8],
-        data: &MeshUploadData,
-        layout: &MeshBufferLayout,
-        hint: MeshUploadHintFlag,
-    ) -> Option<GpuMesh> {
-        let vertex_stride = compute_vertex_stride(&data.vertex_attributes).max(1) as u32;
-        let vc_usize = data.vertex_count.max(0) as usize;
-        let vertex_stride_us = vertex_stride as usize;
-
-        let use_blendshapes =
-            data.upload_hint.flags.blendshapes() && !data.blendshape_buffers.is_empty();
-        let needs_bone_buffers = data.bone_count > 0 || (use_blendshapes && data.vertex_count > 0);
-        let synthetic_bones = data.bone_count == 0 && use_blendshapes && data.vertex_count > 0;
-
-        let full = !mesh_upload_hint_any_selective(hint);
-        let write_vertex = full || mesh_upload_hint_touches_vertex_streams(hint);
-        let write_ib = full || hint.geometry();
-        let write_bone_weights = full || hint.bone_weights();
-        let write_bind_poses = full || hint.bind_poses();
-        let write_blend = full || hint.blendshapes();
-
-        let want_submeshes = validated_submesh_ranges(&data.submeshes, self.index_count);
-
-        write_in_place_vertex_and_derived_streams(
-            &MeshInPlaceWriteContext {
-                mesh: self,
-                queue,
-                raw,
-                layout,
-                data,
-                vertex_count: vc_usize,
-                vertex_stride: vertex_stride_us,
-            },
-            write_vertex,
-        );
-        write_in_place_index_buffer(self, queue, raw, layout, write_ib);
-        write_in_place_bone_buffers(
-            &MeshInPlaceWriteContext {
-                mesh: self,
-                queue,
-                raw,
-                layout,
-                data,
-                vertex_count: vc_usize,
-                vertex_stride: vertex_stride_us,
-            },
-            needs_bone_buffers,
-            synthetic_bones,
-            full,
-            write_bone_weights,
-            write_bind_poses,
-        )?;
-        write_in_place_blendshape_buffer(self, queue, raw, layout, data, write_blend)?;
-
-        let mut skinning = self.skinning_bind_matrices.clone();
-        if data.bone_count > 0 && (full || write_bind_poses) {
-            let bp_raw =
-                &raw[layout.bind_poses_start..layout.bind_poses_start + layout.bind_poses_length];
-            if let Some(arr) = extract_bind_poses(bp_raw, data.bone_count as usize) {
-                skinning = arr.iter().map(Mat4::from_cols_array_2d).collect();
-            }
-        } else if synthetic_bones && (full || write_bone_weights || write_bind_poses) {
-            let (bind_poses_arr, _, _) = synthetic_bone_data_for_blendshape_only(data.vertex_count);
-            skinning = bind_poses_arr
-                .iter()
-                .map(Mat4::from_cols_array_2d)
-                .collect();
-        }
-
-        let has_extended_gpu_streams = self.tangent_buffer.is_some()
-            && self.uv1_buffer.is_some()
-            && self.uv2_buffer.is_some()
-            && self.uv3_buffer.is_some();
-        let extended_vertex_stream_source = if write_vertex && !has_extended_gpu_streams {
-            extended_vertex_stream_source_from_raw(raw, data, layout)
-        } else if write_vertex {
-            None
-        } else {
-            self.extended_vertex_stream_source.clone()
-        };
-
-        Some(Self {
-            asset_id: self.asset_id,
-            vertex_buffer: Arc::clone(&self.vertex_buffer),
-            index_buffer: Arc::clone(&self.index_buffer),
-            index_format: self.index_format,
-            index_count: self.index_count,
-            submeshes: want_submeshes,
-            vertex_count: self.vertex_count,
-            vertex_stride: self.vertex_stride,
-            bounds: data.bounds,
-            bone_counts_buffer: self.bone_counts_buffer.clone(),
-            bone_indices_buffer: self.bone_indices_buffer.clone(),
-            bone_weights_vec4_buffer: self.bone_weights_vec4_buffer.clone(),
-            bind_poses_buffer: self.bind_poses_buffer.clone(),
-            blendshape_sparse_buffer: self.blendshape_sparse_buffer.clone(),
-            blendshape_shape_descriptor_buffer: self.blendshape_shape_descriptor_buffer.clone(),
-            blendshape_sparse_ranges: self.blendshape_sparse_ranges.clone(),
-            num_blendshapes: self.num_blendshapes,
-            positions_buffer: self.positions_buffer.clone(),
-            normals_buffer: self.normals_buffer.clone(),
-            uv0_buffer: self.uv0_buffer.clone(),
-            color_buffer: self.color_buffer.clone(),
-            tangent_buffer: self.tangent_buffer.clone(),
-            uv1_buffer: self.uv1_buffer.clone(),
-            uv2_buffer: self.uv2_buffer.clone(),
-            uv3_buffer: self.uv3_buffer.clone(),
-            extended_vertex_stream_source,
-            has_skeleton: self.has_skeleton,
-            skinning_bind_matrices: skinning,
-            resident_bytes: self.resident_bytes,
         })
     }
 }

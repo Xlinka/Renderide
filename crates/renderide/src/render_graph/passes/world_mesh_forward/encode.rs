@@ -1,4 +1,4 @@
-//! Encode indexed draws and material bind groups for [`super::WorldMeshForwardPass`].
+//! Encode indexed draws and material bind groups for graph-managed world-mesh forward passes.
 
 use crate::backend::mesh_deform::GpuSkinCache;
 use crate::backend::mesh_deform::PER_DRAW_UNIFORM_STRIDE;
@@ -284,6 +284,7 @@ fn per_draw_one_row_bind_group(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_mesh_submesh_instanced(
     rpass: &mut wgpu::RenderPass<'_>,
     item: &WorldMeshDrawItem,

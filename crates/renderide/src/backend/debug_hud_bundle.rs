@@ -72,7 +72,7 @@ impl DebugHudBundle {
         self.main_enabled = enabled;
     }
 
-    /// Whether main debug HUD is on (mesh-draw stats for [`crate::render_graph::passes::WorldMeshForwardPass`]).
+    /// Whether main debug HUD is on (mesh-draw stats for [`crate::render_graph::passes::WorldMeshForwardOpaquePass`]).
     pub(crate) fn main_enabled(&self) -> bool {
         self.main_enabled
     }

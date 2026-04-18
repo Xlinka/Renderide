@@ -5,8 +5,9 @@
 //! cull, stencil/color-write, and depth state per material.
 
 use crate::backend::{empty_material_bind_group_layout, FrameGpuResources};
-use crate::materials::material_passes::{default_pass, MaterialPassDesc, MaterialRenderState};
+use crate::materials::material_passes::{default_pass, MaterialPassDesc};
 use crate::materials::pipeline_build_error::PipelineBuildError;
+use crate::materials::MaterialRenderState;
 use crate::materials::{
     reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
     reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2, MaterialPipelineDesc,

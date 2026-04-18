@@ -39,7 +39,7 @@
 //!    host camera and [`HostCameraFrame`].
 //! 3. **Cull** — frustum and Hi-Z occlusion in [`world_mesh_cull`] (inputs to forward pass).
 //! 4. **Sort** — [`world_mesh_draw_prep`] builds draw order and batch keys.
-//! 5. **DrawPrep** — per-draw uniforms and material resolution inside [`passes::WorldMeshForwardPass`].
+//! 5. **DrawPrep** — per-draw uniforms and material resolution inside [`passes::WorldMeshForwardPreparePass`].
 //! 6. **RenderPasses** — [`CompiledRenderGraph`] runs mesh deform (logical deform outputs producer),
 //!    clustered lights, then forward (see [`default_graph_tests`] / [`build_main_graph`]); frame-global
 //!    deform runs before per-view passes at execute time ([`CompiledRenderGraph::execute_multi_view`]).
@@ -126,12 +126,12 @@ pub use ids::{GroupId, PassId};
 pub use output_depth_mode::{OutputDepthMode, OutputDepthModeError};
 pub use pass::{GroupScope, PassBuilder, PassKind, PassPhase, RenderPass};
 pub use resources::{
-    BufferAccess, BufferHandle, BufferImportSource, BufferSizePolicy, FrameTargetRole,
-    HistorySlotId, ImportSource, ImportedBufferDecl, ImportedBufferHandle, ImportedTextureDecl,
-    ImportedTextureHandle, StorageAccess, TextureAccess, TextureAttachmentResolve,
-    TextureAttachmentTarget, TextureHandle, TextureResourceHandle, TransientArrayLayers,
-    TransientBufferDesc, TransientExtent, TransientSampleCount, TransientTextureDesc,
-    TransientTextureFormat,
+    BackendFrameBufferKind, BufferAccess, BufferHandle, BufferImportSource, BufferSizePolicy,
+    FrameTargetRole, HistorySlotId, ImportSource, ImportedBufferDecl, ImportedBufferHandle,
+    ImportedTextureDecl, ImportedTextureHandle, StorageAccess, TextureAccess,
+    TextureAttachmentResolve, TextureAttachmentTarget, TextureHandle, TextureResourceHandle,
+    TransientArrayLayers, TransientBufferDesc, TransientExtent, TransientSampleCount,
+    TransientTextureDesc, TransientTextureFormat,
 };
 pub use reverse_z_depth::{
     main_forward_depth_stencil_format, MAIN_FORWARD_DEPTH_CLEAR, MAIN_FORWARD_DEPTH_COMPARE,
@@ -191,7 +191,7 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     });
     let lights = builder.import_buffer(ImportedBufferDecl {
         label: "lights",
-        source: BufferImportSource::BackendFrameResource("lights"),
+        source: BufferImportSource::BackendFrameResource(BackendFrameBufferKind::Lights),
         initial_access: BufferAccess::Storage {
             stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
             access: StorageAccess::ReadOnly,
@@ -203,7 +203,9 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     });
     let cluster_light_counts = builder.import_buffer(ImportedBufferDecl {
         label: "cluster_light_counts",
-        source: BufferImportSource::BackendFrameResource("cluster_light_counts"),
+        source: BufferImportSource::BackendFrameResource(
+            BackendFrameBufferKind::ClusterLightCounts,
+        ),
         initial_access: BufferAccess::Storage {
             stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
             access: StorageAccess::WriteOnly,
@@ -215,7 +217,9 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     });
     let cluster_light_indices = builder.import_buffer(ImportedBufferDecl {
         label: "cluster_light_indices",
-        source: BufferImportSource::BackendFrameResource("cluster_light_indices"),
+        source: BufferImportSource::BackendFrameResource(
+            BackendFrameBufferKind::ClusterLightIndices,
+        ),
         initial_access: BufferAccess::Storage {
             stages: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::FRAGMENT,
             access: StorageAccess::WriteOnly,
@@ -227,7 +231,7 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     });
     let per_draw_slab = builder.import_buffer(ImportedBufferDecl {
         label: "per_draw_slab",
-        source: BufferImportSource::BackendFrameResource("per_draw_slab"),
+        source: BufferImportSource::BackendFrameResource(BackendFrameBufferKind::PerDrawSlab),
         initial_access: BufferAccess::Storage {
             stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
             access: StorageAccess::ReadOnly,
@@ -239,7 +243,7 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     });
     let frame_uniforms = builder.import_buffer(ImportedBufferDecl {
         label: "frame_uniforms",
-        source: BufferImportSource::BackendFrameResource("frame_uniforms"),
+        source: BufferImportSource::BackendFrameResource(BackendFrameBufferKind::FrameUniforms),
         initial_access: BufferAccess::Uniform {
             stages: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
             dynamic_offset: false,
