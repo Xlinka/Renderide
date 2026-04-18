@@ -329,9 +329,13 @@ fn create_main_graph_transient_resources(
     // Multisampled forward attachments use [`TransientSampleCount::Frame`] so pool allocations match
     // the live MSAA tier; [`GraphCacheKey::msaa_sample_count`] still invalidates [`GraphCache`].
     let extent_backbuffer = TransientExtent::Backbuffer;
+    // Use [`TransientTextureFormat::FrameColor`], not [`GraphCacheKey::surface_format`]:
+    // [`build_default_main_graph`] bakes a placeholder BGRA format while the live swapchain may be
+    // RGBA (or vice versa). MSAA resolve requires the multisampled attachment and resolve target
+    // formats to match; both follow [`ResolvedView::surface_format`] at execute time.
     let forward_msaa_color = builder.create_texture(TransientTextureDesc {
         label: "forward_msaa_color",
-        format: TransientTextureFormat::Fixed(key.surface_format),
+        format: TransientTextureFormat::FrameColor,
         extent: extent_backbuffer,
         mip_levels: 1,
         sample_count: TransientSampleCount::Frame,
@@ -455,9 +459,11 @@ fn add_main_graph_passes_and_edges(
 ///
 /// Forward MSAA transients use [`TransientExtent::Backbuffer`] and [`TransientSampleCount::Frame`] so
 /// sizes match the current view at execute time (the graph is often built with
-/// [`build_default_main_graph`]'s placeholder [`GraphCacheKey::surface_extent`]). `key` still drives
-/// [`TransientTextureFormat::Fixed`] for the main surface color, fixed stereo layer count, and
-/// [`GraphCache`] identity ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
+/// [`build_default_main_graph`]'s placeholder [`GraphCacheKey::surface_extent`]). Forward MSAA
+/// color uses [`TransientTextureFormat::FrameColor`] so its format matches the live swapchain at
+/// execute time (the cache key’s surface format may not match [`build_default_main_graph`]'s
+/// hardcoded placeholder). `key` still drives fixed stereo layer count and [`GraphCache`] identity
+/// ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
 /// [`GraphCacheKey::msaa_sample_count`]). Imported sources resolve at execute time via
 /// [`crate::backend::FrameResourceManager`].
 pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
