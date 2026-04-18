@@ -1,6 +1,6 @@
 //! Desktop and OpenXR-mirror GPU bootstrap: instance, adapter, device, surface, and MSAA tier capture.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use winit::window::Window;
 
@@ -17,7 +17,7 @@ pub(super) struct GpuBootstrapParts {
     pub(super) msaa_supported_sample_counts_stereo: Vec<u32>,
     pub(super) limits: Arc<GpuLimits>,
     pub(super) device: Arc<wgpu::Device>,
-    pub(super) queue: Arc<Mutex<wgpu::Queue>>,
+    pub(super) queue: Arc<wgpu::Queue>,
     pub(super) surface: wgpu::Surface<'static>,
     pub(super) config: wgpu::SurfaceConfiguration,
 }
@@ -134,7 +134,7 @@ pub(super) async fn bootstrap_desktop(
         msaa_supported_sample_counts_stereo,
         limits,
         device,
-        queue: Arc::new(Mutex::new(queue)),
+        queue: Arc::new(queue),
         surface: surface_safe,
         config,
     })
@@ -145,7 +145,7 @@ pub(super) fn bootstrap_openxr_mirror(
     instance: &wgpu::Instance,
     adapter: &wgpu::Adapter,
     device: Arc<wgpu::Device>,
-    queue: Arc<Mutex<wgpu::Queue>>,
+    queue: Arc<wgpu::Queue>,
     window: Arc<Window>,
     vsync: bool,
 ) -> Result<GpuBootstrapParts, GpuError> {

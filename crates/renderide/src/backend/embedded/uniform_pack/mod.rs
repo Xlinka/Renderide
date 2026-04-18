@@ -463,6 +463,51 @@ mod text_uniform_packing_tests {
     }
 
     #[test]
+    fn cutout_blend_mode_infers_alpha_clip_keyword_spellings() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let pid = reg.intern("BlendMode");
+        store.set_material(12, pid, MaterialPropertyValue::Float(1.0));
+
+        for field_name in ["_ALPHATEST_ON", "_ALPHATEST", "_ALPHACLIP"] {
+            assert_eq!(
+                inferred_keyword_float_f32(field_name, &store, lookup(12), &ids),
+                Some(1.0),
+                "{field_name} should enable for cutout BlendMode"
+            );
+        }
+        assert_eq!(
+            inferred_keyword_float_f32("_ALPHABLEND_ON", &store, lookup(12), &ids),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn unity_mode_infers_alpha_blend_keyword_spellings() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let pid = reg.intern("_Mode");
+
+        store.set_material(13, pid, MaterialPropertyValue::Float(2.0));
+        assert_eq!(
+            inferred_keyword_float_f32("_ALPHABLEND", &store, lookup(13), &ids),
+            Some(1.0)
+        );
+        assert_eq!(
+            inferred_keyword_float_f32("_ALPHATEST", &store, lookup(13), &ids),
+            Some(0.0)
+        );
+
+        store.set_material(13, pid, MaterialPropertyValue::Float(3.0));
+        assert_eq!(
+            inferred_keyword_float_f32("_ALPHAPREMULTIPLY", &store, lookup(13), &ids),
+            Some(1.0)
+        );
+    }
+
+    #[test]
     fn inferred_pbs_keyword_enables_from_texture_presence() {
         let mut store = MaterialPropertyStore::new();
         let reg = PropertyIdRegistry::new();

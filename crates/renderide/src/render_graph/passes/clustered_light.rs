@@ -392,11 +392,11 @@ impl RenderPass for ClusteredLightPass {
 
         let light_count = frame.backend.frame_resources.frame_light_count_u32();
 
-        let queue = ctx.queue.lock().unwrap_or_else(|e| e.into_inner());
+        let queue: &wgpu::Queue = ctx.queue.as_ref();
         let Some(fgpu) = frame
             .backend
             .frame_resources
-            .sync_cluster_viewport_ensure_lights_upload(ctx.device, &queue, (vw, vh), stereo)
+            .sync_cluster_viewport_ensure_lights_upload(ctx.device, queue, (vw, vh), stereo)
         else {
             return Ok(());
         };
@@ -439,7 +439,7 @@ impl RenderPass for ClusteredLightPass {
 
         run_clustered_light_eye_passes(ClusteredLightEyePassEnv {
             encoder: ctx.encoder,
-            queue: &queue,
+            queue,
             pipeline,
             bind_group,
             params_buffer: refs.params_buffer,

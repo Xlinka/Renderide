@@ -159,11 +159,8 @@ impl RendererRuntime {
     ) -> Result<(), DebugHudEncodeError> {
         let device = gpu.device().as_ref();
         let extent = gpu.surface_extent_px();
-        let q = gpu
-            .queue()
-            .lock()
-            .map_err(|_| DebugHudEncodeError::QueueMutexPoisoned)?;
+        let q = gpu.queue().as_ref();
         self.backend
-            .encode_debug_hud_overlay(device, &q, encoder, backbuffer, extent)
+            .encode_debug_hud_overlay(device, q, encoder, backbuffer, extent)
     }
 }

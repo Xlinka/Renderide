@@ -8,9 +8,7 @@ use glam::Mat4;
 use rayon::prelude::*;
 
 use crate::assets::material::MaterialDictionary;
-use crate::backend::mesh_deform::{
-    write_per_draw_uniform_slab, PaddedPerDrawUniforms, PER_DRAW_UNIFORM_STRIDE,
-};
+use crate::backend::mesh_deform::PaddedPerDrawUniforms;
 use crate::backend::{RenderBackend, WorldMeshForwardEncodeRefs};
 use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
@@ -230,16 +228,18 @@ pub(super) fn pack_and_upload_per_draw_slab(
 
     let scene = frame.scene;
     let hc = frame.host_camera;
-    let backend = &mut frame.backend;
+    let backend = &mut *frame.backend;
 
-    {
+    let per_draw_buffer = {
         let Some(pd) = backend.frame_resources.per_draw.as_mut() else {
             return false;
         };
         pd.ensure_draw_slot_capacity(device, draws.len());
-    }
+        pd.per_draw_storage.clone()
+    };
 
-    let slots: Vec<PaddedPerDrawUniforms> = if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
+    let slots = &mut backend.per_draw_slots_scratch;
+    if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
         draws
             .par_iter()
             .map(|item| {
@@ -257,35 +257,30 @@ pub(super) fn pack_and_upload_per_draw_slab(
                     PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
                 }
             })
-            .collect()
+            .collect_into_vec(slots);
     } else {
-        draws
-            .iter()
-            .map(|item| {
-                let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
-                    scene,
-                    item,
-                    hc,
-                    render_context,
-                    world_proj,
-                    overlay_proj,
-                );
-                if vp_l == vp_r {
-                    PaddedPerDrawUniforms::new_single(vp_l, model)
-                } else {
-                    PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
-                }
-            })
-            .collect()
-    };
+        slots.clear();
+        slots.reserve(draws.len());
+        for item in draws {
+            let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
+                scene,
+                item,
+                hc,
+                render_context,
+                world_proj,
+                overlay_proj,
+            );
+            let entry = if vp_l == vp_r {
+                PaddedPerDrawUniforms::new_single(vp_l, model)
+            } else {
+                PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
+            };
+            slots.push(entry);
+        }
+    }
 
-    let mut slab_bytes = vec![0u8; draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE)];
-    write_per_draw_uniform_slab(&slots, &mut slab_bytes);
-
-    let Some(pd) = backend.frame_resources.per_draw.as_mut() else {
-        return false;
-    };
-    queue.write_buffer(&pd.per_draw_storage, 0, &slab_bytes);
+    let slab_bytes: &[u8] = bytemuck::cast_slice(slots.as_slice());
+    queue.write_buffer(&per_draw_buffer, 0, slab_bytes);
     true
 }
 

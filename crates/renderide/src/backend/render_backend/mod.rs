@@ -11,11 +11,13 @@ mod execute;
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::assets::material::MaterialPropertyStore;
-use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
+use crate::backend::mesh_deform::{
+    GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
+};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
@@ -36,7 +38,7 @@ pub struct RenderBackendAttachDesc {
     /// Logical device for uploads and graph encoding.
     pub device: Arc<wgpu::Device>,
     /// Queue used for submits and GPU writes.
-    pub queue: Arc<Mutex<wgpu::Queue>>,
+    pub queue: Arc<wgpu::Queue>,
     /// Capabilities for buffer sizing and MSAA.
     pub gpu_limits: Arc<GpuLimits>,
     /// Swapchain / main surface format for HUD and pipelines.
@@ -71,6 +73,11 @@ pub struct RenderBackend {
     pub(crate) occlusion: OcclusionSystem,
     /// Render-graph transient texture/buffer pool retained across frames.
     pub(crate) transient_pool: TransientPool,
+    /// Reused per-draw uniform slot buffer for `pack_and_upload_per_draw_slab`.
+    ///
+    /// Capacity is retained across frames; [`PaddedPerDrawUniforms`] is `#[repr(C)] + Pod`, so the
+    /// slice is uploaded via `bytemuck::cast_slice` without a separate byte staging Vec.
+    pub(crate) per_draw_slots_scratch: Vec<PaddedPerDrawUniforms>,
 }
 
 /// Disjoint borrows of [`MaterialSystem`], [`AssetTransferQueue`], and the GPU skin cache for world mesh forward encoding.
@@ -123,6 +130,7 @@ impl RenderBackend {
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
             transient_pool: TransientPool::new(),
+            per_draw_slots_scratch: Vec::new(),
         }
     }
 
@@ -303,17 +311,14 @@ impl RenderBackend {
         }
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
         self.frame_resources.attach(device.as_ref(), gpu_limits);
-        {
-            let q = queue.lock().unwrap_or_else(|e| e.into_inner());
-            self.debug_hud.attach(
-                device.as_ref(),
-                &q,
-                surface_format,
-                renderer_settings,
-                config_save_path,
-                suppress_renderer_config_disk_writes,
-            );
-        }
+        self.debug_hud.attach(
+            device.as_ref(),
+            queue.as_ref(),
+            surface_format,
+            renderer_settings,
+            config_save_path,
+            suppress_renderer_config_disk_writes,
+        );
         match MeshPreprocessPipelines::new(device.as_ref()) {
             Ok(p) => self.mesh_preprocess = Some(p),
             Err(e) => {
