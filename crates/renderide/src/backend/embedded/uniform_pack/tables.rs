@@ -120,6 +120,8 @@ pub(super) fn default_f32_for_field(
         | "_OffsetUnits"
         | "_Stencil"
         | "_StencilOp"
+        | "_StencilFail"
+        | "_StencilZFail"
         | "_RimIntensity"
         | "_RimAlbedoTint"
         | "_RimCubemapTint"

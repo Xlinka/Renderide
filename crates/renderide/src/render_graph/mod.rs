@@ -274,9 +274,8 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
         .with_frame_array_layers(),
     );
     let forward_msaa_depth = builder.create_texture(
-        TransientTextureDesc::frame_sampled_texture_2d(
+        TransientTextureDesc::frame_depth_stencil_sampled_texture_2d(
             "forward_msaa_depth",
-            wgpu::TextureFormat::Depth32Float,
             TransientExtent::Backbuffer,
             wgpu::TextureUsages::empty(),
         )
@@ -397,5 +396,4 @@ mod default_graph_tests {
         assert!(!build_called);
         assert_eq!(cache.pass_count(), n);
     }
-
 }

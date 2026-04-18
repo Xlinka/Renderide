@@ -7,7 +7,7 @@
 //! float4 color stream at `@location(3)` with opaque-white fallback when the host mesh lacks color.
 //!
 //! **`flags` bits (host / material):** bit0 = sample `_MainTex`; bit1 = alpha clip on final alpha;
-//! bit2 = rect clip using `_Rect` (xy = min, zw = size in object XY); bit3 = overlay tint stub
+//! bit2 = rect clip using `_Rect` (xy = min, zw = max in object XY); bit3 = overlay tint stub
 //! (multiplies by `_OverlayTint.a` as a stand-in; no scene depth); bit4 = mask multiply alpha;
 //! bit5 = mask alpha clip vs `_Cutoff`. The manifest CPU path also sets bit0/bit1 from texture presence and `_Cutoff` when `_Flags` is absent.
 //!
@@ -98,8 +98,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if ((mat.flags & 4u) != 0u) {
         let r = mat._Rect;
         let min_v = r.xy;
-        let max_v = r.xy + r.zw;
-        if (in.obj_xy.x < min_v.x || in.obj_xy.x > max_v.x || in.obj_xy.y < min_v.y || in.obj_xy.y > max_v.y) {
+        let max_v = r.zw;
+        let rect_size = max_v - min_v;
+        if (abs(rect_size.x * rect_size.y) > 1e-6 &&
+            (in.obj_xy.x < min_v.x || in.obj_xy.x > max_v.x || in.obj_xy.y < min_v.y || in.obj_xy.y > max_v.y)) {
             discard;
         }
     }

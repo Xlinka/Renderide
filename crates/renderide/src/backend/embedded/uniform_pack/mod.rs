@@ -61,6 +61,23 @@ fn packed_rect_clip_f32(
     0.0
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PackedFlagsLayout {
+    Unlit,
+    UiUnlit,
+}
+
+fn packed_flags_layout_for_ids(ids: &StemEmbeddedPropertyIds) -> PackedFlagsLayout {
+    if ids.uniform_field_ids.contains_key("_Rect")
+        && ids.uniform_field_ids.contains_key("_OverlayTint")
+        && !ids.uniform_field_ids.contains_key("_OffsetTex_ST")
+    {
+        PackedFlagsLayout::UiUnlit
+    } else {
+        PackedFlagsLayout::Unlit
+    }
+}
+
 /// Packs `flags` from `_Flags` when present; otherwise derives bits from texture presence,
 /// `_Cutoff`, and Unity `#pragma multi_compile` keyword floats.
 fn pack_flags_u32(
@@ -70,6 +87,7 @@ fn pack_flags_u32(
     kw: &EmbeddedSharedKeywordIds,
     primary_texture_any_kind_present: bool,
     cutoff: f32,
+    layout: PackedFlagsLayout,
 ) -> u32 {
     if field_name != "flags" {
         return 0;
@@ -90,28 +108,43 @@ fn pack_flags_u32(
     if cutoff > 0.0 && cutoff < 1.0 {
         flags |= 0x02;
     }
-    if keyword_float_enabled_by_pid(store, lookup, kw.offset_texture)
-        || keyword_float_enabled_by_pid(store, lookup, kw.offset_texture_alt)
-    {
-        flags |= 0x04;
+
+    let (mask_mul_bit, mask_clip_bit) = match layout {
+        PackedFlagsLayout::Unlit => (0x08, 0x10),
+        PackedFlagsLayout::UiUnlit => (0x10, 0x20),
+    };
+
+    match layout {
+        PackedFlagsLayout::Unlit => {
+            if keyword_float_enabled_by_pid(store, lookup, kw.offset_texture)
+                || keyword_float_enabled_by_pid(store, lookup, kw.offset_texture_alt)
+            {
+                flags |= 0x04;
+            }
+        }
+        PackedFlagsLayout::UiUnlit => {
+            if packed_rect_clip_f32(store, lookup, kw) > 0.5 {
+                flags |= 0x04;
+            }
+        }
     }
     if keyword_float_enabled_by_pid(store, lookup, kw.mask_texture_mul)
         || keyword_float_enabled_by_pid(store, lookup, kw.mask_texture_mul_alt)
     {
-        flags |= 0x08;
+        flags |= mask_mul_bit;
     }
     if keyword_float_enabled_by_pid(store, lookup, kw.mask_texture_clip)
         || keyword_float_enabled_by_pid(store, lookup, kw.mask_texture_clip_alt)
     {
-        flags |= 0x10;
+        flags |= mask_clip_bit;
     }
     if let Some(mask_mode) = first_float_by_pids(store, lookup, &[kw.mask_mode, kw.mask_mode_alt]) {
         match mask_mode.round() as i32 {
             // Resonite MaskTextureMode: MultiplyAlpha = 0, Cutoff = 1.
-            0 => flags |= 0x08,
-            1 => flags |= 0x10,
+            0 => flags |= mask_mul_bit,
+            1 => flags |= mask_clip_bit,
             // Tolerate future/combined modes by enabling both paths.
-            v if v > 1 => flags |= 0x18,
+            v if v > 1 => flags |= mask_mul_bit | mask_clip_bit,
             _ => {}
         }
     }
@@ -126,12 +159,16 @@ fn pack_flags_u32(
     if keyword_float_enabled_by_pid(store, lookup, kw.mul_rgb_by_alpha)
         || keyword_float_enabled_by_pid(store, lookup, kw.mul_rgb_by_alpha_alt)
     {
-        flags |= 0x20;
+        if layout == PackedFlagsLayout::Unlit {
+            flags |= 0x20;
+        }
     }
     if keyword_float_enabled_by_pid(store, lookup, kw.mul_alpha_intensity)
         || keyword_float_enabled_by_pid(store, lookup, kw.mul_alpha_intensity_alt)
     {
-        flags |= 0x40;
+        if layout == PackedFlagsLayout::Unlit {
+            flags |= 0x40;
+        }
     }
 
     flags
@@ -216,6 +253,7 @@ pub(crate) fn build_embedded_uniform_bytes(
                         ids.shared.as_ref(),
                         primary_texture_any_kind_present,
                         cutoff,
+                        packed_flags_layout_for_ids(ids),
                     );
                     write_u32_at(&mut buf, field, flags);
                 }
@@ -295,14 +333,103 @@ mod text_uniform_packing_tests {
 
         store.set_material(7, pid, MaterialPropertyValue::Float(0.0));
         assert_eq!(
-            pack_flags_u32("flags", &store, lookup(7), &kw, false, 0.5) & 0x18,
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(7),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::Unlit,
+            ) & 0x18,
             0x08
         );
 
         store.set_material(7, pid, MaterialPropertyValue::Float(1.0));
         assert_eq!(
-            pack_flags_u32("flags", &store, lookup(7), &kw, false, 0.5) & 0x18,
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(7),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::Unlit,
+            ) & 0x18,
             0x10
+        );
+    }
+
+    #[test]
+    fn ui_unlit_rectclip_keyword_uses_rect_clip_flag() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let kw = EmbeddedSharedKeywordIds::new(&reg);
+        let rectclip = reg.intern("RECTCLIP");
+        let offset_texture = reg.intern("_OFFSET_TEXTURE");
+
+        store.set_material(9, rectclip, MaterialPropertyValue::Float(1.0));
+        assert_eq!(
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(9),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::UiUnlit,
+            ) & 0x04,
+            0x04
+        );
+
+        store.set_material(10, offset_texture, MaterialPropertyValue::Float(1.0));
+        assert_eq!(
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(10),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::UiUnlit,
+            ) & 0x04,
+            0x00
+        );
+    }
+
+    #[test]
+    fn ui_unlit_mask_mode_uses_ui_flag_bits() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let kw = EmbeddedSharedKeywordIds::new(&reg);
+        let mask_mode = reg.intern("MaskMode");
+
+        store.set_material(11, mask_mode, MaterialPropertyValue::Float(0.0));
+        assert_eq!(
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(11),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::UiUnlit,
+            ) & 0x30,
+            0x10
+        );
+
+        store.set_material(11, mask_mode, MaterialPropertyValue::Float(1.0));
+        assert_eq!(
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(11),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::UiUnlit,
+            ) & 0x30,
+            0x20
         );
     }
 
@@ -314,7 +441,15 @@ mod text_uniform_packing_tests {
         let pid = reg.intern("BlendMode");
         store.set_material(8, pid, MaterialPropertyValue::Float(1.0));
         assert_ne!(
-            pack_flags_u32("flags", &store, lookup(8), &kw, false, 0.5) & 0x02,
+            pack_flags_u32(
+                "flags",
+                &store,
+                lookup(8),
+                &kw,
+                false,
+                0.5,
+                PackedFlagsLayout::Unlit,
+            ) & 0x02,
             0
         );
     }

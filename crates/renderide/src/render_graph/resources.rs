@@ -228,14 +228,21 @@ pub enum TransientTextureFormat {
     Fixed(wgpu::TextureFormat),
     /// Resolve to the current frame color attachment format.
     FrameColor,
+    /// Resolve to the current frame depth/stencil attachment format.
+    FrameDepthStencil,
 }
 
 impl TransientTextureFormat {
     /// Resolves this policy for a frame.
-    pub fn resolve(self, frame_color_format: wgpu::TextureFormat) -> wgpu::TextureFormat {
+    pub fn resolve(
+        self,
+        frame_color_format: wgpu::TextureFormat,
+        frame_depth_stencil_format: wgpu::TextureFormat,
+    ) -> wgpu::TextureFormat {
         match self {
             Self::Fixed(format) => format,
             Self::FrameColor => frame_color_format,
+            Self::FrameDepthStencil => frame_depth_stencil_format,
         }
     }
 }
@@ -335,6 +342,25 @@ impl TransientTextureDesc {
         Self {
             label,
             format: TransientTextureFormat::FrameColor,
+            extent,
+            mip_levels: 1,
+            sample_count: TransientSampleCount::Frame,
+            dimension: wgpu::TextureDimension::D2,
+            array_layers: TransientArrayLayers::Fixed(1),
+            base_usage,
+            alias: true,
+        }
+    }
+
+    /// Creates a standard depth/stencil transient texture that uses the frame depth/stencil format and sample count.
+    pub fn frame_depth_stencil_sampled_texture_2d(
+        label: &'static str,
+        extent: TransientExtent,
+        base_usage: wgpu::TextureUsages,
+    ) -> Self {
+        Self {
+            label,
+            format: TransientTextureFormat::FrameDepthStencil,
             extent,
             mip_levels: 1,
             sample_count: TransientSampleCount::Frame,

@@ -149,6 +149,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var local_1: bool;
     var local_2: bool;
     var local_3: bool;
+    var local_4: bool;
 
     color_1 = in.color;
     clip_a = in.color.w;
@@ -166,74 +167,81 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if ((_e31 & 4u) != 0u) {
         let r: vec4<f32> = mat._Rect;
         let min_v: vec2<f32> = r.xy;
-        let max_v: vec2<f32> = (r.xy + r.zw);
-        if !((in.obj_xy.x < min_v.x)) {
-            local = (in.obj_xy.x > max_v.x);
+        let max_v: vec2<f32> = r.zw;
+        let rect_size: vec2<f32> = (max_v - min_v);
+        if (abs((rect_size.x * rect_size.y)) > 0.000001f) {
+            if !((in.obj_xy.x < min_v.x)) {
+                local_1 = (in.obj_xy.x > max_v.x);
+            } else {
+                local_1 = true;
+            }
+            let _e60: bool = local_1;
+            if !(_e60) {
+                local_2 = (in.obj_xy.y < min_v.y);
+            } else {
+                local_2 = true;
+            }
+            let _e69: bool = local_2;
+            if !(_e69) {
+                local_3 = (in.obj_xy.y > max_v.y);
+            } else {
+                local_3 = true;
+            }
+            let _e78: bool = local_3;
+            local = _e78;
         } else {
-            local = true;
+            local = false;
         }
-        let _e55: bool = local;
-        if !(_e55) {
-            local_1 = (in.obj_xy.y < min_v.y);
-        } else {
-            local_1 = true;
-        }
-        let _e64: bool = local_1;
-        if !(_e64) {
-            local_2 = (in.obj_xy.y > max_v.y);
-        } else {
-            local_2 = true;
-        }
-        let _e73: bool = local_2;
-        if _e73 {
+        let _e82: bool = local;
+        if _e82 {
             discard;
         }
     }
-    let _e76: u32 = mat.flags;
-    if ((_e76 & 48u) != 0u) {
-        let _e84: vec4<f32> = mat._MaskTex_ST;
-        let _e85: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(in.uv, _e84);
-        let mask_1: vec4<f32> = textureSample(_MaskTex, _MaskTex_sampler, _e85);
+    let _e85: u32 = mat.flags;
+    if ((_e85 & 48u) != 0u) {
+        let _e93: vec4<f32> = mat._MaskTex_ST;
+        let _e94: vec2<f32> = apply_stX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2XMX3VORUWY4YX(in.uv, _e93);
+        let mask_1: vec4<f32> = textureSample(_MaskTex, _MaskTex_sampler, _e94);
         let mul: f32 = ((((mask_1.x + mask_1.y) + mask_1.z) * 0.33333334f) * mask_1.w);
-        let _e100: f32 = mask_luminance_mul_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_MaskTex, _MaskTex_sampler, _e85);
-        let _e103: u32 = mat.flags;
-        if ((_e103 & 16u) != 0u) {
-            let _e110: f32 = color_1.w;
-            color_1.w = (_e110 * mul);
-            let _e112: f32 = clip_a;
-            clip_a = (_e112 * _e100);
+        let _e109: f32 = mask_luminance_mul_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_MaskTex, _MaskTex_sampler, _e94);
+        let _e112: u32 = mat.flags;
+        if ((_e112 & 16u) != 0u) {
+            let _e119: f32 = color_1.w;
+            color_1.w = (_e119 * mul);
+            let _e121: f32 = clip_a;
+            clip_a = (_e121 * _e109);
         }
-        let _e116: u32 = mat.flags;
-        if ((_e116 & 32u) != 0u) {
-            let _e123: f32 = mat._Cutoff;
-            if (_e100 <= _e123) {
+        let _e125: u32 = mat.flags;
+        if ((_e125 & 32u) != 0u) {
+            let _e132: f32 = mat._Cutoff;
+            if (_e109 <= _e132) {
                 discard;
             }
         }
     }
-    let _e127: u32 = mat.flags;
-    if ((_e127 & 2u) != 0u) {
-        let _e134: u32 = mat.flags;
-        local_3 = ((_e134 & 32u) == 0u);
+    let _e136: u32 = mat.flags;
+    if ((_e136 & 2u) != 0u) {
+        let _e143: u32 = mat.flags;
+        local_4 = ((_e143 & 32u) == 0u);
     } else {
-        local_3 = false;
+        local_4 = false;
     }
-    let _e142: bool = local_3;
-    if _e142 {
-        let _e143: f32 = clip_a;
-        let _e146: f32 = mat._Cutoff;
-        if (_e143 <= _e146) {
+    let _e151: bool = local_4;
+    if _e151 {
+        let _e152: f32 = clip_a;
+        let _e155: f32 = mat._Cutoff;
+        if (_e152 <= _e155) {
             discard;
         }
     }
-    let _e150: u32 = mat.flags;
-    if ((_e150 & 8u) != 0u) {
+    let _e159: u32 = mat.flags;
+    if ((_e159 & 8u) != 0u) {
         let o: vec4<f32> = mat._OverlayTint;
-        let _e158: vec4<f32> = color_1;
-        let _e167: f32 = color_1.w;
-        color_1 = vec4<f32>((_e158.xyz * mix(vec3(1f), o.xyz, o.w)), _e167);
+        let _e167: vec4<f32> = color_1;
+        let _e176: f32 = color_1.w;
+        color_1 = vec4<f32>((_e167.xyz * mix(vec3(1f), o.xyz, o.w)), _e176);
     }
-    let _e169: vec4<f32> = color_1;
-    let _e170: vec4<f32> = retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(_e169);
-    return _e170;
+    let _e178: vec4<f32> = color_1;
+    let _e179: vec4<f32> = retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(_e178);
+    return _e179;
 }

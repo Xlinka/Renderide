@@ -83,7 +83,6 @@ pub enum GraphBuildError {
         /// Short invariant description.
         message: &'static str,
     },
-
 }
 
 /// Failure inside a single [`super::RenderPass::execute`] call.

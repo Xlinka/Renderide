@@ -378,11 +378,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
         hc,
         frame.multiview_stereo,
         frame.surface_format,
-        if frame.sample_count > 1 {
-            wgpu::TextureFormat::Depth32Float
-        } else {
-            frame.depth_texture.format()
-        },
+        frame.depth_texture.format(),
         gpu_limits,
         frame.sample_count,
     );
@@ -742,6 +738,7 @@ fn encode_msaa_depth_resolve_for_frame(
             [&r32_layers[0], &r32_layers[1]],
             &msaa.depth_resolve_r32_view,
             frame.depth_view,
+            frame.depth_texture.format(),
         );
     } else {
         resolve.encode_resolve(
@@ -751,13 +748,14 @@ fn encode_msaa_depth_resolve_for_frame(
             &msaa.depth_view,
             &msaa.depth_resolve_r32_view,
             frame.depth_view,
+            frame.depth_texture.format(),
         );
     }
 }
 
 /// MSAA views resolved from the graph's transient resources for one forward pass execution.
 pub(super) struct ForwardMsaaResolvedViews {
-    /// Multisampled depth attachment view.
+    /// Depth-only multisampled view used by the compute depth resolve shader.
     pub depth_view: wgpu::TextureView,
     /// R32Float intermediate used by the MSAA depth resolve shader.
     pub depth_resolve_r32_view: wgpu::TextureView,
@@ -783,12 +781,13 @@ pub(super) fn resolve_forward_msaa_views(
     graph_resources.transient_texture(resources.msaa_color)?;
     let depth = graph_resources.transient_texture(resources.msaa_depth)?;
     let r32 = graph_resources.transient_texture(resources.msaa_depth_r32)?;
+    let depth_view = depth_sample_view(depth, None);
 
     if multiview_stereo {
-        let depth_layers = first_two_layer_views(depth)?;
+        let depth_layers = first_two_depth_sample_layer_views(depth)?;
         let r32_layers = first_two_layer_views(r32)?;
         Some(ForwardMsaaResolvedViews {
-            depth_view: depth.view.clone(),
+            depth_view,
             depth_resolve_r32_view: r32.view.clone(),
             is_array: true,
             stereo_depth_layer_views: Some(depth_layers),
@@ -796,7 +795,7 @@ pub(super) fn resolve_forward_msaa_views(
         })
     } else {
         Some(ForwardMsaaResolvedViews {
-            depth_view: depth.view.clone(),
+            depth_view,
             depth_resolve_r32_view: r32.view.clone(),
             is_array: false,
             stereo_depth_layer_views: None,
@@ -809,5 +808,28 @@ fn first_two_layer_views(texture: &ResolvedGraphTexture) -> Option<[wgpu::Textur
     Some([
         texture.layer_views.first()?.clone(),
         texture.layer_views.get(1)?.clone(),
+    ])
+}
+
+fn depth_sample_view(texture: &ResolvedGraphTexture, layer: Option<u32>) -> wgpu::TextureView {
+    texture.texture.create_view(&wgpu::TextureViewDescriptor {
+        label: Some("forward-msaa-depth-sample-view"),
+        dimension: Some(wgpu::TextureViewDimension::D2),
+        base_array_layer: layer.unwrap_or(0),
+        array_layer_count: Some(1),
+        aspect: wgpu::TextureAspect::DepthOnly,
+        ..Default::default()
+    })
+}
+
+fn first_two_depth_sample_layer_views(
+    texture: &ResolvedGraphTexture,
+) -> Option<[wgpu::TextureView; 2]> {
+    if texture.layer_views.len() < 2 {
+        return None;
+    }
+    Some([
+        depth_sample_view(texture, Some(0)),
+        depth_sample_view(texture, Some(1)),
     ])
 }

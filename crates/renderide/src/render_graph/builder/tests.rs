@@ -734,13 +734,25 @@ fn frame_sample_count_policy_resolves_current_frame_value() {
 #[test]
 fn frame_texture_format_and_layer_policies_resolve_current_frame_values() {
     assert_eq!(
-        TransientTextureFormat::Fixed(wgpu::TextureFormat::Rgba8Unorm)
-            .resolve(wgpu::TextureFormat::Bgra8UnormSrgb),
+        TransientTextureFormat::Fixed(wgpu::TextureFormat::Rgba8Unorm).resolve(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Depth24PlusStencil8,
+        ),
         wgpu::TextureFormat::Rgba8Unorm
     );
     assert_eq!(
-        TransientTextureFormat::FrameColor.resolve(wgpu::TextureFormat::Bgra8UnormSrgb),
+        TransientTextureFormat::FrameColor.resolve(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Depth24PlusStencil8,
+        ),
         wgpu::TextureFormat::Bgra8UnormSrgb
+    );
+    assert_eq!(
+        TransientTextureFormat::FrameDepthStencil.resolve(
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Depth24PlusStencil8,
+        ),
+        wgpu::TextureFormat::Depth24PlusStencil8
     );
     use crate::render_graph::resources::TransientArrayLayers;
     assert_eq!(TransientArrayLayers::Fixed(0).resolve(true), 1);

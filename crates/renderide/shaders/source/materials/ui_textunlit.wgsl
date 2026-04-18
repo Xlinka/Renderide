@@ -96,10 +96,10 @@ fn vs_main(
     return out;
 }
 
-/// Returns true when `p` is outside the axis-aligned rect (min = xy, size = zw) in object XY.
+/// Returns true when `p` is outside the axis-aligned rect (min = xy, max = zw) in object XY.
 fn outside_rect_clip(p: vec2<f32>, r: vec4<f32>) -> bool {
     let min_v = r.xy;
-    let max_v = r.xy + r.zw;
+    let max_v = r.zw;
     return p.x < min_v.x || p.x > max_v.x || p.y < min_v.y || p.y > max_v.y;
 }
 
@@ -142,7 +142,8 @@ fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
     let vtx_color = vout.vtx_color;
 
     let rect = mat._Rect;
-    let use_rect_clip = mat._RectClip > 0.5 && rect.z * rect.w > 1e-6;
+    let rect_size = rect.zw - rect.xy;
+    let use_rect_clip = mat._RectClip > 0.5 && abs(rect_size.x * rect_size.y) > 1e-6;
     if (use_rect_clip && outside_rect_clip(vout.obj_xy, rect)) {
         discard;
     }

@@ -47,8 +47,8 @@ pub use mesh_deform::{
 pub(crate) use occlusion::HiZBuildInput;
 pub use occlusion::OcclusionSystem;
 pub use per_draw_resources::PerDrawResources;
+pub(crate) use render_backend::WorldMeshForwardEncodeRefs;
 pub use render_backend::{
     RenderBackend, RenderBackendAttachDesc, MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS,
     MAX_PENDING_TEXTURE_UPLOADS,
 };
-pub(crate) use render_backend::WorldMeshForwardEncodeRefs;

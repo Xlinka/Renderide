@@ -111,7 +111,9 @@ pub struct MaterialPipelinePropertyIds {
     pub(crate) dst_blend: [i32; 4],
     pub(crate) stencil_ref: [i32; 2],
     pub(crate) stencil_comp: [i32; 2],
-    pub(crate) stencil_op: [i32; 2],
+    pub(crate) stencil_op: [i32; 4],
+    pub(crate) stencil_fail_op: [i32; 2],
+    pub(crate) stencil_depth_fail_op: [i32; 2],
     pub(crate) stencil_read_mask: [i32; 2],
     pub(crate) stencil_write_mask: [i32; 2],
     pub(crate) color_mask: [i32; 3],
@@ -144,7 +146,20 @@ impl MaterialPipelinePropertyIds {
                 registry.intern("_StencilComp"),
                 registry.intern("StencilComp"),
             ],
-            stencil_op: [registry.intern("_StencilOp"), registry.intern("StencilOp")],
+            stencil_op: [
+                registry.intern("_StencilOp"),
+                registry.intern("StencilOp"),
+                registry.intern("_StencilPass"),
+                registry.intern("StencilPass"),
+            ],
+            stencil_fail_op: [
+                registry.intern("_StencilFail"),
+                registry.intern("StencilFail"),
+            ],
+            stencil_depth_fail_op: [
+                registry.intern("_StencilZFail"),
+                registry.intern("StencilZFail"),
+            ],
             stencil_read_mask: [
                 registry.intern("_StencilReadMask"),
                 registry.intern("StencilReadMask"),
@@ -416,13 +431,17 @@ mod tests {
         let mut store = MaterialPropertyStore::new();
         let stencil = reg.intern("_Stencil");
         let comp = reg.intern("_StencilComp");
-        let op = reg.intern("_StencilOp");
+        let op = reg.intern("_StencilPass");
+        let fail = reg.intern("_StencilFail");
+        let zfail = reg.intern("_StencilZFail");
         let read = reg.intern("_StencilReadMask");
         let write = reg.intern("_StencilWriteMask");
         let color_mask = reg.intern("_ColorMask");
         store.set_material(44, stencil, MaterialPropertyValue::Float(3.0));
         store.set_material(44, comp, MaterialPropertyValue::Float(8.0));
         store.set_material(44, op, MaterialPropertyValue::Float(2.0));
+        store.set_material(44, fail, MaterialPropertyValue::Float(5.0));
+        store.set_material(44, zfail, MaterialPropertyValue::Float(3.0));
         store.set_material(44, read, MaterialPropertyValue::Float(127.0));
         store.set_material(44, write, MaterialPropertyValue::Float(63.0));
         store.set_material(44, color_mask, MaterialPropertyValue::Float(0.0));
@@ -436,6 +455,8 @@ mod tests {
         assert_eq!(state.stencil_reference(), 3);
         assert_eq!(state.stencil.compare, 8);
         assert_eq!(state.stencil.pass_op, 2);
+        assert_eq!(state.stencil.fail_op, 5);
+        assert_eq!(state.stencil.depth_fail_op, 3);
         assert_eq!(state.stencil.read_mask, 127);
         assert_eq!(state.stencil.write_mask, 63);
         assert_eq!(
@@ -445,6 +466,14 @@ mod tests {
         assert_eq!(
             state.stencil_state().front.pass_op,
             wgpu::StencilOperation::Replace
+        );
+        assert_eq!(
+            state.stencil_state().front.fail_op,
+            wgpu::StencilOperation::Invert
+        );
+        assert_eq!(
+            state.stencil_state().front.depth_fail_op,
+            wgpu::StencilOperation::IncrementClamp
         );
     }
 

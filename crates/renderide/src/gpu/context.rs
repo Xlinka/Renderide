@@ -13,13 +13,17 @@ use winit::dpi::PhysicalSize;
 use winit::window::Window;
 
 /// Sorted list of MSAA sample counts `2`, `4`, and `8` supported for **both** `color` and
-/// [`wgpu::TextureFormat::Depth32Float`] on `adapter`.
+/// the forward depth/stencil format on `adapter`.
 ///
 /// Per-format support is not uniform: e.g. [`wgpu::TextureFormat::Rgba8UnormSrgb`] may allow 4× but
 /// not 2× on some drivers; callers must use [`clamp_msaa_request_to_supported`] before creating textures.
-fn msaa_supported_sample_counts(adapter: &wgpu::Adapter, color: wgpu::TextureFormat) -> Vec<u32> {
+fn msaa_supported_sample_counts(
+    adapter: &wgpu::Adapter,
+    color: wgpu::TextureFormat,
+    depth_stencil: wgpu::TextureFormat,
+) -> Vec<u32> {
     let color_f = adapter.get_texture_format_features(color);
-    let depth_f = adapter.get_texture_format_features(wgpu::TextureFormat::Depth32Float);
+    let depth_f = adapter.get_texture_format_features(depth_stencil);
     let mut out: Vec<u32> = [2u32, 4, 8]
         .into_iter()
         .filter(|&n| {
@@ -30,7 +34,7 @@ fn msaa_supported_sample_counts(adapter: &wgpu::Adapter, color: wgpu::TextureFor
     out
 }
 
-/// Sorted list of MSAA sample counts supported for **2D array** color + [`wgpu::TextureFormat::Depth32Float`]
+/// Sorted list of MSAA sample counts supported for **2D array** color + the forward depth/stencil format
 /// on `adapter`, when the device exposes both [`wgpu::Features::MULTISAMPLE_ARRAY`] and
 /// [`wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`].
 ///
@@ -41,6 +45,7 @@ fn msaa_supported_sample_counts(adapter: &wgpu::Adapter, color: wgpu::TextureFor
 fn msaa_supported_sample_counts_stereo(
     adapter: &wgpu::Adapter,
     color: wgpu::TextureFormat,
+    depth_stencil: wgpu::TextureFormat,
     features: wgpu::Features,
 ) -> Vec<u32> {
     let required = wgpu::Features::MULTISAMPLE_ARRAY
@@ -48,7 +53,7 @@ fn msaa_supported_sample_counts_stereo(
     if !features.contains(required) {
         return Vec::new();
     }
-    msaa_supported_sample_counts(adapter, color)
+    msaa_supported_sample_counts(adapter, color, depth_stencil)
 }
 
 /// Maps a user-requested MSAA level to a **device-valid** sample count for the current surface format.
@@ -75,7 +80,7 @@ pub struct MsaaTargets {
     pub color_texture: wgpu::Texture,
     /// Default [`wgpu::TextureView`] for [`Self::color_texture`].
     pub color_view: wgpu::TextureView,
-    /// Multisampled depth texture ([`wgpu::TextureFormat::Depth32Float`]).
+    /// Multisampled depth/stencil texture.
     pub depth_texture: wgpu::Texture,
     /// Default [`wgpu::TextureView`] for [`Self::depth_texture`].
     pub depth_view: wgpu::TextureView,
@@ -85,13 +90,15 @@ pub struct MsaaTargets {
     pub extent: (u32, u32),
     /// Swapchain color format used for [`Self::color_texture`].
     pub color_format: wgpu::TextureFormat,
+    /// Depth/stencil format used for [`Self::depth_texture`].
+    pub depth_stencil_format: wgpu::TextureFormat,
 }
 
 /// Multisampled 2-layer `D2Array` color + depth targets for the OpenXR single-pass stereo forward path
 /// ([`GpuContext::ensure_msaa_stereo_targets`]).
 ///
 /// Color resolves into the single-sample OpenXR swapchain image; depth resolves into the stereo
-/// [`wgpu::TextureFormat::Depth32Float`] array via compute + multiview blit.
+/// depth/stencil array via compute + multiview blit.
 pub struct MsaaStereoTargets {
     /// Multisampled `D2` array texture (`depth_or_array_layers = 2`, `sample_count > 1`).
     pub color_texture: wgpu::Texture,
@@ -110,16 +117,18 @@ pub struct MsaaStereoTargets {
     pub extent: (u32, u32),
     /// OpenXR swapchain color format used for [`Self::color_texture`].
     pub color_format: wgpu::TextureFormat,
+    /// Depth/stencil format used for [`Self::depth_texture`].
+    pub depth_stencil_format: wgpu::TextureFormat,
 }
 
 /// GPU stack for presentation and future render passes.
 pub struct GpuContext {
     /// Adapter metadata from construction (for diagnostics).
     adapter_info: wgpu::AdapterInfo,
-    /// MSAA tiers supported for the configured surface color format and [`wgpu::TextureFormat::Depth32Float`]
+    /// MSAA tiers supported for the configured surface color format and forward depth/stencil format.
     /// (sorted ascending: 2, 4, …). Empty means MSAA is unavailable.
     msaa_supported_sample_counts: Vec<u32>,
-    /// MSAA tiers supported for **2D array** color + [`wgpu::TextureFormat::Depth32Float`] on the OpenXR
+    /// MSAA tiers supported for **2D array** color + forward depth/stencil format on the OpenXR
     /// path (sorted ascending). Empty when the adapter lacks
     /// [`wgpu::Features::MULTISAMPLE_ARRAY`] / [`wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES`],
     /// which silently clamps the stereo request to `1` (MSAA off).
@@ -248,10 +257,17 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
-        let msaa_supported_sample_counts = msaa_supported_sample_counts(&adapter, config.format);
+        let depth_stencil_format =
+            crate::render_graph::main_forward_depth_stencil_format(required_features);
+        let msaa_supported_sample_counts =
+            msaa_supported_sample_counts(&adapter, config.format, depth_stencil_format);
         let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
-        let msaa_supported_sample_counts_stereo =
-            msaa_supported_sample_counts_stereo(&adapter, config.format, required_features);
+        let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
+            &adapter,
+            config.format,
+            depth_stencil_format,
+            required_features,
+        );
         let msaa_max_stereo = msaa_supported_sample_counts_stereo
             .last()
             .copied()
@@ -317,10 +333,17 @@ impl GpuContext {
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
         let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
-        let msaa_supported_sample_counts = msaa_supported_sample_counts(adapter, config.format);
+        let depth_stencil_format =
+            crate::render_graph::main_forward_depth_stencil_format(device.features());
+        let msaa_supported_sample_counts =
+            msaa_supported_sample_counts(adapter, config.format, depth_stencil_format);
         let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
-        let msaa_supported_sample_counts_stereo =
-            msaa_supported_sample_counts_stereo(adapter, config.format, device.features());
+        let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
+            adapter,
+            config.format,
+            depth_stencil_format,
+            device.features(),
+        );
         let msaa_max_stereo = msaa_supported_sample_counts_stereo
             .last()
             .copied()
@@ -644,8 +667,13 @@ impl GpuContext {
         }
         let w = self.config.width.max(1);
         let h = self.config.height.max(1);
+        let depth_stencil_format =
+            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
         let needs = self.msaa_targets.as_ref().is_none_or(|m| {
-            m.extent != (w, h) || m.sample_count != sc || m.color_format != color_format
+            m.extent != (w, h)
+                || m.sample_count != sc
+                || m.color_format != color_format
+                || m.depth_stencil_format != depth_stencil_format
         });
         if needs {
             let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
@@ -674,7 +702,7 @@ impl GpuContext {
                 mip_level_count: 1,
                 sample_count: sc,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
+                format: depth_stencil_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -689,6 +717,7 @@ impl GpuContext {
                 sample_count: sc,
                 extent: (w, h),
                 color_format,
+                depth_stencil_format,
             });
         }
         self.msaa_targets.as_ref()
@@ -716,8 +745,13 @@ impl GpuContext {
         }
         let w = extent.0.max(1);
         let h = extent.1.max(1);
+        let depth_stencil_format =
+            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
         let needs = self.msaa_stereo_targets.as_ref().is_none_or(|m| {
-            m.extent != (w, h) || m.sample_count != sc || m.color_format != color_format
+            m.extent != (w, h)
+                || m.sample_count != sc
+                || m.color_format != color_format
+                || m.depth_stencil_format != depth_stencil_format
         });
         if needs {
             let size = wgpu::Extent3d {
@@ -748,7 +782,7 @@ impl GpuContext {
                 mip_level_count: 1,
                 sample_count: sc,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
+                format: depth_stencil_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -765,6 +799,7 @@ impl GpuContext {
                     dimension: Some(wgpu::TextureViewDimension::D2),
                     base_array_layer: layer,
                     array_layer_count: Some(1),
+                    aspect: wgpu::TextureAspect::DepthOnly,
                     ..Default::default()
                 })
             });
@@ -778,12 +813,13 @@ impl GpuContext {
                 sample_count: sc,
                 extent: (w, h),
                 color_format,
+                depth_stencil_format,
             });
         }
         self.msaa_stereo_targets.as_ref()
     }
 
-    /// Ensures a [`wgpu::TextureFormat::Depth32Float`] attachment exists for the current surface extent.
+    /// Ensures a stencil-capable depth attachment exists for the current surface extent.
     ///
     /// Call after [`Self::reconfigure`] or when the swapchain size may have changed.
     ///
@@ -800,7 +836,13 @@ impl GpuContext {
     ) -> Result<(&wgpu::Texture, &wgpu::TextureView), &'static str> {
         let w = self.config.width.max(1);
         let h = self.config.height.max(1);
-        let needs_recreate = self.depth_extent_px != (w, h) || self.depth_attachment.is_none();
+        let depth_stencil_format =
+            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
+        let needs_recreate = self.depth_extent_px != (w, h)
+            || self
+                .depth_attachment
+                .as_ref()
+                .is_none_or(|(tex, _)| tex.format() != depth_stencil_format);
         if needs_recreate {
             let max_dim = self.limits.wgpu.max_texture_dimension_2d;
             if w > max_dim || h > max_dim {
@@ -820,7 +862,7 @@ impl GpuContext {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
+                format: depth_stencil_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::COPY_SRC
                     | wgpu::TextureUsages::TEXTURE_BINDING,

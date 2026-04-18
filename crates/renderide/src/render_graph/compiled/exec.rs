@@ -415,6 +415,7 @@ impl CompiledRenderGraph {
             backend,
             resolved.viewport_px,
             resolved.surface_format,
+            resolved.depth_texture.format(),
             resolved.sample_count,
             resolved.multiview_stereo,
             &mut resources,
@@ -432,6 +433,7 @@ impl CompiledRenderGraph {
         backend: &mut RenderBackend,
         viewport_px: (u32, u32),
         surface_format: wgpu::TextureFormat,
+        depth_stencil_format: wgpu::TextureFormat,
         sample_count: u32,
         multiview_stereo: bool,
         resources: &mut GraphResolvedResources,
@@ -446,7 +448,10 @@ impl CompiledRenderGraph {
                 .or_insert_with(|| {
                     let array_layers = compiled.desc.array_layers.resolve(multiview_stereo);
                     let key = TextureKey {
-                        format: compiled.desc.format.resolve(surface_format),
+                        format: compiled
+                            .desc
+                            .format
+                            .resolve(surface_format, depth_stencil_format),
                         extent: helpers::resolve_transient_extent(
                             compiled.desc.extent,
                             viewport_px,

@@ -585,13 +585,13 @@ impl FrameGpuResources {
                     texture: source_depth,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    aspect: wgpu::TextureAspect::DepthOnly,
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.scene_depth_array.0,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    aspect: wgpu::TextureAspect::DepthOnly,
                 },
                 extent,
             );
@@ -602,13 +602,13 @@ impl FrameGpuResources {
                     texture: source_depth,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    aspect: wgpu::TextureAspect::DepthOnly,
                 },
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.scene_depth_2d.0,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
+                    aspect: wgpu::TextureAspect::DepthOnly,
                 },
                 extent,
             );

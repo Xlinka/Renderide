@@ -139,8 +139,8 @@ impl MaterialRenderState {
         }
         let face = wgpu::StencilFaceState {
             compare: unity_compare_function(self.stencil.compare),
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
+            fail_op: unity_stencil_operation(self.stencil.fail_op),
+            depth_fail_op: unity_stencil_operation(self.stencil.depth_fail_op),
             pass_op: unity_stencil_operation(self.stencil.pass_op),
         };
         wgpu::StencilState {
@@ -163,6 +163,10 @@ pub struct MaterialStencilState {
     pub compare: u8,
     /// Unity `StencilOp` enum value applied on pass.
     pub pass_op: u8,
+    /// Unity `StencilOp` enum value applied when stencil comparison fails.
+    pub fail_op: u8,
+    /// Unity `StencilOp` enum value applied when depth comparison fails.
+    pub depth_fail_op: u8,
     /// Stencil read mask.
     pub read_mask: u32,
     /// Stencil write mask.
@@ -176,6 +180,8 @@ impl Default for MaterialStencilState {
             reference: 0,
             compare: 8,
             pass_op: 0,
+            fail_op: 0,
+            depth_fail_op: 0,
             read_mask: 0xff,
             write_mask: 0xff,
         }
@@ -203,6 +209,8 @@ pub fn material_render_state_for_lookup(
     let stencil_ref = first_float_by_pids(dict, lookup, &ids.stencil_ref);
     let stencil_comp = first_float_by_pids(dict, lookup, &ids.stencil_comp);
     let stencil_op = first_float_by_pids(dict, lookup, &ids.stencil_op);
+    let stencil_fail_op = first_float_by_pids(dict, lookup, &ids.stencil_fail_op);
+    let stencil_depth_fail_op = first_float_by_pids(dict, lookup, &ids.stencil_depth_fail_op);
     let stencil_read_mask = first_float_by_pids(dict, lookup, &ids.stencil_read_mask);
     let stencil_write_mask = first_float_by_pids(dict, lookup, &ids.stencil_write_mask);
     let color_mask = first_float_by_pids(dict, lookup, &ids.color_mask).map(unity_u8);
@@ -233,6 +241,8 @@ pub fn material_render_state_for_lookup(
     let stencil_present = stencil_ref.is_some()
         || stencil_comp.is_some()
         || stencil_op.is_some()
+        || stencil_fail_op.is_some()
+        || stencil_depth_fail_op.is_some()
         || stencil_read_mask.is_some()
         || stencil_write_mask.is_some();
     let compare = stencil_comp.map(unity_u8).unwrap_or(8);
@@ -241,6 +251,8 @@ pub fn material_render_state_for_lookup(
         reference: stencil_ref.map(unity_mask).unwrap_or(0),
         compare,
         pass_op: stencil_op.map(unity_u8).unwrap_or(0),
+        fail_op: stencil_fail_op.map(unity_u8).unwrap_or(0),
+        depth_fail_op: stencil_depth_fail_op.map(unity_u8).unwrap_or(0),
         read_mask: stencil_read_mask.map(unity_mask).unwrap_or(0xff),
         write_mask: stencil_write_mask.map(unity_mask).unwrap_or(0xff),
     };

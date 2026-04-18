@@ -131,26 +131,26 @@ fn outside_rect_clip(p: vec2<f32>, r_1: vec4<f32>) -> bool {
     var local_4: bool;
 
     let min_v: vec2<f32> = r_1.xy;
-    let max_v: vec2<f32> = (r_1.xy + r_1.zw);
+    let max_v: vec2<f32> = r_1.zw;
     if !((p.x < min_v.x)) {
         local_2 = (p.x > max_v.x);
     } else {
         local_2 = true;
     }
-    let _e16: bool = local_2;
-    if !(_e16) {
+    let _e14: bool = local_2;
+    if !(_e14) {
         local_3 = (p.y < min_v.y);
     } else {
         local_3 = true;
     }
-    let _e24: bool = local_3;
-    if !(_e24) {
+    let _e22: bool = local_3;
+    if !(_e22) {
         local_4 = (p.y > max_v.y);
     } else {
         local_4 = true;
     }
-    let _e32: bool = local_4;
-    return _e32;
+    let _e30: bool = local_4;
+    return _e30;
 }
 
 fn shade_distance_field(sig_dist_in: f32, vo: VertexOutput, vtx_color: vec4<f32>, range_xy: vec2<f32>) -> vec4<f32> {
@@ -239,53 +239,54 @@ fn fs_main(vout: VertexOutput) -> @location(0) vec4<f32> {
 
     let vtx_color_1: vec4<f32> = vout.vtx_color;
     let rect: vec4<f32> = mat._Rect;
-    let _e7: f32 = mat._RectClip;
-    if (_e7 > 0.5f) {
-        local = ((rect.z * rect.w) > 0.000001f);
+    let rect_size: vec2<f32> = (rect.zw - rect.xy);
+    let _e10: f32 = mat._RectClip;
+    if (_e10 > 0.5f) {
+        local = (abs((rect_size.x * rect_size.y)) > 0.000001f);
     } else {
         local = false;
     }
     let use_rect_clip: bool = local;
     if use_rect_clip {
-        let _e20: bool = outside_rect_clip(vout.obj_xy, rect);
-        local_1 = _e20;
+        let _e24: bool = outside_rect_clip(vout.obj_xy, rect);
+        local_1 = _e24;
     } else {
         local_1 = false;
     }
-    let _e24: bool = local_1;
-    if _e24 {
+    let _e28: bool = local_1;
+    if _e28 {
         discard;
     }
     let atlas_color: vec4<f32> = textureSample(_FontAtlas, _FontAtlas_sampler, vout.uv);
-    let _e32: vec4<f32> = texture_rgba_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_FontAtlas, _FontAtlas_sampler, vout.uv);
-    let _e35: vec4<f32> = mat._Range;
-    let range_xy_1: vec2<f32> = _e35.xy;
-    let _e39: f32 = mat._TextMode;
-    let _e40: i32 = text_mode_clampedX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e39);
-    if (_e40 == 1i) {
+    let _e36: vec4<f32> = texture_rgba_base_mipX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJQWY4DIMFPWG3DJOBPXGYLNOBWGKX(_FontAtlas, _FontAtlas_sampler, vout.uv);
+    let _e39: vec4<f32> = mat._Range;
+    let range_xy_1: vec2<f32> = _e39.xy;
+    let _e43: f32 = mat._TextMode;
+    let _e44: i32 = text_mode_clampedX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e43);
+    if (_e44 == 1i) {
         c = (atlas_color * vtx_color_1);
-        if ((_e32.w * vtx_color_1.w) < 0.001f) {
+        if ((_e36.w * vtx_color_1.w) < 0.001f) {
             discard;
         }
     } else {
-        if (_e40 == 2i) {
-            let sig_dist_1: f32 = (_e32.w - 0.5f);
-            let _e55: vec4<f32> = shade_distance_field(sig_dist_1, vout, vtx_color_1, range_xy_1);
-            c = _e55;
+        if (_e44 == 2i) {
+            let sig_dist_1: f32 = (_e36.w - 0.5f);
+            let _e59: vec4<f32> = shade_distance_field(sig_dist_1, vout, vtx_color_1, range_xy_1);
+            c = _e59;
         } else {
-            let _e59: f32 = median3X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e32.x, _e32.y, _e32.z);
-            let sig_dist_2: f32 = (_e59 - 0.5f);
-            let _e62: vec4<f32> = shade_distance_field(sig_dist_2, vout, vtx_color_1, range_xy_1);
-            c = _e62;
+            let _e63: f32 = median3X_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJ2GK6DUL5ZWIZQX(_e36.x, _e36.y, _e36.z);
+            let sig_dist_2: f32 = (_e63 - 0.5f);
+            let _e66: vec4<f32> = shade_distance_field(sig_dist_2, vout, vtx_color_1, range_xy_1);
+            c = _e66;
         }
     }
     let o: vec4<f32> = mat._OverlayTint;
     if (o.w > 0.01f) {
-        let _e69: vec4<f32> = c;
-        let _e78: f32 = c.w;
-        c = vec4<f32>((_e69.xyz * mix(vec3(1f), o.xyz, o.w)), _e78);
+        let _e73: vec4<f32> = c;
+        let _e82: f32 = c.w;
+        c = vec4<f32>((_e73.xyz * mix(vec3(1f), o.xyz, o.w)), _e82);
     }
-    let _e80: vec4<f32> = c;
-    let _e81: vec4<f32> = retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(_e80);
-    return _e81;
+    let _e84: vec4<f32> = c;
+    let _e85: vec4<f32> = retain_globals_additiveX_naga_oil_mod_XOJSW4ZDFOJUWIZJ2HJTWY33CMFWHGX(_e84);
+    return _e85;
 }
