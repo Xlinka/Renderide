@@ -92,9 +92,7 @@ fn push_draws_for_renderer(
         let passes = match acc.filter_pass_mask {
             Some(mask) => {
                 let nid = draw.renderer.node_id;
-                nid >= 0
-                    && (nid as usize) < mask.len()
-                    && mask[nid as usize]
+                nid >= 0 && (nid as usize) < mask.len() && mask[nid as usize]
             }
             None => f.passes_scene_node(ctx.scene, draw.space_id, draw.renderer.node_id),
         };

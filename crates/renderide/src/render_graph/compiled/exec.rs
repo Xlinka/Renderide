@@ -173,6 +173,7 @@ impl CompiledRenderGraph {
             gpu_limits,
             queue_arc: &queue_arc,
             backbuffer_view_holder: &backbuffer_view_holder,
+            backbuffer_texture_holder: &frame,
         };
 
         self.execute_multi_view_frame_global_passes(&mut mv_ctx, &views)?;
@@ -204,13 +205,19 @@ impl CompiledRenderGraph {
             gpu_limits,
             queue_arc,
             backbuffer_view_holder,
+            backbuffer_texture_holder,
         } = mv_ctx;
 
         let prefetched = view.prefetched_world_mesh_draws.take();
         let draw_filter = view.draw_filter.clone();
         let host_camera = view.host_camera;
         let target_is_swapchain = matches!(view.target, FrameViewTarget::Swapchain);
-        let resolved = Self::resolve_view_from_target(&view.target, gpu, backbuffer_view_holder)?;
+        let resolved = Self::resolve_view_from_target(
+            &view.target,
+            gpu,
+            backbuffer_view_holder,
+            backbuffer_texture_holder,
+        )?;
         let graph_resources = self.resolve_graph_resources_for_view(device, backend, &resolved);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render-graph-per-view"),
@@ -311,6 +318,7 @@ impl CompiledRenderGraph {
             gpu_limits,
             queue_arc,
             backbuffer_view_holder,
+            backbuffer_texture_holder,
         } = mv_ctx;
 
         let has_frame_global = self
@@ -326,8 +334,12 @@ impl CompiledRenderGraph {
         // Frame-global phase (e.g. mesh deform): use first view for host camera / scene context.
         {
             let first = views.first().expect("views non-empty");
-            let resolved =
-                Self::resolve_view_from_target(&first.target, gpu, backbuffer_view_holder)?;
+            let resolved = Self::resolve_view_from_target(
+                &first.target,
+                gpu,
+                backbuffer_view_holder,
+                backbuffer_texture_holder,
+            )?;
             let graph_resources = self.resolve_graph_resources_for_view(device, backend, &resolved);
             {
                 let mut frame_params = helpers::frame_render_params_from_resolved(
@@ -600,6 +612,7 @@ impl CompiledRenderGraph {
         target: &'a FrameViewTarget<'a>,
         gpu: &'a mut GpuContext,
         backbuffer_view_holder: &'a Option<wgpu::TextureView>,
+        backbuffer_texture_holder: &'a Option<wgpu::SurfaceTexture>,
     ) -> Result<ResolvedView<'a>, GraphExecuteError> {
         match target {
             FrameViewTarget::Swapchain => {
@@ -611,12 +624,17 @@ impl CompiledRenderGraph {
                 let Some(bb_ref) = bb else {
                     return Err(GraphExecuteError::MissingSwapchainView);
                 };
+                let Some(bb_tex) = backbuffer_texture_holder.as_ref() else {
+                    return Err(GraphExecuteError::MissingSwapchainView);
+                };
                 let sample_count = gpu.swapchain_msaa_effective().max(1);
                 let (depth_tex, depth_view) = gpu
                     .ensure_depth_target()
                     .map_err(|_| GraphExecuteError::DepthTarget)?;
 
                 Ok(ResolvedView {
+                    color_texture: &bb_tex.texture,
+                    color_view: bb_ref,
                     depth_texture: depth_tex,
                     depth_view,
                     backbuffer: Some(bb_ref),
@@ -637,6 +655,8 @@ impl CompiledRenderGraph {
             FrameViewTarget::ExternalMultiview(ext) => {
                 let sample_count = gpu.swapchain_msaa_effective_stereo().max(1);
                 Ok(ResolvedView {
+                    color_texture: ext.color_texture,
+                    color_view: ext.color_view,
                     depth_texture: ext.depth_texture,
                     depth_view: ext.depth_view,
                     backbuffer: Some(ext.color_view),
@@ -655,6 +675,8 @@ impl CompiledRenderGraph {
                 })
             }
             FrameViewTarget::OffscreenRt(ext) => Ok(ResolvedView {
+                color_texture: ext.color_texture,
+                color_view: ext.color_view,
                 depth_texture: ext.depth_texture,
                 depth_view: ext.depth_view,
                 backbuffer: Some(ext.color_view),

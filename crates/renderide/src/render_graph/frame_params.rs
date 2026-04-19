@@ -113,6 +113,8 @@ pub struct PreparedWorldMeshForwardFrame {
     pub regular_indices: Vec<usize>,
     /// Draw indices that need the post-depth-snapshot intersection pass.
     pub intersect_indices: Vec<usize>,
+    /// Draw indices that need a per-object scene-color grab before rasterization.
+    pub grab_indices: Vec<usize>,
     /// Pipeline format/sample/multiview state.
     pub pipeline: WorldMeshForwardPipelineState,
     /// Whether indexed draws may use base instance.
@@ -123,6 +125,8 @@ pub struct PreparedWorldMeshForwardFrame {
     pub depth_snapshot_recorded: bool,
     /// Whether the intersection/color-resolve tail raster was already recorded by a split graph node.
     pub tail_raster_recorded: bool,
+    /// Whether the per-object grab-pass raster loop was already recorded by a split graph node.
+    pub grab_recorded: bool,
 }
 
 /// Data passes need beyond raw GPU handles: host scene, backend pools, and main-surface formats.
@@ -131,6 +135,10 @@ pub struct FrameRenderParams<'a> {
     pub scene: &'a SceneCoordinator,
     /// GPU pools, materials, and deform scratch buffers.
     pub backend: &'a mut RenderBackend,
+    /// Backing color texture for the main forward pass (copy source for grab-pass scene-color snapshots).
+    pub color_texture: &'a wgpu::Texture,
+    /// Color attachment view for the current frame target.
+    pub color_view: &'a wgpu::TextureView,
     /// Backing depth texture for the main forward pass (copy source for scene-depth snapshots).
     pub depth_texture: &'a wgpu::Texture,
     /// Depth attachment for the main forward pass.

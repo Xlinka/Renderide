@@ -63,6 +63,7 @@ pub(super) fn default_vec4_for_field(field_name: &str) -> [f32; 4] {
         "_Point" => [0.0, 0.0, 0.0, 0.0],
         "_Rect" => [0.0, 0.0, 1.0, 1.0],
         "_FOV" => [std::f32::consts::TAU, std::f32::consts::PI, 0.0, 0.0],
+        "_Spread" => [0.1, 0.1, 0.0, 0.0],
         "_SecondTexOffset" => [0.0, 0.0, 0.0, 0.0],
         "_OffsetMagnitude" => [0.1, 0.1, 0.0, 0.0],
         "_PointSize" => [0.1, 0.1, 0.0, 0.0],

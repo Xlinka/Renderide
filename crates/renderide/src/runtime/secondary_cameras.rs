@@ -27,6 +27,7 @@ struct SecondaryRtPrepared {
     host_camera: HostCameraFrame,
     filter: CameraTransformDrawFilter,
     rt_id: i32,
+    color_texture: Arc<wgpu::Texture>,
     color_view: Arc<wgpu::TextureView>,
     depth_texture: Arc<wgpu::Texture>,
     depth_view: Arc<wgpu::TextureView>,
@@ -45,6 +46,7 @@ fn build_desktop_multi_view_frame_list<'a>(
     for (prep, collection) in prepared.iter().zip(secondary_prefetched.into_iter()) {
         let ext = ExternalOffscreenTargets {
             render_texture_asset_id: prep.rt_id,
+            color_texture: prep.color_texture.as_ref(),
             color_view: prep.color_view.as_ref(),
             depth_texture: prep.depth_texture.as_ref(),
             depth_view: prep.depth_view.as_ref(),
@@ -151,6 +153,7 @@ impl RendererRuntime {
         for (prep, collection) in prepared.iter().zip(prefetched.into_iter()) {
             let ext = ExternalOffscreenTargets {
                 render_texture_asset_id: prep.rt_id,
+                color_texture: prep.color_texture.as_ref(),
                 color_view: prep.color_view.as_ref(),
                 depth_texture: prep.depth_texture.as_ref(),
                 depth_view: prep.depth_view.as_ref(),
@@ -324,7 +327,7 @@ impl RendererRuntime {
                 continue;
             }
             let rt_id = entry.state.render_texture_asset_id;
-            let (color_view, depth_texture, depth_view, viewport, color_format) = {
+            let (color_texture, color_view, depth_texture, depth_view, viewport, color_format) = {
                 let Some(rt) = self.backend.render_texture_pool().get(rt_id) else {
                     logger::trace!(
                         "secondary camera: render texture asset {rt_id} not resident; skipping"
@@ -340,6 +343,7 @@ impl RendererRuntime {
                     continue;
                 };
                 (
+                    rt.color_texture.clone(),
                     rt.color_view.clone(),
                     dt,
                     dv,
@@ -368,6 +372,7 @@ impl RendererRuntime {
                 host_camera: hc,
                 filter,
                 rt_id,
+                color_texture,
                 color_view,
                 depth_texture,
                 depth_view,

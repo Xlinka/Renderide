@@ -33,6 +33,8 @@ pub(super) fn frame_render_params_from_resolved<'a>(
     FrameRenderParams {
         scene,
         backend,
+        color_texture: resolved.color_texture,
+        color_view: resolved.color_view,
         depth_texture: resolved.depth_texture,
         depth_view: resolved.depth_view,
         surface_format: resolved.surface_format,

@@ -228,6 +228,9 @@ pub struct MaterialDrawBatchKey {
     /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether reflection reports `_IntersectColor`
     /// in the material uniform (second forward subpass with depth snapshot).
     pub embedded_requires_intersection_pass: bool,
+    /// When [`Self::pipeline`] is [`RasterPipelineKind::EmbeddedStem`], whether reflection reports `_GrabPass`
+    /// in the material uniform (per-object color snapshot before drawing).
+    pub embedded_requires_grab_pass: bool,
     /// Runtime color, stencil, and depth state for this material/property-block pair.
     pub render_state: MaterialRenderState,
     /// Resolved material blend mode for pipeline selection and diagnostics.

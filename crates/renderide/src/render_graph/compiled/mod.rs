@@ -38,6 +38,8 @@ pub struct OffscreenSingleViewExecuteSpec<'a> {
 pub struct ExternalOffscreenTargets<'a> {
     /// Host render-texture asset id for `color_view` (used to suppress self-sampling during this pass).
     pub render_texture_asset_id: i32,
+    /// Backing color texture, used for grab-pass scene-color snapshots.
+    pub color_texture: &'a wgpu::Texture,
     /// Color attachment (`Rgba16Float` for Unity `ARGBHalf` parity).
     pub color_view: &'a wgpu::TextureView,
     /// Depth texture backing `depth_view`.
@@ -52,6 +54,8 @@ pub struct ExternalOffscreenTargets<'a> {
 
 /// Pre-acquired 2-layer color + depth targets for OpenXR multiview (no window swapchain acquire).
 pub struct ExternalFrameTargets<'a> {
+    /// Backing `D2Array` color texture, used for grab-pass scene-color snapshots.
+    pub color_texture: &'a wgpu::Texture,
     /// `D2Array` color view (`array_layer_count` = 2).
     pub color_view: &'a wgpu::TextureView,
     /// Backing `D2Array` depth texture for copy/snapshot passes.
@@ -102,6 +106,8 @@ pub(super) struct MultiViewExecutionContext<'a> {
     queue_arc: &'a Arc<wgpu::Queue>,
     /// Swapchain color view when a view targets the main window.
     backbuffer_view_holder: &'a Option<wgpu::TextureView>,
+    /// Acquired swapchain texture when a view targets the main window.
+    backbuffer_texture_holder: &'a Option<wgpu::SurfaceTexture>,
 }
 
 impl<'a> FrameView<'a> {
@@ -283,6 +289,8 @@ pub struct CompiledRenderGraph {
 }
 
 pub(super) struct ResolvedView<'a> {
+    color_texture: &'a wgpu::Texture,
+    color_view: &'a wgpu::TextureView,
     depth_texture: &'a wgpu::Texture,
     depth_view: &'a wgpu::TextureView,
     backbuffer: Option<&'a wgpu::TextureView>,

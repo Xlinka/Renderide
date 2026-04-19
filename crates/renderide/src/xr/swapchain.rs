@@ -74,6 +74,7 @@ impl XrStereoSwapchain {
         let handle = session.create_swapchain(&xr::SwapchainCreateInfo {
             create_flags: xr::SwapchainCreateFlags::EMPTY,
             usage_flags: xr::SwapchainUsageFlags::COLOR_ATTACHMENT
+                | xr::SwapchainUsageFlags::TRANSFER_SRC
                 | xr::SwapchainUsageFlags::SAMPLED,
             format: XR_VK_FORMAT.as_raw() as u32,
             sample_count: 1,

@@ -401,16 +401,18 @@ pub(super) fn prepare_world_mesh_forward_frame(
         use_multiview,
     );
 
-    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(&draws);
+    let (regular_indices, intersect_indices, grab_indices) = partition_special_draw_indices(&draws);
     Some(PreparedWorldMeshForwardFrame {
         draws,
         regular_indices,
         intersect_indices,
+        grab_indices,
         pipeline,
         supports_base_instance,
         opaque_recorded: false,
         depth_snapshot_recorded: false,
         tail_raster_recorded: false,
+        grab_recorded: false,
     })
 }
 
@@ -425,18 +427,23 @@ pub(super) fn stencil_load_ops(
         })
 }
 
-/// Splits draw indices into the main forward pass vs embedded intersection shader subpasses.
-fn partition_intersection_draw_indices(draws: &[WorldMeshDrawItem]) -> (Vec<usize>, Vec<usize>) {
+/// Splits draw indices into the main forward pass vs embedded intersection/grab shader subpasses.
+fn partition_special_draw_indices(
+    draws: &[WorldMeshDrawItem],
+) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     let mut regular_indices = Vec::with_capacity(draws.len());
     let mut intersect_indices = Vec::new();
+    let mut grab_indices = Vec::new();
     for (draw_idx, item) in draws.iter().enumerate() {
-        if item.batch_key.embedded_requires_intersection_pass {
+        if item.batch_key.embedded_requires_grab_pass {
+            grab_indices.push(draw_idx);
+        } else if item.batch_key.embedded_requires_intersection_pass {
             intersect_indices.push(draw_idx);
         } else {
             regular_indices.push(draw_idx);
         }
     }
-    (regular_indices, intersect_indices)
+    (regular_indices, intersect_indices, grab_indices)
 }
 
 /// Bind groups shared across opaque and intersection forward subpasses.
@@ -633,6 +640,143 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         &bind_groups,
         &mut raster_cfg,
     );
+    true
+}
+
+/// Records grab-pass draws one at a time. Each draw first copies the current resolved frame color
+/// into `@group(0)` scene-color snapshot so following blur objects see earlier blur objects.
+pub(super) fn record_world_mesh_forward_grab_passes(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    encoder: &mut wgpu::CommandEncoder,
+    frame: &mut FrameRenderParams<'_>,
+    prepared: &PreparedWorldMeshForwardFrame,
+) -> bool {
+    if prepared.grab_indices.is_empty() {
+        return true;
+    }
+    if !prepared.opaque_recorded {
+        return false;
+    }
+
+    let Some((per_draw_bg, per_draw_storage, per_draw_layout)) =
+        frame.backend.frame_resources.per_draw().map(|d| {
+            (
+                d.bind_group.clone(),
+                d.per_draw_storage.clone(),
+                d.bind_group_layout.clone(),
+            )
+        })
+    else {
+        return false;
+    };
+
+    let msaa_color_view = frame.msaa_color_view.clone();
+    let msaa_depth_view = frame.msaa_depth_view.clone();
+    let color_attachment_view = if frame.sample_count > 1 {
+        let Some(v) = msaa_color_view.as_ref() else {
+            return false;
+        };
+        v
+    } else {
+        frame.color_view
+    };
+    let color_resolve_target = (frame.sample_count > 1).then_some(frame.color_view);
+    let depth_attachment_view = if frame.sample_count > 1 {
+        let Some(v) = msaa_depth_view.as_ref() else {
+            return false;
+        };
+        v
+    } else {
+        frame.depth_view
+    };
+
+    let hc = frame.host_camera;
+    let stereo_cluster =
+        prepared.pipeline.use_multiview && hc.vr_active && hc.stereo_views.is_some();
+    let has_local_lights = frame_has_local_lights(frame);
+    let mut warned_missing_embedded_bind = false;
+
+    for &draw_idx in &prepared.grab_indices {
+        let Some(fgpu) = frame.backend.frame_resources.frame_gpu_mut() else {
+            return false;
+        };
+        fgpu.copy_scene_color_snapshot(
+            device,
+            encoder,
+            frame.color_texture,
+            frame.viewport_px,
+            prepared.pipeline.use_multiview,
+            stereo_cluster,
+        );
+        let Some((frame_bg_arc, empty_bg_arc)) = frame
+            .backend
+            .frame_resources
+            .mesh_forward_frame_bind_groups()
+        else {
+            return false;
+        };
+
+        let bind_groups = ForwardPassBindGroups {
+            per_draw: per_draw_bg.as_ref(),
+            per_draw_storage: &per_draw_storage,
+            per_draw_layout: per_draw_layout.as_ref(),
+            frame: &frame_bg_arc,
+            empty_material: &empty_bg_arc,
+        };
+
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
+            view: color_attachment_view,
+            resolve_target: color_resolve_target,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+            depth_slice: None,
+        })];
+        let depth_stencil_attachment = Some(wgpu::RenderPassDepthStencilAttachment {
+            view: depth_attachment_view,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: stencil_load_ops(prepared.pipeline.pass_desc.depth_stencil_format),
+        });
+
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("world-mesh-forward-grab"),
+            color_attachments: &color_attachments,
+            depth_stencil_attachment,
+            occlusion_query_set: None,
+            timestamp_writes: None,
+            multiview_mask: if prepared.pipeline.use_multiview {
+                NonZeroU32::new(3)
+            } else {
+                None
+            },
+        });
+        let mut raster_cfg = ForwardPassRasterConfig {
+            pass_desc: &prepared.pipeline.pass_desc,
+            shader_perm: prepared.pipeline.shader_perm,
+            supports_base_instance: prepared.supports_base_instance,
+            offscreen_write_render_texture_asset_id: frame.offscreen_write_render_texture_asset_id,
+            has_local_lights,
+            warned_missing_embedded_bind: &mut warned_missing_embedded_bind,
+        };
+        let mut encode_refs = frame.backend.world_mesh_forward_encode_refs();
+        record_world_mesh_forward_subpass(
+            &mut rpass,
+            ForwardSubpassDrawRecord {
+                queue,
+                device,
+                draws: &prepared.draws,
+                draw_indices: std::slice::from_ref(&draw_idx),
+                encode: &mut encode_refs,
+            },
+            &bind_groups,
+            &mut raster_cfg,
+        );
+    }
     true
 }
 

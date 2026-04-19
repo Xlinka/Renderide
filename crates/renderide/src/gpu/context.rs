@@ -260,6 +260,7 @@ impl GpuContext {
         } else {
             wgpu::PresentMode::AutoNoVsync
         };
+        config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface_safe.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
@@ -336,6 +337,7 @@ impl GpuContext {
         } else {
             wgpu::PresentMode::AutoNoVsync
         };
+        config.usage |= wgpu::TextureUsages::COPY_SRC;
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
         let limits = GpuLimits::try_new(device.as_ref(), adapter)?;

@@ -70,10 +70,7 @@ fn render_rows(ui: &imgui::Ui, t: &FrameTimingHudSnapshot) {
     row(
         ui,
         ("CPU", CPU_HEAD_COLOR),
-        (
-            format!("{:5.1}%", t.host_cpu_usage_percent),
-            VALUE_COLOR,
-        ),
+        (format!("{:5.1}%", t.host_cpu_usage_percent), VALUE_COLOR),
         Some(("tick", LABEL_COLOR)),
         Some((format!("{cpu_ms} ms"), VALUE_COLOR)),
     );
@@ -152,11 +149,7 @@ fn render_frametime_graph(ui: &imgui::Ui, t: &FrameTimingHudSnapshot) {
         ui.dummy([width, GRAPH_HEIGHT]);
         return;
     }
-    let peak = t
-        .frame_time_history
-        .iter()
-        .copied()
-        .fold(0.0_f32, f32::max);
+    let peak = t.frame_time_history.iter().copied().fold(0.0_f32, f32::max);
     let (lo, hi) = scale_bounds(&t.frame_time_history);
     let overlay = format!("peak {peak:5.2} ms");
     let style = ui.push_style_color(imgui::StyleColor::PlotLines, GRAPH_COLOR);

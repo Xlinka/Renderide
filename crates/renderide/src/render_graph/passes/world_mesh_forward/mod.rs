@@ -44,7 +44,8 @@ use crate::render_graph::resources::{
 
 use execute_helpers::{
     encode_msaa_depth_resolve_after_clear_only, encode_world_mesh_forward_depth_snapshot,
-    prepare_world_mesh_forward_frame, record_world_mesh_forward_intersection_graph_raster,
+    prepare_world_mesh_forward_frame, record_world_mesh_forward_grab_passes,
+    record_world_mesh_forward_intersection_graph_raster,
     record_world_mesh_forward_opaque_graph_raster, resolve_forward_msaa_views, stencil_load_ops,
 };
 
@@ -69,6 +70,12 @@ pub struct WorldMeshDepthSnapshotPass {
 /// Draws intersection materials and resolves forward color when MSAA is active.
 #[derive(Debug)]
 pub struct WorldMeshForwardIntersectPass {
+    resources: WorldMeshForwardGraphResources,
+}
+
+/// Draws per-object grab-pass materials, copying frame color before each draw.
+#[derive(Debug)]
+pub struct WorldMeshForwardGrabPass {
     resources: WorldMeshForwardGraphResources,
 }
 
@@ -126,6 +133,13 @@ impl WorldMeshDepthSnapshotPass {
 
 impl WorldMeshForwardIntersectPass {
     /// Creates a world mesh intersection raster pass instance.
+    pub fn new(resources: WorldMeshForwardGraphResources) -> Self {
+        Self { resources }
+    }
+}
+
+impl WorldMeshForwardGrabPass {
+    /// Creates a world mesh grab-pass raster pass instance.
     pub fn new(resources: WorldMeshForwardGraphResources) -> Self {
         Self { resources }
     }
@@ -293,7 +307,11 @@ impl RenderPass for WorldMeshForwardOpaquePass {
             return Ok(());
         };
         let recorded = record_world_mesh_forward_opaque_graph_raster(
-            rpass, ctx.device, ctx.queue.as_ref(), frame, &prepared,
+            rpass,
+            ctx.device,
+            ctx.queue.as_ref(),
+            frame,
+            &prepared,
         );
         prepared.opaque_recorded = recorded;
         frame.prepared_world_mesh_forward = Some(prepared);
@@ -464,13 +482,75 @@ impl RenderPass for WorldMeshForwardIntersectPass {
         };
         let recorded = if prepared.opaque_recorded {
             record_world_mesh_forward_intersection_graph_raster(
-                rpass, ctx.device, ctx.queue.as_ref(), frame, &prepared,
+                rpass,
+                ctx.device,
+                ctx.queue.as_ref(),
+                frame,
+                &prepared,
             )
         } else {
             false
         };
         if recorded {
             prepared.tail_raster_recorded = true;
+        }
+        frame.prepared_world_mesh_forward = Some(prepared);
+        Ok(())
+    }
+}
+
+impl RenderPass for WorldMeshForwardGrabPass {
+    fn name(&self) -> &str {
+        "WorldMeshForwardGrab"
+    }
+
+    fn setup(&mut self, b: &mut PassBuilder<'_>) -> Result<(), SetupError> {
+        {
+            let mut r = b.raster();
+            r.frame_sampled_color(
+                self.resources.color,
+                self.resources.msaa_color,
+                wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                Some(self.resources.color),
+            );
+            r.frame_sampled_depth(
+                self.resources.depth,
+                self.resources.msaa_depth,
+                wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+                None,
+            );
+        }
+        b.import_texture(self.resources.color, TextureAccess::CopySrc);
+        declare_forward_draw_reads(b, self.resources);
+        Ok(())
+    }
+
+    fn execute(&mut self, ctx: &mut RenderPassContext<'_, '_, '_>) -> Result<(), RenderPassError> {
+        let Some(frame) = ctx.frame.as_mut() else {
+            return Err(RenderPassError::MissingFrameParams {
+                pass: self.name().to_string(),
+            });
+        };
+        apply_graph_forward_msaa_views(frame, ctx.graph_resources, self.resources);
+
+        let Some(mut prepared) = frame.prepared_world_mesh_forward.take() else {
+            return Ok(());
+        };
+        let recorded = record_world_mesh_forward_grab_passes(
+            ctx.device,
+            ctx.queue.as_ref(),
+            ctx.encoder,
+            frame,
+            &prepared,
+        );
+        if recorded {
+            prepared.grab_recorded = true;
         }
         frame.prepared_world_mesh_forward = Some(prepared);
         Ok(())

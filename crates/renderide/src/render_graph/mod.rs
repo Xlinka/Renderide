@@ -324,6 +324,9 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     let forward_intersect = builder.add_pass(Box::new(passes::WorldMeshForwardIntersectPass::new(
         forward_resources,
     )));
+    let forward_grab = builder.add_pass(Box::new(passes::WorldMeshForwardGrabPass::new(
+        forward_resources,
+    )));
     let depth_resolve = builder.add_pass(Box::new(passes::WorldMeshForwardDepthResolvePass::new(
         forward_resources,
     )));
@@ -339,7 +342,8 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     builder.add_edge(forward_prepare, forward_opaque);
     builder.add_edge(forward_opaque, depth_snapshot);
     builder.add_edge(depth_snapshot, forward_intersect);
-    builder.add_edge(forward_intersect, depth_resolve);
+    builder.add_edge(forward_intersect, forward_grab);
+    builder.add_edge(forward_grab, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
     builder.build()
 }
@@ -370,11 +374,11 @@ mod default_graph_tests {
     }
 
     #[test]
-    fn default_main_needs_surface_and_eight_passes() {
+    fn default_main_needs_surface_and_nine_passes() {
         let g = build_main_graph(smoke_key()).expect("default graph");
         assert!(g.needs_surface_acquire());
-        assert_eq!(g.pass_count(), 8);
-        assert_eq!(g.compile_stats.topo_levels, 8);
+        assert_eq!(g.pass_count(), 9);
+        assert_eq!(g.compile_stats.topo_levels, 9);
         assert_eq!(g.compile_stats.transient_texture_count, 3);
     }
 

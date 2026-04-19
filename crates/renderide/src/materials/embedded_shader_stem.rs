@@ -66,6 +66,7 @@ fn xiexe_toon2_asset_lookup_key(name: &str) -> Option<&'static str> {
 fn compact_alias_lookup_key(name: &str) -> Option<&'static str> {
     match compact_alnum_lower(name).as_str() {
         "billboardunlit" => Some("billboardunlit"),
+        "blurperobject" => Some("filters_blur_perobject"),
         _ => None,
     }
 }
@@ -320,6 +321,26 @@ mod tests {
         assert_eq!(
             embedded_default_stem_for_unity_name("Custom/PBSIntersect").as_deref(),
             Some("custom_pbsintersect_default")
+        );
+    }
+
+    #[test]
+    fn resolves_filters_blur_perobject_from_shader_lab_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Filters/Blur_PerObject").as_deref(),
+            Some("filters_blur_perobject_default")
+        );
+    }
+
+    #[test]
+    fn resolves_filters_blur_perobject_from_compact_stem() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Blur_PerObject").as_deref(),
+            Some("filters_blur_perobject_default")
+        );
+        assert_eq!(
+            embedded_default_stem_for_unity_name("blur_perobject").as_deref(),
+            Some("filters_blur_perobject_default")
         );
     }
 

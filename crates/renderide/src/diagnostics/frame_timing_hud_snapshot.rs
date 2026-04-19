@@ -142,9 +142,6 @@ mod tests {
         assert_eq!(h.len(), FRAME_TIME_HISTORY_LEN);
         let v = h.to_vec();
         assert_eq!(v.first().copied(), Some(10.0));
-        assert_eq!(
-            v.last().copied(),
-            Some((FRAME_TIME_HISTORY_LEN + 9) as f32)
-        );
+        assert_eq!(v.last().copied(), Some((FRAME_TIME_HISTORY_LEN + 9) as f32));
     }
 }

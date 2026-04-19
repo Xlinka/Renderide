@@ -545,6 +545,7 @@ mod text_uniform_packing_tests {
         );
         assert_eq!(default_vec4_for_field("_Rect"), [0.0, 0.0, 1.0, 1.0]);
         assert_eq!(default_vec4_for_field("_Point"), [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(default_vec4_for_field("_Spread"), [0.1, 0.1, 0.0, 0.0]);
         assert_eq!(default_vec4_for_field("_OverlayTint"), [1.0, 1.0, 1.0, 0.5]);
         assert_eq!(
             default_vec4_for_field("_BehindFarColor"),
@@ -558,6 +559,18 @@ mod text_uniform_packing_tests {
         assert_eq!(
             default_f32_for_field("_Distance", &store, lookup(5), &ids),
             1.0
+        );
+        assert_eq!(
+            default_f32_for_field("_Iterations", &store, lookup(5), &ids),
+            4.0
+        );
+        assert_eq!(
+            default_f32_for_field("_DepthDivisor", &store, lookup(5), &ids),
+            1.0
+        );
+        assert_eq!(
+            default_f32_for_field("_RefractionStrength", &store, lookup(5), &ids),
+            0.01
         );
         assert_eq!(
             default_f32_for_field("_Transition", &store, lookup(5), &ids),

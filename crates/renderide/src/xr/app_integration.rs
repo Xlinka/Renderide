@@ -236,12 +236,17 @@ pub fn try_openxr_hmd_multiview_submit(
         let _ = sc.handle.release_image();
         return false;
     };
+    let Some(color_texture) = sc.color_texture_for_image(image_index) else {
+        let _ = sc.handle.release_image();
+        return false;
+    };
     let Some(stereo_depth) = bundle.stereo_depth.as_ref() else {
         logger::debug!("OpenXR stereo depth texture missing after resize");
         let _ = sc.handle.release_image();
         return false;
     };
     let ext = ExternalFrameTargets {
+        color_texture,
         color_view,
         depth_texture: &stereo_depth.0,
         depth_view: &stereo_depth.1,
