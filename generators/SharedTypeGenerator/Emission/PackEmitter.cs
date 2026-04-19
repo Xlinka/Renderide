@@ -167,7 +167,7 @@ public static class PackEmitter
 
     private static string UnpackLine(Logger logger, string csharpTypeName, string name, FieldKind kind,
         List<FieldDescriptor> fields) => kind switch
-    {
+        {
             FieldKind.Pod => $"self.{name} = unpacker.read()?;",
             FieldKind.Bool => $"self.{name} = unpacker.read_bool()?;",
             FieldKind.String => $"self.{name} = unpacker.read_str()?;",
@@ -183,7 +183,7 @@ public static class PackEmitter
             FieldKind.StringList => $"self.{name} = unpacker.read_string_list()?;",
             FieldKind.NestedValueList => $"self.{name} = unpacker.read_nested_value_list()?;",
             _ => UnknownFieldKindUnpackLine(logger, csharpTypeName, name, kind),
-    };
+        };
 
     private static string UnknownFieldKindUnpackLine(Logger logger, string csharpTypeName, string name, FieldKind kind)
     {

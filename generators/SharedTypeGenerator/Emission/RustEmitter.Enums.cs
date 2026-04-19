@@ -70,7 +70,7 @@ public partial class RustEmitter
 
         _w.Line("    _ => {");
         _w.Line(
-            $"        warn!(\"invalid {enumRustName} wire value {{}}; using default\", raw);");
+            $"        trace!(\"invalid {enumRustName} wire value {{}}; using default\", raw);");
         _w.Line($"        Self::{defaultVariant}");
         _w.Line("    }");
         _w.Line("};");
@@ -101,7 +101,7 @@ public partial class RustEmitter
 
         _w.Line("    _ => {");
         _w.Line(
-            $"        warn!(\"invalid {enumRustName} discriminant {{}}; using default\", i);");
+            $"        trace!(\"invalid {enumRustName} discriminant {{}}; using default\", i);");
         _w.Line($"        Self::{defaultVariant}");
         _w.Line("    }");
         _w.Line("}");

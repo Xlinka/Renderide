@@ -86,18 +86,13 @@ impl CompiledRenderGraph {
         backend: &mut RenderBackend,
         host_camera: HostCameraFrame,
     ) -> Result<(), GraphExecuteError> {
-        self.execute_multi_view(
-            gpu,
-            window,
-            scene,
-            backend,
-            vec![FrameView {
-                host_camera,
-                target: FrameViewTarget::Swapchain,
-                draw_filter: None,
-                prefetched_world_mesh_draws: None,
-            }],
-        )
+        let mut single = [FrameView {
+            host_camera,
+            target: FrameViewTarget::Swapchain,
+            draw_filter: None,
+            prefetched_world_mesh_draws: None,
+        }];
+        self.execute_multi_view(gpu, window, scene, backend, &mut single)
     }
 
     /// Records passes against pre-built multiview array targets (OpenXR swapchain path).
@@ -110,18 +105,13 @@ impl CompiledRenderGraph {
         host_camera: HostCameraFrame,
         external: ExternalFrameTargets<'_>,
     ) -> Result<(), GraphExecuteError> {
-        self.execute_multi_view(
-            gpu,
-            window,
-            scene,
-            backend,
-            vec![FrameView {
-                host_camera,
-                target: FrameViewTarget::ExternalMultiview(external),
-                draw_filter: None,
-                prefetched_world_mesh_draws: None,
-            }],
-        )
+        let mut single = [FrameView {
+            host_camera,
+            target: FrameViewTarget::ExternalMultiview(external),
+            draw_filter: None,
+            prefetched_world_mesh_draws: None,
+        }];
+        self.execute_multi_view(gpu, window, scene, backend, &mut single)
     }
 
     /// Renders the graph to a single-view offscreen color/depth target (secondary camera → render texture).
@@ -137,18 +127,13 @@ impl CompiledRenderGraph {
         let external = spec.external;
         let transform_filter = spec.transform_filter;
         let prefetched_world_mesh_draws = spec.prefetched_world_mesh_draws;
-        self.execute_multi_view(
-            gpu,
-            window,
-            scene,
-            backend,
-            vec![FrameView {
-                host_camera,
-                target: FrameViewTarget::OffscreenRt(external),
-                draw_filter: transform_filter,
-                prefetched_world_mesh_draws,
-            }],
-        )
+        let mut single = [FrameView {
+            host_camera,
+            target: FrameViewTarget::OffscreenRt(external),
+            draw_filter: transform_filter,
+            prefetched_world_mesh_draws,
+        }];
+        self.execute_multi_view(gpu, window, scene, backend, &mut single)
     }
 
     /// Records all views: one encoder + submit for frame-global work, then one encoder + submit per view.
@@ -160,13 +145,17 @@ impl CompiledRenderGraph {
     ///
     /// Frame-global passes ([`PassPhase::FrameGlobal`]) run once in the first encoder; per-view
     /// passes run for each [`FrameView`] in order.
-    pub fn execute_multi_view(
+    ///
+    /// `views` is borrowed for the duration of execution (callers can pass a stack-allocated
+    /// one-element array or reuse a [`Vec`] through `as_mut_slice()` to avoid allocating a fresh
+    /// [`Vec`] each frame for single-view paths).
+    pub fn execute_multi_view<'a>(
         &mut self,
         gpu: &mut GpuContext,
         window: &Window,
         scene: &SceneCoordinator,
         backend: &mut RenderBackend,
-        mut views: Vec<FrameView<'_>>,
+        views: &mut [FrameView<'a>],
     ) -> Result<(), GraphExecuteError> {
         if views.is_empty() {
             return Ok(());
@@ -193,11 +182,14 @@ impl CompiledRenderGraph {
             } => (Some(frame), Some(backbuffer_view)),
         };
 
+        // `resolve_view_from_target` and submits need `&mut GpuContext` while passes need `&Device`,
+        // `&GpuLimits`, and `&Arc<Queue>`. Those cannot be borrowed directly from `gpu` alongside
+        // the mutable context borrow, so we hold refcounted clones for the frame (cheap atomics).
         let device_arc = gpu.device().clone();
         let queue_arc = gpu.queue().clone();
+        let limits_arc = gpu.limits().clone();
         let device = device_arc.as_ref();
-        let gpu_limits_owned = gpu.limits().clone();
-        let gpu_limits = gpu_limits_owned.as_ref();
+        let gpu_limits = limits_arc.as_ref();
 
         backend.transient_pool_mut().begin_generation();
 
@@ -213,10 +205,10 @@ impl CompiledRenderGraph {
 
         let mut transient_by_key: HashMap<GraphResolveKey, GraphResolvedResources> = HashMap::new();
 
-        self.execute_multi_view_frame_global_passes(&mut mv_ctx, &views, &mut transient_by_key)?;
+        self.execute_multi_view_frame_global_passes(&mut mv_ctx, views, &mut transient_by_key)?;
 
         // Per-view: separate encoder + submit so queue writes before each submit apply only to this view.
-        for view in &mut views {
+        for view in views.iter_mut() {
             self.execute_multi_view_submit_for_one_view(&mut mv_ctx, view, &mut transient_by_key)?;
         }
 

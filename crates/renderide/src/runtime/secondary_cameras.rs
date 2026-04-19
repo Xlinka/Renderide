@@ -174,7 +174,7 @@ impl RendererRuntime {
         }
         if !views.is_empty() {
             self.backend
-                .execute_multi_view_frame(gpu, window, scene_ref, views, true)?;
+                .execute_multi_view_frame(gpu, window, scene_ref, &mut views, true)?;
         }
         Ok(())
     }
@@ -285,7 +285,7 @@ impl RendererRuntime {
             transform_filter: None,
         });
 
-        let views = build_desktop_multi_view_frame_list(
+        let mut views = build_desktop_multi_view_frame_list(
             &prepared,
             secondary_prefetched,
             hc,
@@ -293,7 +293,7 @@ impl RendererRuntime {
         );
 
         self.backend
-            .execute_multi_view_frame(gpu, window, scene_ref, views, true)
+            .execute_multi_view_frame(gpu, window, scene_ref, &mut views, true)
     }
 
     fn collect_secondary_rt_prepared(&mut self) -> Vec<SecondaryRtPrepared> {

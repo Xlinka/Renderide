@@ -32,7 +32,7 @@ public partial class RustEmitter
         _w.Line("use super::buffer::SharedMemoryBufferDescriptor;");
         _w.Line("use super::packing::enum_repr::EnumRepr;");
         _w.Line("use bytemuck::{Pod, Zeroable};");
-        _w.Line("use logger::warn;");
+        _w.Line("use logger::trace;");
         _w.BlankLine();
     }
 
