@@ -1,5 +1,6 @@
 //! Errors returned by the bootstrapper `run` entry point.
 
+use interprocess::OpenError;
 use thiserror::Error;
 
 /// Top-level failure from [`crate::run`].
@@ -12,9 +13,12 @@ pub enum BootstrapError {
         #[source]
         std::io::Error,
     ),
-    /// Queue option or open failure with context.
-    #[error("{0}")]
-    Interprocess(String),
+    /// Invalid queue capacity, alignment, or other [`interprocess::QueueOptions`] validation failure.
+    #[error("queue options: {0}")]
+    QueueOptionsInvalid(String),
+    /// Opening shared queue memory or creating the wakeup semaphore failed.
+    #[error(transparent)]
+    InterprocessOpen(#[from] OpenError),
     /// Logging could not be initialized.
     #[error("logging: {0}")]
     Logging(#[source] std::io::Error),
@@ -39,9 +43,10 @@ mod tests {
     }
 
     #[test]
-    fn display_interprocess() {
-        let e = BootstrapError::Interprocess("queue failed".to_string());
-        assert_eq!(e.to_string(), "queue failed");
+    fn display_queue_options_invalid() {
+        let e = BootstrapError::QueueOptionsInvalid("capacity too small".to_string());
+        assert!(e.to_string().contains("queue options"));
+        assert!(e.to_string().contains("capacity too small"));
     }
 
     #[test]

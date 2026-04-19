@@ -1,5 +1,6 @@
 //! Serde/TOML schema for renderer settings (`[display]`, `[rendering]`, `[debug]`).
 
+use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
 use serde::{Deserialize, Serialize};
 
 /// Display-related caps. Persisted as `[display]`.
@@ -254,12 +255,12 @@ impl RendererSettings {
     /// Effective value for [`crate::shared::RendererInitResult::max_texture_size`].
     ///
     /// `gpu_max_texture_dim_2d` should be [`wgpu::Limits::max_texture_dimension_2d`] when the device
-    /// exists; use [`None`] before GPU init (conservative **8192** fallback).
+    /// exists; use [`None`] before GPU init (conservative [`REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE`]).
     pub fn reported_max_texture_dimension_for_host(
         &self,
         gpu_max_texture_dim_2d: Option<u32>,
     ) -> i32 {
-        let gpu_cap = gpu_max_texture_dim_2d.unwrap_or(8192);
+        let gpu_cap = gpu_max_texture_dim_2d.unwrap_or(REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE);
         let cap = self.rendering.reported_max_texture_size;
         let v = if cap == 0 { gpu_cap } else { cap.min(gpu_cap) };
         v as i32
@@ -267,7 +268,70 @@ impl RendererSettings {
 }
 
 #[cfg(test)]
+mod persist_str_parsers_tests {
+    use super::{MsaaSampleCount, PowerPreferenceSetting};
+
+    #[test]
+    fn msaa_sample_count_from_persist_str_aliases_and_counts() {
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("off"),
+            Some(MsaaSampleCount::Off)
+        );
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("1x"),
+            Some(MsaaSampleCount::Off)
+        );
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("X2"),
+            Some(MsaaSampleCount::X2)
+        );
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("4"),
+            Some(MsaaSampleCount::X4)
+        );
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("x16"),
+            Some(MsaaSampleCount::X8)
+        );
+        assert_eq!(
+            MsaaSampleCount::from_persist_str("16x"),
+            Some(MsaaSampleCount::X8)
+        );
+        assert_eq!(MsaaSampleCount::from_persist_str("bogus"), None);
+
+        assert_eq!(MsaaSampleCount::Off.as_count(), 1);
+        assert_eq!(MsaaSampleCount::X2.as_count(), 2);
+        assert_eq!(MsaaSampleCount::X4.as_count(), 4);
+        assert_eq!(MsaaSampleCount::X8.as_count(), 8);
+        assert_eq!(MsaaSampleCount::X8.as_persist_str(), "x8");
+    }
+
+    #[test]
+    fn power_preference_from_persist_str() {
+        assert_eq!(
+            PowerPreferenceSetting::from_persist_str("low_power"),
+            Some(PowerPreferenceSetting::LowPower)
+        );
+        assert_eq!(
+            PowerPreferenceSetting::from_persist_str("LOW"),
+            Some(PowerPreferenceSetting::LowPower)
+        );
+        assert_eq!(
+            PowerPreferenceSetting::from_persist_str("performance"),
+            Some(PowerPreferenceSetting::HighPerformance)
+        );
+        assert_eq!(
+            PowerPreferenceSetting::from_persist_str("high_performance"),
+            Some(PowerPreferenceSetting::HighPerformance)
+        );
+        assert_eq!(PowerPreferenceSetting::from_persist_str(""), None);
+    }
+}
+
+#[cfg(test)]
 mod reported_max_texture_tests {
+    use crate::gpu::REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE;
+
     use super::RendererSettings;
 
     #[test]
@@ -290,6 +354,9 @@ mod reported_max_texture_tests {
     #[test]
     fn reported_max_texture_fallback_without_gpu() {
         let s = RendererSettings::default();
-        assert_eq!(s.reported_max_texture_dimension_for_host(None), 8192);
+        assert_eq!(
+            s.reported_max_texture_dimension_for_host(None),
+            REPORTED_MAX_TEXTURE_SIZE_FALLBACK_EDGE as i32
+        );
     }
 }

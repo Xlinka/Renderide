@@ -35,7 +35,7 @@ public partial class RustEmitter
         {
             using (_w.BeginMethod("pack", "", null, ["&mut self", "packer: &mut MemoryPacker<'_>"], isPublic: false))
                 _w.Line($"packer.write(&(*self as {rustType}));");
-            using (_w.BeginMethod("unpack", "", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
+            using (_w.BeginMethod("unpack", "Result<(), WireDecodeError>", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
                 EmitValueEnumUnpackMatch(name, rustType, type.EnumMembers);
         }
 
@@ -60,7 +60,7 @@ public partial class RustEmitter
         EnumMember defaultMember = members.First(static m => m.IsDefault);
         string defaultVariant = defaultMember.Name.HumanizeVariant();
 
-        _w.Line($"let raw = unpacker.read::<{rustType}>();");
+        _w.Line($"let raw = unpacker.read::<{rustType}>()?;");
         _w.Line("*self = match raw {");
         foreach (EnumMember member in members)
         {
@@ -74,6 +74,7 @@ public partial class RustEmitter
         _w.Line($"        Self::{defaultVariant}");
         _w.Line("    }");
         _w.Line("};");
+        _w.Line("Ok(())");
     }
 
     /// <summary>Emits <c>match i { ... }</c> for <see cref="EnumRepr"/> without transmute.</summary>
@@ -165,8 +166,11 @@ public partial class RustEmitter
         {
             using (_w.BeginMethod("pack", "", null, ["&mut self", "packer: &mut MemoryPacker<'_>"], isPublic: false))
                 _w.Line("packer.write(&self.0);");
-            using (_w.BeginMethod("unpack", "", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
-                _w.Line("self.0 = unpacker.read();");
+            using (_w.BeginMethod("unpack", "Result<(), WireDecodeError>", ["P: MemoryPackerEntityPool"], ["&mut self", "unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: false))
+            {
+                _w.Line("self.0 = unpacker.read()?;");
+                _w.Line("Ok(())");
+            }
         }
     }
 }

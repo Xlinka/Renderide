@@ -13,7 +13,9 @@ use crate::assets::mesh::GpuMesh;
 use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter};
 use crate::pipelines::ShaderPermutation;
 use crate::resources::MeshPool;
-use crate::scene::{RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer};
+use crate::scene::{
+    MeshMaterialSlot, RenderSpaceId, SceneCoordinator, SkinnedMeshRenderer, StaticMeshRenderer,
+};
 use crate::shared::RenderingContext;
 
 use super::sort::{batch_key_for_slot, sort_world_mesh_draws, sort_world_mesh_draws_serial};
@@ -24,6 +26,24 @@ use super::types::{
 use super::super::world_mesh_cull_eval::{
     mesh_draw_passes_cpu_cull, CpuCullFailure, MeshCullTarget,
 };
+
+/// Submesh index range for one material slot pairing during draw collection.
+pub(crate) struct SubmeshSlotIndices {
+    /// Slot index in [`StaticMeshRenderer`] material slots.
+    pub slot_index: usize,
+    /// First index in the mesh index buffer for this submesh.
+    pub first_index: u32,
+    /// Index count for this submesh draw.
+    pub index_count: u32,
+}
+
+/// Layer and skin deform flags that affect CPU cull and [`WorldMeshDrawItem`] fields.
+pub(crate) struct OverlayDeformCullFlags {
+    /// Overlay layer uses alternate cull behavior.
+    pub is_overlay: bool,
+    /// Skinned mesh with world-space deform from the skin cache.
+    pub world_space_deformed: bool,
+}
 
 /// Read-only scene, material, and cull state shared across all spaces during draw collection.
 pub struct DrawCollectionContext<'a> {
@@ -129,85 +149,120 @@ fn push_draws_for_renderer(
 
     for slot_index in 0..n {
         let slot = &slots[slot_index];
-        let material_asset_id = ctx
-            .scene
-            .overridden_material_asset_id(
-                draw.space_id,
-                ctx.render_context,
-                draw.skinned,
-                draw.renderable_index,
-                slot_index,
-            )
-            .unwrap_or(slot.material_asset_id);
         let (first_index, index_count) = draw.submeshes[slot_index];
-        if index_count == 0 {
-            continue;
-        }
-        if material_asset_id < 0 {
-            continue;
-        }
-        let rigid_world_matrix = if draw.skinned {
-            None
-        } else if let Some(c) = ctx.culling {
-            acc.cull_stats.0 += 1;
-            let target = MeshCullTarget {
-                scene: ctx.scene,
-                space_id: draw.space_id,
-                mesh: draw.mesh,
-                skinned: draw.skinned,
-                skinned_renderer: draw.skinned_renderer,
-                node_id: draw.renderer.node_id,
-            };
-            match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
-                Err(CpuCullFailure::Frustum) => {
-                    acc.cull_stats.1 += 1;
-                    continue;
-                }
-                Err(CpuCullFailure::HiZ) => {
-                    acc.cull_stats.2 += 1;
-                    continue;
-                }
-                Ok(m) => m,
-            }
-        } else {
-            ctx.scene.world_matrix_for_render_context(
-                draw.space_id,
-                draw.renderer.node_id as usize,
-                ctx.render_context,
-                ctx.head_output_transform,
-            )
-        };
-        let lookup_ids = MaterialPropertyLookupIds {
-            material_asset_id,
-            mesh_property_block_slot0: slot.property_block_id,
-        };
-        let batch_key = batch_key_for_slot(
-            material_asset_id,
-            slot.property_block_id,
-            draw.skinned,
-            ctx.material_dict,
-            ctx.material_router,
-            ctx.pipeline_property_ids,
-            ctx.shader_perm,
+        push_one_slot_draw(
+            ctx,
+            acc,
+            &draw,
+            slot,
+            SubmeshSlotIndices {
+                slot_index,
+                first_index,
+                index_count,
+            },
+            OverlayDeformCullFlags {
+                is_overlay,
+                world_space_deformed,
+            },
         );
-        acc.out.push(WorldMeshDrawItem {
-            space_id: draw.space_id,
-            node_id: draw.renderer.node_id,
-            mesh_asset_id: draw.renderer.mesh_asset_id,
-            slot_index,
-            first_index,
-            index_count,
-            is_overlay,
-            sorting_order: draw.renderer.sorting_order,
-            skinned: draw.skinned,
-            world_space_deformed,
-            collect_order: 0,
-            camera_distance_sq: 0.0,
-            lookup_ids,
-            batch_key,
-            rigid_world_matrix,
-        });
     }
+}
+
+/// One material slot × submesh pairing: optional CPU cull, batch key, and [`WorldMeshDrawItem`] push.
+fn push_one_slot_draw(
+    ctx: &DrawCollectionContext<'_>,
+    acc: &mut DrawCollectionAccumulator<'_>,
+    draw: &StaticMeshDrawSource<'_>,
+    slot: &MeshMaterialSlot,
+    indices: SubmeshSlotIndices,
+    flags: OverlayDeformCullFlags,
+) {
+    let SubmeshSlotIndices {
+        slot_index,
+        first_index,
+        index_count,
+    } = indices;
+    let OverlayDeformCullFlags {
+        is_overlay,
+        world_space_deformed,
+    } = flags;
+    let material_asset_id = ctx
+        .scene
+        .overridden_material_asset_id(
+            draw.space_id,
+            ctx.render_context,
+            draw.skinned,
+            draw.renderable_index,
+            slot_index,
+        )
+        .unwrap_or(slot.material_asset_id);
+    if index_count == 0 {
+        return;
+    }
+    if material_asset_id < 0 {
+        return;
+    }
+    let rigid_world_matrix = if draw.skinned {
+        None
+    } else if let Some(c) = ctx.culling {
+        acc.cull_stats.0 += 1;
+        let target = MeshCullTarget {
+            scene: ctx.scene,
+            space_id: draw.space_id,
+            mesh: draw.mesh,
+            skinned: draw.skinned,
+            skinned_renderer: draw.skinned_renderer,
+            node_id: draw.renderer.node_id,
+        };
+        match mesh_draw_passes_cpu_cull(&target, is_overlay, c, ctx.render_context) {
+            Err(CpuCullFailure::Frustum) => {
+                acc.cull_stats.1 += 1;
+                return;
+            }
+            Err(CpuCullFailure::HiZ) => {
+                acc.cull_stats.2 += 1;
+                return;
+            }
+            Ok(m) => m,
+        }
+    } else {
+        ctx.scene.world_matrix_for_render_context(
+            draw.space_id,
+            draw.renderer.node_id as usize,
+            ctx.render_context,
+            ctx.head_output_transform,
+        )
+    };
+    let lookup_ids = MaterialPropertyLookupIds {
+        material_asset_id,
+        mesh_property_block_slot0: slot.property_block_id,
+    };
+    let batch_key = batch_key_for_slot(
+        material_asset_id,
+        slot.property_block_id,
+        draw.skinned,
+        ctx.material_dict,
+        ctx.material_router,
+        ctx.pipeline_property_ids,
+        ctx.shader_perm,
+    );
+    acc.out.push(WorldMeshDrawItem {
+        space_id: draw.space_id,
+        node_id: draw.renderer.node_id,
+        mesh_asset_id: draw.renderer.mesh_asset_id,
+        slot_index,
+        first_index,
+        index_count,
+        is_overlay,
+        sorting_order: draw.renderer.sorting_order,
+        skinned: draw.skinned,
+        world_space_deformed,
+        collect_order: 0,
+        camera_distance_sq: 0.0,
+        lookup_ids,
+        batch_key,
+        rigid_world_matrix,
+    });
 }
 
 /// Collects draws for one render space (static then skinned renderers).

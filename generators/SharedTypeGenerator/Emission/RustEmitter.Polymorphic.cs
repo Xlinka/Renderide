@@ -57,17 +57,17 @@ public partial class RustEmitter
         // decode function
         string decodeFnName = "decode_" + unionName.HumanizeField();
         _w.BlankLine();
-        using (_w.BeginMethod(decodeFnName, unionName, ["P: MemoryPackerEntityPool"], ["unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: true))
+        using (_w.BeginMethod(decodeFnName, $"Result<{unionName}, WireDecodeError>", ["P: MemoryPackerEntityPool"], ["unpacker: &mut MemoryUnpacker<'_, '_, P>"], isPublic: true))
         {
-            _w.Line("let tag = unpacker.read::<i32>();");
+            _w.Line("let tag = unpacker.read::<i32>()?;");
             _w.Line("match tag {");
             for (int i = 0; i < typeNames.Count; i++)
             {
                 string variant = typeNames[i].HumanizeVariant();
                 string payloadType = typeNames[i].HumanizeType();
-                _w.Line($"    {i} => {unionName}::{variant}({{ let mut x = {payloadType}::default(); x.unpack(unpacker); x }}),");
+                _w.Line($"    {i} => Ok({unionName}::{variant}({{ let mut x = {payloadType}::default(); x.unpack(unpacker)?; x }})),");
             }
-            _w.Line("    _ => panic!(\"Invalid polymorphic tag: {:?}\", tag),");
+            _w.Line($"    _ => Err(PolymorphicDecodeError {{ discriminator: tag, union: \"{unionName}\" }}.into()),");
             _w.Line("}");
         }
     }

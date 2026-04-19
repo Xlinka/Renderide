@@ -43,6 +43,31 @@ const MAX_CACHED_EMBEDDED_SAMPLERS: usize = 512;
 /// LRU cap for texture HUD asset-id scans.
 const MAX_CACHED_TEXTURE_DEBUG_IDS: usize = 512;
 
+const MAX_CACHED_EMBEDDED_BIND_GROUPS_NZ: NonZeroUsize = {
+    match NonZeroUsize::new(MAX_CACHED_EMBEDDED_BIND_GROUPS) {
+        Some(n) => n,
+        None => panic!("MAX_CACHED_EMBEDDED_BIND_GROUPS must be non-zero"),
+    }
+};
+const MAX_CACHED_EMBEDDED_UNIFORMS_NZ: NonZeroUsize = {
+    match NonZeroUsize::new(MAX_CACHED_EMBEDDED_UNIFORMS) {
+        Some(n) => n,
+        None => panic!("MAX_CACHED_EMBEDDED_UNIFORMS must be non-zero"),
+    }
+};
+const MAX_CACHED_EMBEDDED_SAMPLERS_NZ: NonZeroUsize = {
+    match NonZeroUsize::new(MAX_CACHED_EMBEDDED_SAMPLERS) {
+        Some(n) => n,
+        None => panic!("MAX_CACHED_EMBEDDED_SAMPLERS must be non-zero"),
+    }
+};
+const MAX_CACHED_TEXTURE_DEBUG_IDS_NZ: NonZeroUsize = {
+    match NonZeroUsize::new(MAX_CACHED_TEXTURE_DEBUG_IDS) {
+        Some(n) => n,
+        None => panic!("MAX_CACHED_TEXTURE_DEBUG_IDS must be non-zero"),
+    }
+};
+
 type EmbeddedGroup1TexturesAndSamplers = (Vec<Arc<wgpu::TextureView>>, Vec<Arc<wgpu::Sampler>>);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -274,22 +299,10 @@ impl EmbeddedMaterialBindResources {
             property_registry,
             shared_keyword_ids,
             stem_cache: RefCell::new(HashMap::new()),
-            bind_cache: RefCell::new(LruCache::new(
-                NonZeroUsize::new(MAX_CACHED_EMBEDDED_BIND_GROUPS)
-                    .expect("MAX_CACHED_EMBEDDED_BIND_GROUPS > 0"),
-            )),
-            uniform_cache: RefCell::new(LruCache::new(
-                NonZeroUsize::new(MAX_CACHED_EMBEDDED_UNIFORMS)
-                    .expect("MAX_CACHED_EMBEDDED_UNIFORMS > 0"),
-            )),
-            sampler_cache: RefCell::new(LruCache::new(
-                NonZeroUsize::new(MAX_CACHED_EMBEDDED_SAMPLERS)
-                    .expect("MAX_CACHED_EMBEDDED_SAMPLERS > 0"),
-            )),
-            texture_debug_cache: RefCell::new(LruCache::new(
-                NonZeroUsize::new(MAX_CACHED_TEXTURE_DEBUG_IDS)
-                    .expect("MAX_CACHED_TEXTURE_DEBUG_IDS > 0"),
-            )),
+            bind_cache: RefCell::new(LruCache::new(MAX_CACHED_EMBEDDED_BIND_GROUPS_NZ)),
+            uniform_cache: RefCell::new(LruCache::new(MAX_CACHED_EMBEDDED_UNIFORMS_NZ)),
+            sampler_cache: RefCell::new(LruCache::new(MAX_CACHED_EMBEDDED_SAMPLERS_NZ)),
+            texture_debug_cache: RefCell::new(LruCache::new(MAX_CACHED_TEXTURE_DEBUG_IDS_NZ)),
         })
     }
 
@@ -406,6 +419,26 @@ impl EmbeddedMaterialBindResources {
 
         let mutation_gen = store.mutation_generation(lookup);
 
+        let hit_bg = {
+            let mut cache = self.bind_cache.borrow_mut();
+            cache.get(&bind_key).cloned()
+        };
+        if let Some(bg) = hit_bg {
+            // Bind group is unchanged; still refresh the uniform slab if the material store mutated.
+            let _uniform_buf =
+                self.get_or_create_embedded_uniform_buffer(EmbeddedUniformBufferRequest {
+                    queue,
+                    stem,
+                    layout: &layout,
+                    uniform_key: &uniform_key,
+                    mutation_gen,
+                    store,
+                    lookup,
+                    primary_texture_any_kind_present,
+                })?;
+            return Ok((bind_key, bg));
+        }
+
         let uniform_buf =
             self.get_or_create_embedded_uniform_buffer(EmbeddedUniformBufferRequest {
                 queue,
@@ -419,10 +452,6 @@ impl EmbeddedMaterialBindResources {
             })?;
 
         let mut cache = self.bind_cache.borrow_mut();
-        if let Some(bg) = cache.get(&bind_key) {
-            return Ok((bind_key, bg.clone()));
-        }
-
         let (keepalive_views, keepalive_samplers) = self.resolve_group1_textures_and_samplers(
             &layout,
             texture_2d_asset_id,
@@ -452,6 +481,12 @@ impl EmbeddedMaterialBindResources {
     }
 
     /// Resolves stem layout, primary texture ids, texture signature, and LRU cache keys for embedded binds.
+    ///
+    /// The texture bind signature in [`MaterialBindCacheKey`] must reflect pool residency and sampler state.
+    /// A cheaper fingerprint that omits it (e.g. keyed only by [`MaterialPropertyStore::mutation_generation`])
+    /// would be **unsound**: material mutations do not bump generation when textures stream mips or pools
+    /// change without a store write. Any future L1 fast path must include this signature or a dedicated
+    /// texture-binding epoch bumped on those events.
     fn resolve_embedded_bind_inputs(
         &self,
         stem: &str,

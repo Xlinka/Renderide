@@ -13,8 +13,9 @@ use std::sync::Arc;
 use lru::LruCache;
 
 use crate::materials::embedded_raster_pipeline::{
-    build_embedded_wgsl, create_embedded_render_pipelines,
+    build_embedded_wgsl, create_embedded_render_pipelines, EmbeddedRasterPipelineSource,
 };
+use crate::materials::raster_pipeline::ShaderModuleBuildRefs;
 use crate::materials::{MaterialBlendMode, MaterialRenderState, RasterPipelineKind};
 use crate::pipelines::raster::debug_world_normals::{
     build_debug_world_normals_wgsl, create_debug_world_normals_render_pipeline,
@@ -26,6 +27,13 @@ use super::pipeline_build_error::PipelineBuildError;
 
 /// Maximum raster pipelines retained (LRU eviction).
 const MAX_CACHED_PIPELINES: usize = 512;
+
+const MAX_CACHED_PIPELINES_NZ: NonZeroUsize = {
+    match NonZeroUsize::new(MAX_CACHED_PIPELINES) {
+        Some(n) => n,
+        None => panic!("MAX_CACHED_PIPELINES must be non-zero"),
+    }
+};
 
 /// Key for [`MaterialPipelineCache`] lookups (no WGSL parse — see module docs).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -66,9 +74,7 @@ impl MaterialPipelineCache {
     pub fn new(device: Arc<wgpu::Device>) -> Self {
         Self {
             device,
-            pipelines: LruCache::new(
-                NonZeroUsize::new(MAX_CACHED_PIPELINES).expect("MAX_CACHED_PIPELINES > 0"),
-            ),
+            pipelines: LruCache::new(MAX_CACHED_PIPELINES_NZ),
         }
     }
 
@@ -113,14 +119,18 @@ impl MaterialPipelineCache {
         });
         let pipelines: Vec<wgpu::RenderPipeline> = match kind {
             RasterPipelineKind::EmbeddedStem(stem) => create_embedded_render_pipelines(
-                stem,
-                &device,
-                &module,
-                desc,
-                &wgsl,
-                permutation,
-                blend_mode,
-                render_state,
+                EmbeddedRasterPipelineSource {
+                    stem: stem.clone(),
+                    permutation,
+                    blend_mode,
+                    render_state,
+                },
+                ShaderModuleBuildRefs {
+                    device: &device,
+                    module: &module,
+                    desc,
+                    wgsl_source: &wgsl,
+                },
             )?,
             RasterPipelineKind::DebugWorldNormals => {
                 vec![create_debug_world_normals_render_pipeline(

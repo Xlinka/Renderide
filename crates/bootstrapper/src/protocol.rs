@@ -248,41 +248,66 @@ mod tests {
 
     #[test]
     fn parse_host_command_settext() {
-        match parse_host_command("SETTEXThello") {
-            HostCommand::SetText(s) => assert_eq!(s, "hello"),
-            other => panic!("expected SetText, got {:?}", other),
-        }
+        assert!(matches!(
+            parse_host_command("SETTEXThello"),
+            HostCommand::SetText(ref s) if s == "hello"
+        ));
     }
 
     #[test]
     fn parse_host_command_renderer_args() {
-        match parse_host_command("-QueueName q -QueueCapacity 4096") {
-            HostCommand::StartRenderer(args) => {
-                assert_eq!(
-                    args,
-                    vec!["-QueueName", "q", "-QueueCapacity", "4096"]
+        let cmd = parse_host_command("-QueueName q -QueueCapacity 4096");
+        assert!(matches!(
+            cmd,
+            HostCommand::StartRenderer(ref args)
+                if args
+                    == &vec!["-QueueName", "q", "-QueueCapacity", "4096"]
                         .into_iter()
                         .map(String::from)
                         .collect::<Vec<_>>()
-                );
-            }
-            other => panic!("expected StartRenderer, got {:?}", other),
-        }
+        ));
     }
 
     #[test]
     fn parse_host_command_empty_message_is_start_renderer_empty() {
-        match parse_host_command("") {
-            HostCommand::StartRenderer(args) => assert!(args.is_empty()),
-            other => panic!("expected StartRenderer, got {:?}", other),
-        }
+        assert!(matches!(
+            parse_host_command(""),
+            HostCommand::StartRenderer(ref args) if args.is_empty()
+        ));
     }
 
     #[test]
     fn parse_host_command_settext_only() {
-        match parse_host_command("SETTEXT") {
-            HostCommand::SetText(s) => assert!(s.is_empty()),
-            other => panic!("expected SetText, got {:?}", other),
-        }
+        assert!(matches!(
+            parse_host_command("SETTEXT"),
+            HostCommand::SetText(ref s) if s.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parse_host_command_settext_preserves_utf8_payload() {
+        let cmd = parse_host_command("SETTEXTこんにちは");
+        assert!(matches!(
+            cmd,
+            HostCommand::SetText(ref s) if s == "こんにちは"
+        ));
+    }
+
+    #[test]
+    fn parse_host_command_whitespace_only_yields_empty_start_renderer() {
+        assert!(matches!(
+            parse_host_command("   \t  "),
+            HostCommand::StartRenderer(ref args) if args.is_empty()
+        ));
+    }
+
+    #[test]
+    fn parse_host_command_unknown_token_becomes_start_renderer_argv() {
+        let cmd = parse_host_command("CUSTOM opaque tail");
+        assert!(matches!(
+            cmd,
+            HostCommand::StartRenderer(ref args)
+                if args == &vec!["CUSTOM".to_string(), "opaque".to_string(), "tail".to_string()]
+        ));
     }
 }

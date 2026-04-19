@@ -223,15 +223,11 @@ fn clustered_light_eye_params_for_viewport(
     if stereo {
         if let Some((left, right)) = cluster_frame_params_stereo(hc, scene, viewport) {
             Some(vec![left, right])
-        } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
-            Some(vec![mono])
         } else {
-            None
+            cluster_frame_params(hc, scene, viewport).map(|mono| vec![mono])
         }
-    } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
-        Some(vec![mono])
     } else {
-        None
+        cluster_frame_params(hc, scene, viewport).map(|mono| vec![mono])
     }
 }
 
@@ -299,7 +295,7 @@ impl ClusteredLightPass {
         refs: &ClusterBufferRefs<'_>,
         lights_buffer: &wgpu::Buffer,
         bgl: &wgpu::BindGroupLayout,
-    ) -> &wgpu::BindGroup {
+    ) -> Result<&wgpu::BindGroup, RenderPassError> {
         let need_new_bind_group = self.cached_cluster_bind_version != Some(cluster_ver)
             || self.cached_compute_bind_group.is_none();
         if need_new_bind_group {
@@ -334,7 +330,7 @@ impl ClusteredLightPass {
         }
         self.cached_compute_bind_group
             .as_ref()
-            .expect("cached clustered_light bind group")
+            .ok_or(RenderPassError::ClusteredLightBindGroupMissing)
     }
 }
 
@@ -435,7 +431,7 @@ impl RenderPass for ClusteredLightPass {
             &refs,
             &fgpu.lights_buffer,
             bgl,
-        );
+        )?;
 
         run_clustered_light_eye_passes(ClusteredLightEyePassEnv {
             encoder: ctx.encoder,

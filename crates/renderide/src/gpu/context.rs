@@ -80,51 +80,37 @@ fn clamp_msaa_request_to_supported(requested: u32, supported: &[u32]) -> u32 {
     supported.last().copied().unwrap_or(1)
 }
 
-/// Multisampled color + depth targets for the main window forward path ([`GpuContext::ensure_msaa_targets`]).
-pub struct MsaaTargets {
-    /// Multisampled color texture (`sample_count` &gt; 1).
-    pub color_texture: wgpu::Texture,
-    /// Default [`wgpu::TextureView`] for [`Self::color_texture`].
-    pub color_view: wgpu::TextureView,
-    /// Multisampled depth/stencil texture.
-    pub depth_texture: wgpu::Texture,
-    /// Default [`wgpu::TextureView`] for [`Self::depth_texture`].
-    pub depth_view: wgpu::TextureView,
-    /// Effective sample count (2, 4, or 8).
-    pub sample_count: u32,
-    /// Pixel extent `(width, height)`.
-    pub extent: (u32, u32),
-    /// Swapchain color format used for [`Self::color_texture`].
-    pub color_format: wgpu::TextureFormat,
-    /// Depth/stencil format used for [`Self::depth_texture`].
-    pub depth_stencil_format: wgpu::TextureFormat,
+/// Intersects [`wgpu::Adapter::features`] with the feature bits Renderide requires for rendering.
+fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Features {
+    let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
+        | wgpu::Features::TEXTURE_COMPRESSION_ETC2
+        | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
+    let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
+    let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
+    let optional_depth32_stencil8 = wgpu::Features::DEPTH32FLOAT_STENCIL8;
+    let multisample_array = wgpu::Features::MULTISAMPLE_ARRAY;
+    adapter.features()
+        & (compression
+            | optional_float32_filterable
+            | adapter_format_features
+            | optional_depth32_stencil8
+            | multisample_array)
 }
 
-/// Multisampled 2-layer `D2Array` color + depth targets for the OpenXR single-pass stereo forward path
-/// ([`GpuContext::ensure_msaa_stereo_targets`]).
-///
-/// Color resolves into the single-sample OpenXR swapchain image; depth resolves into the stereo
-/// depth/stencil array via compute + multiview blit.
-pub struct MsaaStereoTargets {
-    /// Multisampled `D2` array texture (`depth_or_array_layers = 2`, `sample_count > 1`).
-    pub color_texture: wgpu::Texture,
-    /// `D2Array` color view for the multiview render-pass attachment.
-    pub color_view: wgpu::TextureView,
-    /// Multisampled `D2` array depth texture (2 layers, `sample_count > 1`).
-    pub depth_texture: wgpu::Texture,
-    /// `D2Array` depth view for the multiview render-pass attachment.
-    pub depth_view: wgpu::TextureView,
-    /// Per-eye (`D2`, single-layer) depth views used by the compute depth resolve shader,
-    /// which binds as `texture_depth_multisampled_2d` (WGSL has no array variant yet).
-    pub depth_layer_views: [wgpu::TextureView; 2],
-    /// Effective sample count (2, 4, or 8).
-    pub sample_count: u32,
-    /// Pixel extent per eye `(width, height)`.
-    pub extent: (u32, u32),
-    /// OpenXR swapchain color format used for [`Self::color_texture`].
-    pub color_format: wgpu::TextureFormat,
-    /// Depth/stencil format used for [`Self::depth_texture`].
-    pub depth_stencil_format: wgpu::TextureFormat,
+async fn request_device_for_adapter(
+    adapter: &wgpu::Adapter,
+    required_features: wgpu::Features,
+) -> Result<(Arc<wgpu::Device>, wgpu::Queue), GpuError> {
+    let (device, queue) = adapter
+        .request_device(&wgpu::DeviceDescriptor {
+            label: Some("renderide-skeleton"),
+            required_features,
+            required_limits: required_limits_for_adapter(adapter),
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| GpuError::Device(format!("{e:?}")))?;
+    Ok((Arc::new(device), queue))
 }
 
 /// GPU stack for presentation and future render passes.
@@ -156,13 +142,6 @@ pub struct GpuContext {
     /// Depth target matching [`Self::config`] extent; recreated after resize.
     depth_attachment: Option<(wgpu::Texture, wgpu::TextureView)>,
     depth_extent_px: (u32, u32),
-    /// Multisampled targets for desktop MSAA; [`None`] when off or extent/sample count unchanged.
-    msaa_targets: Option<MsaaTargets>,
-    /// Multisampled 2-layer targets for stereo / OpenXR MSAA; [`None`] when off or stale.
-    msaa_stereo_targets: Option<MsaaStereoTargets>,
-    /// Single-sample R32Float resolve temp for MSAA depth → depth blit ([`crate::gpu::MsaaDepthResolveResources`]).
-    msaa_depth_resolve_r32: Option<(wgpu::Texture, wgpu::TextureView)>,
-    msaa_depth_resolve_r32_extent: (u32, u32),
     /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
     frame_timing: FrameCpuGpuTimingHandle,
 }
@@ -218,38 +197,9 @@ impl GpuContext {
             .await
             .map_err(|e| GpuError::Adapter(format!("{e:?}")))?;
 
-        let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
-            | wgpu::Features::TEXTURE_COMPRESSION_ETC2
-            | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
-        // FLOAT32_FILTERABLE: without it, Rgba32Float is unfilterable and cannot bind to embedded
-        // material layouts that use filterable float texture + Filtering samplers.
-        let optional_float32_filterable = wgpu::Features::FLOAT32_FILTERABLE;
-        // TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES: without it, wgpu restricts format capabilities
-        // (including MSAA sample counts) to the WebGPU baseline, which is much narrower than what
-        // the GPU actually supports. Enabling this unlocks the hardware-reported feature set.
-        let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
-        let optional_depth32_stencil8 = wgpu::Features::DEPTH32FLOAT_STENCIL8;
-        // MULTISAMPLE_ARRAY: allows creating multisampled 2D array textures and views. Required for
-        // stereo MSAA in the OpenXR multiview path; harmless for the desktop swapchain path.
-        let multisample_array = wgpu::Features::MULTISAMPLE_ARRAY;
-        let required_features = adapter.features()
-            & (compression
-                | optional_float32_filterable
-                | adapter_format_features
-                | optional_depth32_stencil8
-                | multisample_array);
+        let required_features = adapter_render_features_intersection(&adapter);
+        let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("renderide-skeleton"),
-                required_features,
-                required_limits: required_limits_for_adapter(&adapter),
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| GpuError::Device(format!("{e:?}")))?;
-
-        let device = Arc::new(device);
         let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
         let size = window.inner_size();
         let mut config = surface_safe
@@ -307,10 +257,6 @@ impl GpuContext {
             config,
             depth_attachment: None,
             depth_extent_px: (0, 0),
-            msaa_targets: None,
-            msaa_stereo_targets: None,
-            msaa_depth_resolve_r32: None,
-            msaa_depth_resolve_r32_extent: (0, 0),
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -382,10 +328,6 @@ impl GpuContext {
             config,
             depth_attachment: None,
             depth_extent_px: (0, 0),
-            msaa_targets: None,
-            msaa_stereo_targets: None,
-            msaa_depth_resolve_r32: None,
-            msaa_depth_resolve_r32_extent: (0, 0),
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
         })
     }
@@ -427,17 +369,6 @@ impl GpuContext {
         self.surface.configure(&self.device, &self.config);
         self.depth_attachment = None;
         self.depth_extent_px = (0, 0);
-        self.msaa_targets = None;
-        self.msaa_depth_resolve_r32 = None;
-        self.msaa_depth_resolve_r32_extent = (0, 0);
-    }
-
-    /// Frees the stereo MSAA color + depth targets.
-    ///
-    /// Call when the OpenXR swapchain is recreated (resolution change, loss) so the next frame
-    /// reallocates at the correct extent.
-    pub fn reset_msaa_stereo_targets(&mut self) {
-        self.msaa_stereo_targets = None;
     }
 
     /// Borrows the configured surface for acquire/submit.
@@ -607,205 +538,6 @@ impl GpuContext {
             self.swapchain_msaa_requested_stereo = requested;
             self.swapchain_msaa_effective_stereo = effective;
         }
-    }
-
-    /// Ensures a single-sample [`wgpu::TextureFormat::R32Float`] texture for MSAA depth resolve + blit.
-    pub fn ensure_msaa_depth_resolve_r32_view(
-        &mut self,
-    ) -> Result<&wgpu::TextureView, &'static str> {
-        let w = self.config.width.max(1);
-        let h = self.config.height.max(1);
-        let needs =
-            self.msaa_depth_resolve_r32_extent != (w, h) || self.msaa_depth_resolve_r32.is_none();
-        if needs {
-            let tex = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-depth-resolve-r32"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            self.msaa_depth_resolve_r32_extent = (w, h);
-            self.msaa_depth_resolve_r32 = Some((tex, view));
-        }
-        self.msaa_depth_resolve_r32
-            .as_ref()
-            .map(|(_, v)| v)
-            .ok_or("msaa depth resolve r32 missing after ensure")
-    }
-
-    /// Ensures multisampled color/depth targets for the main surface; returns [`None`] when `requested_samples` ≤ 1.
-    pub fn ensure_msaa_targets(
-        &mut self,
-        requested_samples: u32,
-        color_format: wgpu::TextureFormat,
-    ) -> Option<&MsaaTargets> {
-        let sc =
-            clamp_msaa_request_to_supported(requested_samples, &self.msaa_supported_sample_counts);
-        if sc <= 1 {
-            self.msaa_targets = None;
-            return None;
-        }
-        let w = self.config.width.max(1);
-        let h = self.config.height.max(1);
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
-        let needs = self.msaa_targets.as_ref().is_none_or(|m| {
-            m.extent != (w, h)
-                || m.sample_count != sc
-                || m.color_format != color_format
-                || m.depth_stencil_format != depth_stencil_format
-        });
-        if needs {
-            let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-color"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: sc,
-                dimension: wgpu::TextureDimension::D2,
-                format: color_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-depth"),
-                size: wgpu::Extent3d {
-                    width: w,
-                    height: h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: sc,
-                dimension: wgpu::TextureDimension::D2,
-                format: depth_stencil_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-            self.msaa_targets = Some(MsaaTargets {
-                color_texture,
-                color_view,
-                depth_texture,
-                depth_view,
-                sample_count: sc,
-                extent: (w, h),
-                color_format,
-                depth_stencil_format,
-            });
-        }
-        self.msaa_targets.as_ref()
-    }
-
-    /// Ensures 2-layer (D2Array) multisampled color/depth targets for the OpenXR stereo path.
-    ///
-    /// - `requested_samples` is clamped against [`Self::msaa_supported_sample_counts_stereo`].
-    /// - `extent` is per-eye pixel size from the OpenXR swapchain.
-    /// - Returns [`None`] when MSAA is off or unsupported, in which case the caller renders directly
-    ///   to the single-sample XR swapchain.
-    pub fn ensure_msaa_stereo_targets(
-        &mut self,
-        requested_samples: u32,
-        color_format: wgpu::TextureFormat,
-        extent: (u32, u32),
-    ) -> Option<&MsaaStereoTargets> {
-        let sc = clamp_msaa_request_to_supported(
-            requested_samples,
-            &self.msaa_supported_sample_counts_stereo,
-        );
-        if sc <= 1 {
-            self.msaa_stereo_targets = None;
-            return None;
-        }
-        let w = extent.0.max(1);
-        let h = extent.1.max(1);
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(self.device.features());
-        let needs = self.msaa_stereo_targets.as_ref().is_none_or(|m| {
-            m.extent != (w, h)
-                || m.sample_count != sc
-                || m.color_format != color_format
-                || m.depth_stencil_format != depth_stencil_format
-        });
-        if needs {
-            let size = wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 2,
-            };
-            let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-color-stereo"),
-                size,
-                mip_level_count: 1,
-                sample_count: sc,
-                dimension: wgpu::TextureDimension::D2,
-                format: color_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                view_formats: &[],
-            });
-            let color_view = color_texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("renderide-msaa-color-stereo-array"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(2),
-                ..Default::default()
-            });
-
-            let depth_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("renderide-msaa-depth-stereo"),
-                size,
-                mip_level_count: 1,
-                sample_count: sc,
-                dimension: wgpu::TextureDimension::D2,
-                format: depth_stencil_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("renderide-msaa-depth-stereo-array"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(2),
-                ..Default::default()
-            });
-            let depth_layer_views = [0u32, 1u32].map(|layer| {
-                depth_texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some("renderide-msaa-depth-stereo-layer"),
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_array_layer: layer,
-                    array_layer_count: Some(1),
-                    aspect: wgpu::TextureAspect::DepthOnly,
-                    ..Default::default()
-                })
-            });
-
-            self.msaa_stereo_targets = Some(MsaaStereoTargets {
-                color_texture,
-                color_view,
-                depth_texture,
-                depth_view,
-                depth_layer_views,
-                sample_count: sc,
-                extent: (w, h),
-                color_format,
-                depth_stencil_format,
-            });
-        }
-        self.msaa_stereo_targets.as_ref()
     }
 
     /// Ensures a stencil-capable depth attachment exists for the current surface extent.

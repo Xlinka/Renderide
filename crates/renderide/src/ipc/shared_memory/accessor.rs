@@ -1,6 +1,6 @@
 //! [`SharedMemoryAccessor`]: lazy map cache for host shared buffers.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use bytemuck::{Pod, Zeroable};
 
@@ -8,6 +8,7 @@ use crate::shared::buffer::SharedMemoryBufferDescriptor;
 use crate::shared::default_entity_pool::DefaultEntityPool;
 use crate::shared::memory_packable::MemoryPackable;
 use crate::shared::memory_unpacker::MemoryUnpacker;
+use crate::shared::wire_decode_error::WireDecodeError;
 
 #[cfg(windows)]
 use super::naming::compose_memory_view_name;
@@ -18,17 +19,7 @@ use super::unix::SharedMemoryView;
 #[cfg(windows)]
 use super::windows::SharedMemoryView;
 
-fn required_view_capacity(d: &SharedMemoryBufferDescriptor) -> Option<i32> {
-    if d.length <= 0 {
-        return None;
-    }
-    let cap = d.buffer_capacity.max(d.offset.saturating_add(d.length));
-    if cap > 0 {
-        Some(cap)
-    } else {
-        None
-    }
-}
+use super::bounds::required_view_capacity;
 
 /// Lazy mapping cache keyed by `buffer_id` for host shared buffers.
 pub struct SharedMemoryAccessor {
@@ -167,26 +158,38 @@ impl SharedMemoryAccessor {
                 ))
             })?;
         let type_size = std::mem::size_of::<T>();
-        let count = descriptor.length as usize / type_size;
+        let length = descriptor.length as usize;
+        let remainder = length % type_size;
+        if remainder != 0 {
+            return Err(prefix_err(&format!(
+                "length {length} is not a multiple of type size {type_size} (remainder {remainder})"
+            )));
+        }
+        let count = length / type_size;
         if count == 0 {
             return Ok(Vec::new());
         }
-        let length = descriptor.length as usize;
-        let remainder = length % type_size;
-        let mut aligned = vec![0u8; bytes.len()];
-        aligned.copy_from_slice(bytes);
-        let slice = bytemuck::try_cast_slice::<u8, T>(&aligned).map_err(|_| {
-            prefix_err(&format!(
-                "try_cast_slice failed: length={length} bytes, type_size={type_size}, length%type_size={remainder}"
-            ))
-        })?;
-        if slice.len() < count {
-            return Err(prefix_err(&format!(
-                "slice.len()<count {}<{count}",
-                slice.len()
-            )));
+
+        let align = std::mem::align_of::<T>();
+        let base = bytes.as_ptr() as usize;
+        if base.is_multiple_of(align) {
+            if let Ok(slice) = bytemuck::try_cast_slice::<u8, T>(bytes) {
+                if slice.len() >= count {
+                    return Ok(slice[..count].to_vec());
+                }
+            }
         }
-        Ok(slice[..count].to_vec())
+
+        let mut out = Vec::with_capacity(count);
+        for i in 0..count {
+            let start = i * type_size;
+            out.push(bytemuck::pod_read_unaligned(
+                bytes
+                    .get(start..start + type_size)
+                    .ok_or_else(|| prefix_err("pod chunk subslice"))?,
+            ));
+        }
+        Ok(out)
     }
 
     /// Copies shared memory into host-sized rows and decodes each with [`MemoryPackable::unpack`].
@@ -256,14 +259,14 @@ impl SharedMemoryAccessor {
         if count == 0 {
             return Ok(Vec::new());
         }
-        let mut aligned = vec![0u8; bytes.len()];
-        aligned.copy_from_slice(bytes);
         let mut out = Vec::with_capacity(count);
-        for chunk in aligned.chunks_exact(element_stride) {
+        for chunk in bytes.chunks_exact(element_stride) {
             let mut pool = DefaultEntityPool;
             let mut unpacker = MemoryUnpacker::new(chunk, &mut pool);
             let mut row = T::default();
-            row.unpack(&mut unpacker);
+            row.unpack(&mut unpacker).map_err(|e: WireDecodeError| {
+                prefix_err(&format!("MemoryPackable::unpack: {e}"))
+            })?;
             if unpacker.remaining_data() != 0 {
                 return Err(prefix_err(&format!(
                     "unpack left {} bytes unconsumed (stride {element_stride})",
@@ -331,5 +334,56 @@ impl SharedMemoryAccessor {
         f(bytes);
         view.flush_range(descriptor.offset, descriptor.length);
         true
+    }
+}
+
+#[cfg(test)]
+mod access_copy_diagnostic_tests {
+    use crate::shared::buffer::SharedMemoryBufferDescriptor;
+
+    use super::SharedMemoryAccessor;
+
+    #[test]
+    fn access_copy_rejects_non_positive_length() {
+        let mut acc = SharedMemoryAccessor::new("pfx".into());
+        let d = SharedMemoryBufferDescriptor {
+            buffer_id: 1,
+            buffer_capacity: 4096,
+            offset: 0,
+            length: 0,
+        };
+        let err = acc.access_copy_diagnostic::<u32>(&d).expect_err("length 0");
+        assert!(err.contains("length<=0"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn access_copy_rejects_length_above_max() {
+        let mut acc = SharedMemoryAccessor::new("pfx".into());
+        let d = SharedMemoryBufferDescriptor {
+            buffer_id: 2,
+            buffer_capacity: 4096,
+            offset: 0,
+            length: SharedMemoryAccessor::MAX_ACCESS_COPY_BYTES + 1,
+        };
+        let err = acc
+            .access_copy_diagnostic::<u32>(&d)
+            .expect_err("too large");
+        assert!(err.contains("exceeds max"), "unexpected message: {err}");
+    }
+
+    #[test]
+    fn access_copy_diagnostic_prefixes_context_on_early_validation_error() {
+        let mut acc = SharedMemoryAccessor::new("pfx".into());
+        let d = SharedMemoryBufferDescriptor {
+            buffer_id: 3,
+            buffer_capacity: 100,
+            offset: 0,
+            length: -1,
+        };
+        let err = acc
+            .access_copy_diagnostic_with_context::<u32>(&d, Some("mesh_upload"))
+            .expect_err("negative length");
+        assert!(err.starts_with("mesh_upload:"), "unexpected message: {err}");
+        assert!(err.contains("length<=0"), "unexpected message: {err}");
     }
 }

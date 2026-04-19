@@ -36,6 +36,7 @@ public static class PackEmitter
         {
             w.Line("let _ = self;");
             w.Line("let _ = unpacker;");
+            w.Line("Ok(())");
             return;
         }
 
@@ -44,6 +45,8 @@ public static class PackEmitter
 
         foreach (SerializationStep step in unpackOnlySteps ?? [])
             EmitUnpackStep(w, logger, csharpTypeName, step, fields);
+
+        w.Line("Ok(())");
     }
 
     private static void EmitPackStep(RustWriter w, Logger logger, string csharpTypeName, SerializationStep step,
@@ -103,7 +106,7 @@ public static class PackEmitter
                     while (fieldNames.Count < 8)
                         fieldNames.Add("_");
 
-                    w.Line("let __p = unpacker.read_packed_bools();");
+                    w.Line("let __p = unpacker.read_packed_bools()?;");
                     for (int i = 0; i < 8; i++)
                     {
                         if (fieldNames[i] != "_")
@@ -164,23 +167,23 @@ public static class PackEmitter
 
     private static string UnpackLine(Logger logger, string csharpTypeName, string name, FieldKind kind,
         List<FieldDescriptor> fields) => kind switch
-        {
-            FieldKind.Pod => $"self.{name} = unpacker.read();",
-            FieldKind.Bool => $"self.{name} = unpacker.read_bool();",
-            FieldKind.String => $"self.{name} = unpacker.read_str();",
-            FieldKind.Enum => $"unpacker.read_object_required(&mut self.{name});",
-            FieldKind.FlagsEnum => $"unpacker.read_object_required(&mut self.{name});",
-            FieldKind.Nullable => $"self.{name} = unpacker.read_option();",
+    {
+            FieldKind.Pod => $"self.{name} = unpacker.read()?;",
+            FieldKind.Bool => $"self.{name} = unpacker.read_bool()?;",
+            FieldKind.String => $"self.{name} = unpacker.read_str()?;",
+            FieldKind.Enum => $"unpacker.read_object_required(&mut self.{name})?;",
+            FieldKind.FlagsEnum => $"unpacker.read_object_required(&mut self.{name})?;",
+            FieldKind.Nullable => $"self.{name} = unpacker.read_option()?;",
             FieldKind.Object => UnpackObjectLine(logger, csharpTypeName, name, fields),
-            FieldKind.ObjectRequired => $"unpacker.read_object_required(&mut self.{name});",
-            FieldKind.ValueList => $"self.{name} = unpacker.read_value_list();",
-            FieldKind.EnumValueList => $"self.{name} = unpacker.read_enum_value_list();",
-            FieldKind.ObjectList => $"self.{name} = unpacker.read_object_list();",
+            FieldKind.ObjectRequired => $"unpacker.read_object_required(&mut self.{name})?;",
+            FieldKind.ValueList => $"self.{name} = unpacker.read_value_list()?;",
+            FieldKind.EnumValueList => $"self.{name} = unpacker.read_enum_value_list()?;",
+            FieldKind.ObjectList => $"self.{name} = unpacker.read_object_list()?;",
             FieldKind.PolymorphicList => UnpackPolymorphicListLine(logger, csharpTypeName, name, fields),
-            FieldKind.StringList => $"self.{name} = unpacker.read_string_list();",
-            FieldKind.NestedValueList => $"self.{name} = unpacker.read_nested_value_list();",
+            FieldKind.StringList => $"self.{name} = unpacker.read_string_list()?;",
+            FieldKind.NestedValueList => $"self.{name} = unpacker.read_nested_value_list()?;",
             _ => UnknownFieldKindUnpackLine(logger, csharpTypeName, name, kind),
-        };
+    };
 
     private static string UnknownFieldKindUnpackLine(Logger logger, string csharpTypeName, string name, FieldKind kind)
     {
@@ -204,14 +207,14 @@ public static class PackEmitter
             logger.LogWarning(
                 LogCategory.Fixme,
                 $"[{csharpTypeName}] Unpack: object field '{name}' has no FieldDescriptor; emitted read_object::<_>().");
-            return $"self.{name} = unpacker.read_object::<_>();";
+            return $"self.{name} = unpacker.read_object::<_>()?;";
         }
 
         string rustType = field.RustType;
         if (rustType.StartsWith("Option<") && rustType.EndsWith(">"))
             rustType = rustType[7..^1];
 
-        return $"self.{name} = unpacker.read_object::<{rustType}>();";
+        return $"self.{name} = unpacker.read_object::<{rustType}>()?;";
     }
 
     private static string UnpackPolymorphicListLine(Logger logger, string csharpTypeName, string name,
@@ -223,7 +226,7 @@ public static class PackEmitter
             logger.LogWarning(
                 LogCategory.Fixme,
                 $"[{csharpTypeName}] Unpack: polymorphic list field '{name}' has no FieldDescriptor; emitted read_polymorphic_list(unimplemented_decode).");
-            return $"self.{name} = unpacker.read_polymorphic_list(unimplemented_decode);";
+            return $"self.{name} = unpacker.read_polymorphic_list(unimplemented_decode)?;";
         }
 
         string rustType = field.RustType;
@@ -231,7 +234,7 @@ public static class PackEmitter
             rustType = rustType[4..^1];
 
         string decodeFn = "decode_" + rustType.HumanizeField();
-        return $"self.{name} = unpacker.read_polymorphic_list({decodeFn});";
+        return $"self.{name} = unpacker.read_polymorphic_list({decodeFn})?;";
     }
 
     /// <summary>Emits pack body for ExplicitLayout structs (field-by-field with offsets).</summary>
@@ -278,32 +281,35 @@ public static class PackEmitter
         {
             w.Line("let _ = self;");
             w.Line("let _ = unpacker;");
+            w.Line("Ok(())");
             return;
         }
 
         foreach (FieldDescriptor field in fields)
         {
             if (field.Kind == FieldKind.Bool)
-                w.Line($"self.{field.RustName} = unpacker.read_bool() as u8;");
+                w.Line($"self.{field.RustName} = unpacker.read_bool()? as u8;");
             else if (field.Kind is FieldKind.Enum or FieldKind.FlagsEnum)
             {
                 string rustType = field.RustType;
-                w.Line($"self.{field.RustName} = {{ let mut x = {rustType}::default(); unpacker.read_object_required(&mut x); x }};");
+                w.Line($"self.{field.RustName} = {{ let mut x = {rustType}::default(); unpacker.read_object_required(&mut x)?; x }};");
             }
             else if (field.Kind == FieldKind.ObjectRequired)
-                w.Line($"unpacker.read_object_required(&mut self.{field.RustName});");
+                w.Line($"unpacker.read_object_required(&mut self.{field.RustName})?;");
             else if (field.Kind == FieldKind.Pod)
-                w.Line($"self.{field.RustName} = unpacker.read();");
+                w.Line($"self.{field.RustName} = unpacker.read()?;");
             else
             {
                 logger.LogWarning(
                     LogCategory.Fixme,
                     $"[{csharpTypeName}] ExplicitLayout unpack: field '{field.RustName}' is FieldKind.{field.Kind}; treating as Pod read (may not match C# MemoryPack).");
-                w.Line($"self.{field.RustName} = unpacker.read();");
+                w.Line($"self.{field.RustName} = unpacker.read()?;");
             }
         }
 
         if (paddingBytes > 0)
-            w.Line($"self._padding.copy_from_slice(&unpacker.access::<u8>({paddingBytes}));");
+            w.Line($"self._padding.copy_from_slice(&unpacker.access::<u8>({paddingBytes})?);");
+
+        w.Line("Ok(())");
     }
 }

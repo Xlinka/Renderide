@@ -7,6 +7,12 @@
 //! occlusion tests live in [`hi_z_cpu`] and [`hi_z_occlusion`]. GPU pyramid build, staging, and
 //! pipelines are under [`crate::render_graph::occlusion`].
 //!
+//! ## Portability
+//!
+//! [`TextureAccess`] and [`BufferAccess`] describe resource usage for ordering and validation. If
+//! this project ever targets a lower-level API than wgpu’s automatic barriers, the same access
+//! metadata is the natural input for barrier and layout transition planning.
+//!
 //! ## Responsibilities
 //!
 //! - **[`GraphBuilder`]** declares transient resources/imports, groups, and [`RenderPass`] nodes,
@@ -138,21 +144,47 @@ pub use reverse_z_depth::{
 };
 pub use secondary_camera::{camera_state_enabled, host_camera_frame_for_render_texture};
 pub use skinning_palette::{build_skinning_palette, SkinningPaletteParams};
-pub use transient_pool::{BufferKey, TextureKey, TransientPool, TransientPoolMetrics};
+pub use transient_pool::{
+    BufferKey, TextureKey, TransientPool, TransientPoolError, TransientPoolMetrics,
+};
 pub use world_mesh_cull::{
     build_world_mesh_cull_proj_params, capture_hi_z_temporal, HiZTemporalState, WorldMeshCullInput,
     WorldMeshCullProjParams,
 };
 
-/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
-///
-/// `key` is reserved for future surface-driven resource descriptor selection (e.g. swapchain
-/// format). Imported sources resolve at execute time via [`crate::backend::FrameResourceManager`],
-/// so the typed declarations below are not yet keyed off `key`. Use [`GraphCacheKey`] from
-/// [`crate::gpu::GpuContext`] state when compiling through [`GraphCache`].
-pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
-    let _ = key;
-    let mut builder = GraphBuilder::new();
+/// Imported buffers/transients wired into [`build_main_graph`].
+struct MainGraphHandles {
+    color: ImportedTextureHandle,
+    depth: ImportedTextureHandle,
+    hi_z_current: ImportedTextureHandle,
+    lights: ImportedBufferHandle,
+    cluster_light_counts: ImportedBufferHandle,
+    cluster_light_indices: ImportedBufferHandle,
+    per_draw_slab: ImportedBufferHandle,
+    frame_uniforms: ImportedBufferHandle,
+    cluster_params: BufferHandle,
+    hi_z_readback: BufferHandle,
+    forward_msaa_color: TextureHandle,
+    forward_msaa_depth: TextureHandle,
+    forward_msaa_depth_r32: TextureHandle,
+}
+
+/// Handles for imported backend buffers (lights, cluster tables, per-draw slab, frame uniforms).
+struct MainGraphBufferImports {
+    lights: ImportedBufferHandle,
+    cluster_light_counts: ImportedBufferHandle,
+    cluster_light_indices: ImportedBufferHandle,
+    per_draw_slab: ImportedBufferHandle,
+    frame_uniforms: ImportedBufferHandle,
+}
+
+fn import_main_graph_textures(
+    builder: &mut GraphBuilder,
+) -> (
+    ImportedTextureHandle,
+    ImportedTextureHandle,
+    ImportedTextureHandle,
+) {
     let color = builder.import_texture(ImportedTextureDecl {
         label: "frame_color",
         source: ImportSource::FrameTarget(FrameTargetRole::ColorAttachment),
@@ -189,6 +221,10 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
             access: StorageAccess::WriteOnly,
         },
     });
+    (color, depth, hi_z_current)
+}
+
+fn import_main_graph_buffers(builder: &mut GraphBuilder) -> MainGraphBufferImports {
     let lights = builder.import_buffer(ImportedBufferDecl {
         label: "lights",
         source: BufferImportSource::BackendFrameResource(BackendFrameBufferKind::Lights),
@@ -253,6 +289,25 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
             dynamic_offset: false,
         },
     });
+    MainGraphBufferImports {
+        lights,
+        cluster_light_counts,
+        cluster_light_indices,
+        per_draw_slab,
+        frame_uniforms,
+    }
+}
+
+fn create_main_graph_transient_resources(
+    builder: &mut GraphBuilder,
+    key: GraphCacheKey,
+) -> (
+    BufferHandle,
+    BufferHandle,
+    TextureHandle,
+    TextureHandle,
+    TextureHandle,
+) {
     let cluster_params = builder.create_buffer(TransientBufferDesc {
         label: "cluster_params",
         size_policy: BufferSizePolicy::Fixed(crate::backend::CLUSTER_PARAMS_UNIFORM_SIZE * 2),
@@ -265,52 +320,108 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
         base_usage: wgpu::BufferUsages::COPY_DST,
         alias: true,
     });
-    let forward_msaa_color = builder.create_texture(
-        TransientTextureDesc::frame_color_sampled_texture_2d(
-            "forward_msaa_color",
-            TransientExtent::Backbuffer,
-            wgpu::TextureUsages::empty(),
-        )
-        .with_frame_array_layers(),
+    let stereo_layers = if key.multiview_stereo { 2u32 } else { 1u32 };
+    // Use [`TransientExtent::Backbuffer`] for forward MSAA targets: [`build_default_main_graph`]
+    // uses a placeholder [`GraphCacheKey::surface_extent`]; baking that into `Custom` extent would
+    // allocate 1×1 textures while resolve / imported frame color stay at the real swapchain size.
+    // Execute-time resolution uses each view's viewport (see [`crate::render_graph::compiled::helpers::resolve_transient_extent`]).
+    //
+    // Multisampled forward attachments use [`TransientSampleCount::Frame`] so pool allocations match
+    // the live MSAA tier; [`GraphCacheKey::msaa_sample_count`] still invalidates [`GraphCache`].
+    let extent_backbuffer = TransientExtent::Backbuffer;
+    // Use [`TransientTextureFormat::FrameColor`], not [`GraphCacheKey::surface_format`]:
+    // [`build_default_main_graph`] bakes a placeholder BGRA format while the live swapchain may be
+    // RGBA (or vice versa). MSAA resolve requires the multisampled attachment and resolve target
+    // formats to match; both follow [`ResolvedView::surface_format`] at execute time.
+    let forward_msaa_color = builder.create_texture(TransientTextureDesc {
+        label: "forward_msaa_color",
+        format: TransientTextureFormat::FrameColor,
+        extent: extent_backbuffer,
+        mip_levels: 1,
+        sample_count: TransientSampleCount::Frame,
+        dimension: wgpu::TextureDimension::D2,
+        array_layers: TransientArrayLayers::Fixed(stereo_layers),
+        base_usage: wgpu::TextureUsages::empty(),
+        alias: true,
+    });
+    let mut forward_msaa_depth = TransientTextureDesc::frame_depth_stencil_sampled_texture_2d(
+        "forward_msaa_depth",
+        extent_backbuffer,
+        wgpu::TextureUsages::empty(),
     );
-    let forward_msaa_depth = builder.create_texture(
-        TransientTextureDesc::frame_depth_stencil_sampled_texture_2d(
-            "forward_msaa_depth",
-            TransientExtent::Backbuffer,
-            wgpu::TextureUsages::empty(),
-        )
-        .with_frame_array_layers(),
-    );
+    forward_msaa_depth.sample_count = TransientSampleCount::Frame;
+    forward_msaa_depth.array_layers = TransientArrayLayers::Fixed(stereo_layers);
+    let forward_msaa_depth = builder.create_texture(forward_msaa_depth);
     let forward_msaa_depth_r32 = builder.create_texture(
         TransientTextureDesc::texture_2d(
             "forward_msaa_depth_r32",
             wgpu::TextureFormat::R32Float,
-            TransientExtent::Backbuffer,
+            extent_backbuffer,
             1,
             wgpu::TextureUsages::empty(),
         )
-        .with_frame_array_layers(),
+        .with_array_layers(stereo_layers),
     );
+    (
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    )
+}
+
+fn import_main_graph_resources(builder: &mut GraphBuilder, key: GraphCacheKey) -> MainGraphHandles {
+    let (color, depth, hi_z_current) = import_main_graph_textures(builder);
+    let buf = import_main_graph_buffers(builder);
+    let (
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    ) = create_main_graph_transient_resources(builder, key);
+    MainGraphHandles {
+        color,
+        depth,
+        hi_z_current,
+        lights: buf.lights,
+        cluster_light_counts: buf.cluster_light_counts,
+        cluster_light_indices: buf.cluster_light_indices,
+        per_draw_slab: buf.per_draw_slab,
+        frame_uniforms: buf.frame_uniforms,
+        cluster_params,
+        hi_z_readback,
+        forward_msaa_color,
+        forward_msaa_depth,
+        forward_msaa_depth_r32,
+    }
+}
+
+fn add_main_graph_passes_and_edges(
+    mut builder: GraphBuilder,
+    h: MainGraphHandles,
+) -> Result<CompiledRenderGraph, GraphBuildError> {
     let deform = builder.add_pass(Box::new(passes::MeshDeformPass::new()));
     let clustered = builder.add_pass(Box::new(passes::ClusteredLightPass::new(
         passes::ClusteredLightGraphResources {
-            lights,
-            cluster_light_counts,
-            cluster_light_indices,
-            params: cluster_params,
+            lights: h.lights,
+            cluster_light_counts: h.cluster_light_counts,
+            cluster_light_indices: h.cluster_light_indices,
+            params: h.cluster_params,
         },
     )));
     let forward_resources = passes::WorldMeshForwardGraphResources {
-        color,
-        depth,
-        msaa_color: forward_msaa_color,
-        msaa_depth: forward_msaa_depth,
-        msaa_depth_r32: forward_msaa_depth_r32,
-        cluster_light_counts,
-        cluster_light_indices,
-        lights,
-        per_draw_slab,
-        frame_uniforms,
+        color: h.color,
+        depth: h.depth,
+        msaa_color: h.forward_msaa_color,
+        msaa_depth: h.forward_msaa_depth,
+        msaa_depth_r32: h.forward_msaa_depth_r32,
+        cluster_light_counts: h.cluster_light_counts,
+        cluster_light_indices: h.cluster_light_indices,
+        lights: h.lights,
+        per_draw_slab: h.per_draw_slab,
+        frame_uniforms: h.frame_uniforms,
     };
     let forward_prepare = builder.add_pass(Box::new(passes::WorldMeshForwardPreparePass::new(
         forward_resources,
@@ -332,9 +443,9 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     )));
     let hiz = builder.add_pass(Box::new(passes::HiZBuildPass::new(
         passes::HiZBuildGraphResources {
-            depth,
-            hi_z_current,
-            readback_staging: hi_z_readback,
+            depth: h.depth,
+            hi_z_current: h.hi_z_current,
+            readback_staging: h.hi_z_readback,
         },
     )));
     builder.add_edge(deform, clustered);
@@ -346,6 +457,30 @@ pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, Graph
     builder.add_edge(forward_grab, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
     builder.build()
+}
+
+/// Builds the main frame graph: mesh deform compute, clustered lights, world forward, then Hi-Z readback.
+///
+/// Forward MSAA transients use [`TransientExtent::Backbuffer`] and [`TransientSampleCount::Frame`] so
+/// sizes match the current view at execute time (the graph is often built with
+/// [`build_default_main_graph`]'s placeholder [`GraphCacheKey::surface_extent`]). Forward MSAA
+/// color uses [`TransientTextureFormat::FrameColor`] so its format matches the live swapchain at
+/// execute time (the cache key’s surface format may not match [`build_default_main_graph`]'s
+/// hardcoded placeholder). `key` still drives fixed stereo layer count and [`GraphCache`] identity
+/// ([`GraphCacheKey::surface_format`], [`GraphCacheKey::multiview_stereo`],
+/// [`GraphCacheKey::msaa_sample_count`]). Imported sources resolve at execute time via
+/// [`crate::backend::FrameResourceManager`].
+pub fn build_main_graph(key: GraphCacheKey) -> Result<CompiledRenderGraph, GraphBuildError> {
+    let mut builder = GraphBuilder::new();
+    let handles = import_main_graph_resources(&mut builder, key);
+    let msaa_handles = [
+        handles.forward_msaa_color,
+        handles.forward_msaa_depth,
+        handles.forward_msaa_depth_r32,
+    ];
+    let mut graph = add_main_graph_passes_and_edges(builder, handles)?;
+    graph.main_graph_msaa_transient_handles = Some(msaa_handles);
+    Ok(graph)
 }
 
 /// Builds the main graph with a placeholder cache key for callers that still compile it once at attach.

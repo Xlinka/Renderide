@@ -71,7 +71,36 @@ pub type RendererSettingsHandle = Arc<std::sync::RwLock<RendererSettings>>;
 pub fn load_renderer_settings() -> ConfigLoadResult {
     let mut resolve = resolve_config_path();
     let mut suppress_config_disk_writes = false;
-    let mut settings = match resolve.loaded_path.as_ref() {
+    let mut settings = initial_settings_from_resolve(&mut suppress_config_disk_writes, &resolve);
+
+    if resolve.loaded_path.is_none() && !renderide_config_env_nonempty() {
+        maybe_create_default_config_and_reload(
+            &mut resolve,
+            &mut settings,
+            &mut suppress_config_disk_writes,
+        );
+    }
+
+    let save_path = resolve_save_path(&resolve);
+
+    logger::trace!("Renderer config will persist to {}", save_path.display());
+
+    apply_renderide_gpu_validation_env(&mut settings);
+
+    ConfigLoadResult {
+        settings,
+        resolve,
+        save_path,
+        suppress_config_disk_writes,
+    }
+}
+
+/// Loads settings from a resolved config path, or defaults plus env when the file is missing or unreadable.
+fn initial_settings_from_resolve(
+    suppress_config_disk_writes: &mut bool,
+    resolve: &ConfigResolveOutcome,
+) -> RendererSettings {
+    match resolve.loaded_path.as_ref() {
         Some(path) => {
             logger::info!("Loading renderer config from {}", path.display());
             match read_config_file(path) {
@@ -82,7 +111,7 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
                             "Renderer config Figment extract failed for {}: {e:#}",
                             path.display()
                         );
-                        suppress_config_disk_writes = true;
+                        *suppress_config_disk_writes = true;
                         RendererSettings::default()
                     }
                 },
@@ -94,7 +123,7 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
                             logger::error!(
                                 "Renderer config Figment extract failed (defaults+env only): {e2:#}"
                             );
-                            suppress_config_disk_writes = true;
+                            *suppress_config_disk_writes = true;
                             RendererSettings::default()
                         }
                     }
@@ -111,71 +140,62 @@ pub fn load_renderer_settings() -> ConfigLoadResult {
                 Ok(s) => s,
                 Err(e) => {
                     logger::error!("Renderer config Figment extract failed (defaults+env): {e:#}");
-                    suppress_config_disk_writes = true;
+                    *suppress_config_disk_writes = true;
                     RendererSettings::default()
                 }
             }
         }
-    };
+    }
+}
 
-    if resolve.loaded_path.is_none() && !renderide_config_env_nonempty() {
-        let path = resolve_save_path(&resolve);
-        if !path.exists() {
-            if let Some(parent) = path.parent() {
-                if is_dir_writable(parent) {
-                    match save_renderer_settings(&path, &RendererSettings::from_defaults()) {
-                        Ok(()) => {
-                            logger::info!("Created default renderer config at {}", path.display());
-                            apply_generated_config(&mut resolve, path.clone());
-                            match read_config_file(&path) {
-                                Ok(content) => match load_settings_from_toml_str(&content) {
-                                    Ok(s) => {
-                                        settings = s;
-                                    }
-                                    Err(e) => {
-                                        logger::error!(
-                                            "Figment extract failed for newly created {}: {e:#}",
-                                            path.display()
-                                        );
-                                        suppress_config_disk_writes = true;
-                                    }
-                                },
-                                Err(e) => {
-                                    logger::warn!(
-                                        "Failed to read newly created {}: {e}; using defaults",
-                                        path.display()
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            logger::warn!(
-                                "Failed to create default config at {}: {e}",
-                                path.display()
-                            );
-                        }
+/// When no config was loaded and env overrides are empty, writes default `config.toml` and reloads from disk.
+fn maybe_create_default_config_and_reload(
+    resolve: &mut ConfigResolveOutcome,
+    settings: &mut RendererSettings,
+    suppress_config_disk_writes: &mut bool,
+) {
+    let path = resolve_save_path(resolve);
+    if path.exists() {
+        return;
+    }
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if !is_dir_writable(parent) {
+        logger::trace!(
+            "Not creating default config at {} (directory not writable)",
+            path.display()
+        );
+        return;
+    }
+    match save_renderer_settings(&path, &RendererSettings::from_defaults()) {
+        Ok(()) => {
+            logger::info!("Created default renderer config at {}", path.display());
+            apply_generated_config(resolve, path.clone());
+            match read_config_file(&path) {
+                Ok(content) => match load_settings_from_toml_str(&content) {
+                    Ok(s) => {
+                        *settings = s;
                     }
-                } else {
-                    logger::trace!(
-                        "Not creating default config at {} (directory not writable)",
+                    Err(e) => {
+                        logger::error!(
+                            "Figment extract failed for newly created {}: {e:#}",
+                            path.display()
+                        );
+                        *suppress_config_disk_writes = true;
+                    }
+                },
+                Err(e) => {
+                    logger::warn!(
+                        "Failed to read newly created {}: {e}; using defaults",
                         path.display()
                     );
                 }
             }
         }
-    }
-
-    let save_path = resolve_save_path(&resolve);
-
-    logger::trace!("Renderer config will persist to {}", save_path.display());
-
-    apply_renderide_gpu_validation_env(&mut settings);
-
-    ConfigLoadResult {
-        settings,
-        resolve,
-        save_path,
-        suppress_config_disk_writes,
+        Err(e) => {
+            logger::warn!("Failed to create default config at {}: {e}", path.display());
+        }
     }
 }
 
@@ -241,6 +261,10 @@ pub fn log_config_resolve_trace(resolve: &ConfigResolveOutcome) {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Serializes tests that mutate `RENDERIDE_*` process environment.
+    static CONFIG_ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn atomic_save_roundtrip() {
@@ -272,5 +296,35 @@ mod tests {
             resolve_save_path(&resolve),
             PathBuf::from("/tmp/x/config.toml")
         );
+    }
+
+    #[test]
+    fn apply_renderide_gpu_validation_env_overrides_flag() {
+        let _guard = CONFIG_ENV_TEST_LOCK.lock().expect("lock");
+        let mut s = RendererSettings::from_defaults();
+        s.debug.gpu_validation_layers = false;
+        std::env::set_var("RENDERIDE_GPU_VALIDATION", "1");
+        apply_renderide_gpu_validation_env(&mut s);
+        assert!(s.debug.gpu_validation_layers);
+
+        s.debug.gpu_validation_layers = true;
+        std::env::set_var("RENDERIDE_GPU_VALIDATION", "no");
+        apply_renderide_gpu_validation_env(&mut s);
+        assert!(!s.debug.gpu_validation_layers);
+
+        std::env::remove_var("RENDERIDE_GPU_VALIDATION");
+    }
+
+    #[test]
+    fn load_settings_from_toml_merges_renderide_env_nested_key() {
+        let _guard = CONFIG_ENV_TEST_LOCK.lock().expect("lock");
+        std::env::set_var("RENDERIDE_DISPLAY__FOCUSED_FPS", "137");
+        let toml = r#"
+[display]
+focused_fps = 10
+"#;
+        let s = load_settings_from_toml_str(toml).expect("figment extract");
+        assert_eq!(s.display.focused_fps_cap, 137);
+        std::env::remove_var("RENDERIDE_DISPLAY__FOCUSED_FPS");
     }
 }

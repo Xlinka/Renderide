@@ -13,11 +13,11 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use thiserror::Error;
+
 use crate::assets::asset_transfer_queue::{self as asset_uploads, AssetTransferQueue};
 use crate::assets::material::MaterialPropertyStore;
-use crate::backend::mesh_deform::{
-    GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines, PaddedPerDrawUniforms,
-};
+use crate::backend::mesh_deform::{GpuSkinCache, MeshDeformScratch, MeshPreprocessPipelines};
 use crate::config::RendererSettingsHandle;
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
@@ -25,13 +25,25 @@ use crate::render_graph::{TransientPool, WorldMeshDrawStateRow, WorldMeshDrawSta
 use crate::resources::{CubemapPool, MeshPool, RenderTexturePool, Texture3dPool, TexturePool};
 
 use super::debug_hud_bundle::DebugHudBundle;
-use super::embedded::EmbeddedTexturePools;
+use super::embedded::{EmbeddedMaterialBindError, EmbeddedTexturePools};
 use super::material_system::MaterialSystem;
 use super::occlusion::OcclusionSystem;
+use super::FrameGpuBindingsError;
 
 pub use crate::assets::asset_transfer_queue::{
     MAX_ASSET_INTEGRATION_QUEUED, MAX_PENDING_MESH_UPLOADS, MAX_PENDING_TEXTURE_UPLOADS,
 };
+
+/// GPU attach failed for frame binds (`@group(0/1/2)`) or embedded materials (`@group(1)`).
+#[derive(Debug, Error)]
+pub enum RenderBackendAttachError {
+    /// Frame / empty material / per-draw allocation failed atomically.
+    #[error(transparent)]
+    FrameGpuBindings(#[from] FrameGpuBindingsError),
+    /// Embedded raster `@group(1)` bind resources could not be created.
+    #[error(transparent)]
+    EmbeddedMaterialBind(#[from] EmbeddedMaterialBindError),
+}
 
 /// Device, queue, and settings passed to [`RenderBackend::attach`] (shared-memory flush is passed separately for borrow reasons).
 pub struct RenderBackendAttachDesc {
@@ -73,11 +85,6 @@ pub struct RenderBackend {
     pub(crate) occlusion: OcclusionSystem,
     /// Render-graph transient texture/buffer pool retained across frames.
     pub(crate) transient_pool: TransientPool,
-    /// Reused per-draw uniform slot buffer for `pack_and_upload_per_draw_slab`.
-    ///
-    /// Capacity is retained across frames; [`PaddedPerDrawUniforms`] is `#[repr(C)] + Pod`, so the
-    /// slice is uploaded via `bytemuck::cast_slice` without a separate byte staging Vec.
-    pub(crate) per_draw_slots_scratch: Vec<PaddedPerDrawUniforms>,
 }
 
 /// Disjoint borrows of [`MaterialSystem`], [`AssetTransferQueue`], and the GPU skin cache for world mesh forward encoding.
@@ -130,7 +137,6 @@ impl RenderBackend {
             debug_hud: DebugHudBundle::new(),
             occlusion: OcclusionSystem::new(),
             transient_pool: TransientPool::new(),
-            per_draw_slots_scratch: Vec::new(),
         }
     }
 
@@ -281,13 +287,17 @@ impl RenderBackend {
 
     /// Call after [`crate::gpu::GpuContext`] is created so mesh/texture uploads can use the GPU.
     ///
-    /// `shm` is used to flush pending mesh/texture payloads that require shared-memory reads; omit
-    /// when none is available yet (uploads stay queued).
+    /// Wires device/queue into uploads, allocates frame binds and materials, and builds the default graph.
+    /// `shm` flushes pending mesh/texture payloads that require shared-memory reads; omit when none is
+    /// available yet (uploads stay queued).
+    ///
+    /// On error, CPU-side asset queues may already be partially configured; GPU draws must not run until
+    /// a successful attach.
     pub fn attach(
         &mut self,
         desc: RenderBackendAttachDesc,
         shm: Option<&mut crate::ipc::SharedMemoryAccessor>,
-    ) {
+    ) -> Result<(), RenderBackendAttachError> {
         let RenderBackendAttachDesc {
             device,
             queue,
@@ -309,8 +319,11 @@ impl RenderBackend {
             self.asset_transfers.texture_vram_budget_bytes =
                 u64::from(s.rendering.texture_vram_budget_mib).saturating_mul(1024 * 1024);
         }
-        self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref()));
-        self.frame_resources.attach(device.as_ref(), gpu_limits);
+        self.mesh_deform_scratch = Some(MeshDeformScratch::new(
+            device.as_ref(),
+            gpu_limits.max_buffer_size(),
+        ));
+        self.frame_resources.attach(device.as_ref(), gpu_limits)?;
         self.debug_hud.attach(
             device.as_ref(),
             queue.as_ref(),
@@ -326,7 +339,7 @@ impl RenderBackend {
                 self.mesh_preprocess = None;
             }
         }
-        self.materials.attach_gpu(device.clone(), &queue);
+        self.materials.try_attach_gpu(device.clone(), &queue)?;
         asset_uploads::attach_flush_pending_asset_uploads(&mut self.asset_transfers, &device, shm);
 
         self.msaa_depth_resolve = MsaaDepthResolveResources::try_new(device.as_ref()).map(Arc::new);
@@ -338,6 +351,7 @@ impl RenderBackend {
                 None
             }
         };
+        Ok(())
     }
 
     /// Updates whether main HUD diagnostics run (mirrors [`crate::config::DebugSettings::debug_hud_enabled`]).
@@ -494,12 +508,27 @@ impl RenderBackend {
     /// Compute preprocess pipelines + deform scratch (`MeshDeformPass`) as one disjoint borrow.
     pub fn mesh_deform_pre_and_scratch(
         &mut self,
-    ) -> Option<(
-        &crate::backend::mesh_deform::MeshPreprocessPipelines,
-        &mut MeshDeformScratch,
-    )> {
+    ) -> Option<(&MeshPreprocessPipelines, &mut MeshDeformScratch)> {
         let pre = self.mesh_preprocess.as_ref()?;
         let scratch = self.mesh_deform_scratch.as_mut()?;
         Some((pre, scratch))
+    }
+
+    /// Preprocess pipelines, deform scratch, and GPU skin cache as one disjoint borrow for [`MeshDeformPass`].
+    ///
+    /// Bundles [`Self::mesh_preprocess`], [`Self::mesh_deform_scratch`], and
+    /// [`FrameResourceManager::skin_cache_mut`](super::FrameResourceManager::skin_cache_mut) so callers
+    /// avoid splitting borrows with raw pointers.
+    pub fn mesh_deform_pre_scratch_and_skin_cache(
+        &mut self,
+    ) -> Option<(
+        &MeshPreprocessPipelines,
+        &mut MeshDeformScratch,
+        &mut GpuSkinCache,
+    )> {
+        let pre = self.mesh_preprocess.as_ref()?;
+        let scratch = self.mesh_deform_scratch.as_mut()?;
+        let skin = self.frame_resources.skin_cache_mut()?;
+        Some((pre, scratch, skin))
     }
 }

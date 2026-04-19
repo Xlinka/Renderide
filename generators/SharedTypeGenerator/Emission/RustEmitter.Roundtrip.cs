@@ -29,7 +29,7 @@ public partial class RustEmitter
             foreach (var t in roundtripable)
             {
                 string rustName = t.RustName;
-                _w.Line($"    \"{t.CSharpName}\" => {{ let mut x = {rustName}::default(); x.unpack(&mut unpacker); x.pack(&mut packer); }}");
+                _w.Line($"    \"{t.CSharpName}\" => {{ let mut x = {rustName}::default(); x.unpack(&mut unpacker).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?; x.pack(&mut packer); }}");
             }
             _w.Line("    _ => return Err(std::io::Error::new(std::io::ErrorKind::InvalidInput, format!(\"Unknown type: {}\", type_name))),");
             _w.Line("}");

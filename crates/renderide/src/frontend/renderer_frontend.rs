@@ -13,6 +13,8 @@ use super::init_state::InitState;
 pub struct RendererFrontend {
     ipc: Option<DualQueueIpc>,
     params: Option<ConnectionParams>,
+    /// Reused across [`Self::poll_commands`] to avoid per-tick `Vec` allocation when IPC is connected.
+    command_batch: Vec<RendererCommand>,
     init_state: InitState,
     pending_init: Option<RendererInitData>,
     shared_memory: Option<SharedMemoryAccessor>,
@@ -52,6 +54,7 @@ impl RendererFrontend {
         Self {
             ipc: None,
             params,
+            command_batch: Vec::new(),
             init_state,
             pending_init: None,
             shared_memory: None,
@@ -228,17 +231,32 @@ impl RendererFrontend {
 
     /// Poll and sort commands so [`RendererCommand::RendererInitData`] runs before any other work
     /// in the same batch (then frame submits), avoiding a fatal `Uninitialized` ordering hazard.
+    ///
+    /// Returns an owned [`Vec`] that should be passed back with [`Self::recycle_command_batch`] after
+    /// dispatch so its capacity is reused on the next tick.
     pub fn poll_commands(&mut self) -> Vec<RendererCommand> {
-        let Some(ref mut ipc) = self.ipc else {
-            return Vec::new();
-        };
-        let mut batch = ipc.poll();
-        batch.sort_by_key(|c| match c {
-            RendererCommand::RendererInitData(_) => 0u8,
-            RendererCommand::FrameSubmitData(_) => 1,
-            _ => 2,
-        });
+        let mut batch = std::mem::take(&mut self.command_batch);
+        if let Some(ipc) = self.ipc.as_mut() {
+            ipc.poll_into(&mut batch);
+            // InitReceived defers FrameSubmitData until Finalized; finalize/progress/ready must run first
+            // when they share a batch, or the submit is dropped and lock-step stalls (bootstrap → no submit).
+            batch.sort_by_key(|c| match c {
+                RendererCommand::RendererInitData(_) => 0u8,
+                RendererCommand::RendererInitProgressUpdate(_) => 1,
+                RendererCommand::RendererEngineReady(_) => 2,
+                RendererCommand::RendererInitFinalizeData(_) => 3,
+                RendererCommand::FrameSubmitData(_) => 4,
+                _ => 5,
+            });
+        } else {
+            batch.clear();
+        }
         batch
+    }
+
+    /// Returns an empty [`Vec`] previously produced by [`Self::poll_commands`] so its allocation is retained for the next poll.
+    pub fn recycle_command_batch(&mut self, batch: Vec<RendererCommand>) {
+        self.command_batch = batch;
     }
 
     /// Whether a [`FrameStartData`] should be sent this tick (caller should supply [`InputState`] via [`Self::pre_frame`]).

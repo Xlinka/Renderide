@@ -43,7 +43,7 @@ fn build_desktop_multi_view_frame_list<'a>(
     main_collection: WorldMeshDrawCollection,
 ) -> Vec<FrameView<'a>> {
     let mut views: Vec<FrameView<'a>> = Vec::new();
-    for (prep, collection) in prepared.iter().zip(secondary_prefetched.into_iter()) {
+    for (prep, collection) in prepared.iter().zip(secondary_prefetched) {
         let ext = ExternalOffscreenTargets {
             render_texture_asset_id: prep.rt_id,
             color_texture: prep.color_texture.as_ref(),
@@ -92,6 +92,15 @@ impl RendererRuntime {
             return Ok(());
         }
 
+        let requested_msaa = self
+            .settings
+            .read()
+            .map(|s| s.rendering.msaa.as_count())
+            .unwrap_or(1);
+        let prev_msaa = gpu.swapchain_msaa_effective();
+        gpu.set_swapchain_msaa_requested(requested_msaa);
+        self.transient_evict_stale_msaa_tiers_if_changed(prev_msaa, gpu.swapchain_msaa_effective());
+
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
         let property_store = self.backend.material_property_store();
@@ -102,8 +111,7 @@ impl RendererRuntime {
         let router_ref = self
             .backend
             .materials
-            .material_registry
-            .as_ref()
+            .material_registry()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
 
@@ -150,7 +158,7 @@ impl RendererRuntime {
             .collect();
 
         let mut views: Vec<FrameView<'_>> = Vec::with_capacity(prepared.len());
-        for (prep, collection) in prepared.iter().zip(prefetched.into_iter()) {
+        for (prep, collection) in prepared.iter().zip(prefetched) {
             let ext = ExternalOffscreenTargets {
                 render_texture_asset_id: prep.rt_id,
                 color_texture: prep.color_texture.as_ref(),
@@ -168,12 +176,6 @@ impl RendererRuntime {
             });
         }
         if !views.is_empty() {
-            let requested_msaa = self
-                .settings
-                .read()
-                .map(|s| s.rendering.msaa.as_count())
-                .unwrap_or(1);
-            gpu.set_swapchain_msaa_requested(requested_msaa);
             self.backend
                 .execute_multi_view_frame(gpu, window, scene_ref, views, true)?;
         }
@@ -192,6 +194,16 @@ impl RendererRuntime {
         self.sync_debug_hud_diagnostics_from_settings();
 
         let prepared = self.collect_secondary_rt_prepared();
+
+        let requested_msaa = self
+            .settings
+            .read()
+            .map(|s| s.rendering.msaa.as_count())
+            .unwrap_or(1);
+        let prev_msaa = gpu.swapchain_msaa_effective();
+        gpu.set_swapchain_msaa_requested(requested_msaa);
+        self.transient_evict_stale_msaa_tiers_if_changed(prev_msaa, gpu.swapchain_msaa_effective());
+
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
         let property_store = self.backend.material_property_store();
@@ -202,8 +214,7 @@ impl RendererRuntime {
         let router_ref = self
             .backend
             .materials
-            .material_registry
-            .as_ref()
+            .material_registry()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
 
@@ -284,12 +295,6 @@ impl RendererRuntime {
             main_collection,
         );
 
-        let requested_msaa = self
-            .settings
-            .read()
-            .map(|s| s.rendering.msaa.as_count())
-            .unwrap_or(1);
-        gpu.set_swapchain_msaa_requested(requested_msaa);
         self.backend
             .execute_multi_view_frame(gpu, window, scene_ref, views, true)
     }

@@ -9,9 +9,15 @@ use rayon::prelude::*;
 
 use crate::assets::material::MaterialDictionary;
 use crate::backend::mesh_deform::PaddedPerDrawUniforms;
-use crate::backend::{RenderBackend, WorldMeshForwardEncodeRefs};
+use crate::backend::{
+    write_per_draw_uniform_slab, RenderBackend, SceneColorSnapshotCopyParams,
+    WorldMeshForwardEncodeRefs, PER_DRAW_UNIFORM_STRIDE,
+};
 use crate::gpu::frame_globals::FrameGpuUniforms;
-use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
+use crate::gpu::{
+    GpuLimits, MsaaDepthResolveMonoTargets, MsaaDepthResolveResources,
+    MsaaDepthResolveStereoTargets,
+};
 use crate::materials::{
     MaterialPipelineDesc, MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind,
 };
@@ -230,19 +236,22 @@ pub(super) fn pack_and_upload_per_draw_slab(
     let hc = frame.host_camera;
     let backend = &mut *frame.backend;
 
-    let per_draw_buffer = {
+    {
         let Some(pd) = backend.frame_resources.per_draw.as_mut() else {
             return false;
         };
         pd.ensure_draw_slot_capacity(device, draws.len());
-        pd.per_draw_storage.clone()
-    };
+    }
 
-    let slots = &mut backend.per_draw_slots_scratch;
+    let uniforms = &mut backend.frame_resources.per_draw_uniforms_scratch;
+    uniforms.clear();
+    uniforms.resize_with(draws.len(), PaddedPerDrawUniforms::zeroed);
+
     if draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS {
-        draws
-            .par_iter()
-            .map(|item| {
+        uniforms
+            .par_iter_mut()
+            .zip(draws.par_iter())
+            .for_each(|(slot, item)| {
                 let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
                     scene,
                     item,
@@ -251,17 +260,14 @@ pub(super) fn pack_and_upload_per_draw_slab(
                     world_proj,
                     overlay_proj,
                 );
-                if vp_l == vp_r {
+                *slot = if vp_l == vp_r {
                     PaddedPerDrawUniforms::new_single(vp_l, model)
                 } else {
                     PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
-                }
-            })
-            .collect_into_vec(slots);
+                };
+            });
     } else {
-        slots.clear();
-        slots.reserve(draws.len());
-        for item in draws {
+        for (slot, item) in uniforms.iter_mut().zip(draws.iter()) {
             let (vp_l, vp_r, model) = compute_per_draw_vp_triple(
                 scene,
                 item,
@@ -270,17 +276,23 @@ pub(super) fn pack_and_upload_per_draw_slab(
                 world_proj,
                 overlay_proj,
             );
-            let entry = if vp_l == vp_r {
+            *slot = if vp_l == vp_r {
                 PaddedPerDrawUniforms::new_single(vp_l, model)
             } else {
                 PaddedPerDrawUniforms::new_stereo(vp_l, vp_r, model)
             };
-            slots.push(entry);
         }
     }
 
-    let slab_bytes: &[u8] = bytemuck::cast_slice(slots.as_slice());
-    queue.write_buffer(&per_draw_buffer, 0, slab_bytes);
+    let slab = &mut backend.frame_resources.per_draw_slab_byte_scratch;
+    let need = draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
+    slab.resize(need, 0);
+    write_per_draw_uniform_slab(uniforms, slab);
+
+    let Some(pd) = backend.frame_resources.per_draw.as_mut() else {
+        return false;
+    };
+    queue.write_buffer(&pd.per_draw_storage, 0, slab.as_slice());
     true
 }
 
@@ -449,8 +461,6 @@ fn partition_special_draw_indices(
 /// Bind groups shared across opaque and intersection forward subpasses.
 struct ForwardPassBindGroups<'a> {
     per_draw: &'a wgpu::BindGroup,
-    per_draw_storage: &'a wgpu::Buffer,
-    per_draw_layout: &'a wgpu::BindGroupLayout,
     frame: &'a Arc<wgpu::BindGroup>,
     empty_material: &'a Arc<wgpu::BindGroup>,
 }
@@ -469,6 +479,7 @@ struct ForwardPassRasterConfig<'a> {
 struct ForwardSubpassDrawRecord<'a, 'c, 'd> {
     queue: &'a wgpu::Queue,
     device: &'a wgpu::Device,
+    gpu_limits: &'a GpuLimits,
     draws: &'c [WorldMeshDrawItem],
     draw_indices: &'c [usize],
     /// Material registry, mesh pool, and skin cache (disjoint borrows from [`RenderBackend`]).
@@ -488,11 +499,10 @@ fn record_world_mesh_forward_subpass(
         encode: sub.encode,
         queue: sub.queue,
         device: sub.device,
+        gpu_limits: sub.gpu_limits,
         frame_bg: bind_groups.frame.as_ref(),
         empty_bg: bind_groups.empty_material.as_ref(),
         per_draw_bind_group: bind_groups.per_draw,
-        per_draw_storage: bind_groups.per_draw_storage,
-        per_draw_bind_group_layout: bind_groups.per_draw_layout,
         pass_desc: cfg.pass_desc,
         shader_perm: cfg.shader_perm,
         warned_missing_embedded_bind: cfg.warned_missing_embedded_bind,
@@ -523,14 +533,11 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         return true;
     }
 
-    let Some((per_draw_bg, per_draw_storage, per_draw_layout)) =
-        frame.backend.frame_resources.per_draw().map(|d| {
-            (
-                d.bind_group.clone(),
-                d.per_draw_storage.clone(),
-                d.bind_group_layout.clone(),
-            )
-        })
+    let Some(per_draw_bg) = frame
+        .backend
+        .frame_resources
+        .per_draw()
+        .map(|d| d.bind_group.clone())
     else {
         return false;
     };
@@ -544,8 +551,6 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
 
     let bind_groups = ForwardPassBindGroups {
         per_draw: per_draw_bg.as_ref(),
-        per_draw_storage: &per_draw_storage,
-        per_draw_layout: per_draw_layout.as_ref(),
         frame: &frame_bg_arc,
         empty_material: &empty_bg_arc,
     };
@@ -561,12 +566,16 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         warned_missing_embedded_bind: &mut warned_missing_embedded_bind,
     };
 
+    let Some(gpu_limits) = frame.backend.gpu_limits().cloned() else {
+        return false;
+    };
     let mut encode_refs = frame.backend.world_mesh_forward_encode_refs();
     record_world_mesh_forward_subpass(
         rpass,
         ForwardSubpassDrawRecord {
             queue,
             device,
+            gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
             draw_indices: &prepared.regular_indices,
             encode: &mut encode_refs,
@@ -589,14 +598,11 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         return true;
     }
 
-    let Some((per_draw_bg, per_draw_storage, per_draw_layout)) =
-        frame.backend.frame_resources.per_draw().map(|d| {
-            (
-                d.bind_group.clone(),
-                d.per_draw_storage.clone(),
-                d.bind_group_layout.clone(),
-            )
-        })
+    let Some(per_draw_bg) = frame
+        .backend
+        .frame_resources
+        .per_draw()
+        .map(|d| d.bind_group.clone())
     else {
         return false;
     };
@@ -610,8 +616,6 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
 
     let bind_groups = ForwardPassBindGroups {
         per_draw: per_draw_bg.as_ref(),
-        per_draw_storage: &per_draw_storage,
-        per_draw_layout: per_draw_layout.as_ref(),
         frame: &frame_bg_arc,
         empty_material: &empty_bg_arc,
     };
@@ -627,12 +631,16 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         warned_missing_embedded_bind: &mut warned_missing_embedded_bind,
     };
 
+    let Some(gpu_limits) = frame.backend.gpu_limits().cloned() else {
+        return false;
+    };
     let mut encode_refs = frame.backend.world_mesh_forward_encode_refs();
     record_world_mesh_forward_subpass(
         rpass,
         ForwardSubpassDrawRecord {
             queue,
             device,
+            gpu_limits: gpu_limits.as_ref(),
             draws: &prepared.draws,
             draw_indices: &prepared.intersect_indices,
             encode: &mut encode_refs,
@@ -659,15 +667,15 @@ pub(super) fn record_world_mesh_forward_grab_passes(
         return false;
     }
 
-    let Some((per_draw_bg, per_draw_storage, per_draw_layout)) =
-        frame.backend.frame_resources.per_draw().map(|d| {
-            (
-                d.bind_group.clone(),
-                d.per_draw_storage.clone(),
-                d.bind_group_layout.clone(),
-            )
-        })
+    let Some(per_draw_bg) = frame
+        .backend
+        .frame_resources
+        .per_draw()
+        .map(|d| d.bind_group.clone())
     else {
+        return false;
+    };
+    let Some(gpu_limits) = frame.backend.gpu_limits().cloned() else {
         return false;
     };
 
@@ -705,9 +713,11 @@ pub(super) fn record_world_mesh_forward_grab_passes(
             device,
             encoder,
             frame.color_texture,
-            frame.viewport_px,
-            prepared.pipeline.use_multiview,
-            stereo_cluster,
+            SceneColorSnapshotCopyParams {
+                viewport: frame.viewport_px,
+                multiview: prepared.pipeline.use_multiview,
+                stereo_cluster,
+            },
         );
         let Some((frame_bg_arc, empty_bg_arc)) = frame
             .backend
@@ -719,8 +729,6 @@ pub(super) fn record_world_mesh_forward_grab_passes(
 
         let bind_groups = ForwardPassBindGroups {
             per_draw: per_draw_bg.as_ref(),
-            per_draw_storage: &per_draw_storage,
-            per_draw_layout: per_draw_layout.as_ref(),
             frame: &frame_bg_arc,
             empty_material: &empty_bg_arc,
         };
@@ -769,6 +777,7 @@ pub(super) fn record_world_mesh_forward_grab_passes(
             ForwardSubpassDrawRecord {
                 queue,
                 device,
+                gpu_limits: gpu_limits.as_ref(),
                 draws: &prepared.draws,
                 draw_indices: std::slice::from_ref(&draw_idx),
                 encode: &mut encode_refs,
@@ -844,6 +853,11 @@ fn encode_msaa_depth_resolve_for_frame(
     msaa: &ForwardMsaaResolvedViews,
     resolve: &MsaaDepthResolveResources,
 ) {
+    let Some(limits) = frame.backend.gpu_limits() else {
+        logger::warn!("MSAA depth resolve: gpu_limits missing; skipping resolve");
+        return;
+    };
+    let limits = limits.as_ref();
     if msaa.is_array {
         let (Some(msaa_layers), Some(r32_layers)) = (
             msaa.stereo_depth_layer_views.as_ref(),
@@ -855,21 +869,27 @@ fn encode_msaa_depth_resolve_for_frame(
             device,
             encoder,
             frame.viewport_px,
-            [&msaa_layers[0], &msaa_layers[1]],
-            [&r32_layers[0], &r32_layers[1]],
-            &msaa.depth_resolve_r32_view,
-            frame.depth_view,
-            frame.depth_texture.format(),
+            MsaaDepthResolveStereoTargets {
+                msaa_depth_layer_views: [&msaa_layers[0], &msaa_layers[1]],
+                r32_layer_views: [&r32_layers[0], &r32_layers[1]],
+                r32_array_view: &msaa.depth_resolve_r32_view,
+                dst_depth_view: frame.depth_view,
+                dst_depth_format: frame.depth_texture.format(),
+            },
+            limits,
         );
     } else {
         resolve.encode_resolve(
             device,
             encoder,
             frame.viewport_px,
-            &msaa.depth_view,
-            &msaa.depth_resolve_r32_view,
-            frame.depth_view,
-            frame.depth_texture.format(),
+            MsaaDepthResolveMonoTargets {
+                msaa_depth_view: &msaa.depth_view,
+                r32_view: &msaa.depth_resolve_r32_view,
+                dst_depth_view: frame.depth_view,
+                dst_depth_format: frame.depth_texture.format(),
+            },
+            limits,
         );
     }
 }

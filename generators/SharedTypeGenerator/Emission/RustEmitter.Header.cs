@@ -27,6 +27,8 @@ public partial class RustEmitter
         _w.Line("use super::packing::memory_unpacker::MemoryUnpacker;");
         _w.Line("use super::packing::memory_packer_entity_pool::MemoryPackerEntityPool;");
         _w.Line("use super::packing::polymorphic_memory_packable_entity::PolymorphicEncode;");
+        _w.Line("use super::packing::polymorphic_decode_error::PolymorphicDecodeError;");
+        _w.Line("use super::packing::wire_decode_error::WireDecodeError;");
         _w.Line("use super::buffer::SharedMemoryBufferDescriptor;");
         _w.Line("use super::packing::enum_repr::EnumRepr;");
         _w.Line("use bytemuck::{Pod, Zeroable};");
