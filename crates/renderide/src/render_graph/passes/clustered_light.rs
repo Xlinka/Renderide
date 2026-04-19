@@ -223,15 +223,11 @@ fn clustered_light_eye_params_for_viewport(
     if stereo {
         if let Some((left, right)) = cluster_frame_params_stereo(hc, scene, viewport) {
             Some(vec![left, right])
-        } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
-            Some(vec![mono])
         } else {
-            None
+            cluster_frame_params(hc, scene, viewport).map(|mono| vec![mono])
         }
-    } else if let Some(mono) = cluster_frame_params(hc, scene, viewport) {
-        Some(vec![mono])
     } else {
-        None
+        cluster_frame_params(hc, scene, viewport).map(|mono| vec![mono])
     }
 }
 

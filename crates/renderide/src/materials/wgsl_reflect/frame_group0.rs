@@ -53,10 +53,8 @@ pub(super) fn validate_frame_group0(
             (8, AddressSpace::Handle) => {
                 validate_frame_color_sampler_binding(module, data_ty, rb.binding)?;
             }
-            (_, AddressSpace::Uniform) => {
-                if rb.binding == 0 {
-                    b0_size = Some(layouter[data_ty].size);
-                }
+            (0, AddressSpace::Uniform) => {
+                b0_size = Some(layouter[data_ty].size);
             }
             (_, AddressSpace::Storage { .. }) => {
                 let stride = storage_array_element_stride(module, layouter, data_ty, rb.binding)?;

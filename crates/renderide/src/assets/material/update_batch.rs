@@ -227,10 +227,7 @@ pub fn parse_materials_update_batch_into_store(
     let mut select_target_index: usize = 0;
     let mut current: Option<MaterialBatchTarget> = None;
 
-    loop {
-        let Some(update) = p.next_update() else {
-            break;
-        };
+    while let Some(update) = p.next_update() {
         if update.update_type == MaterialPropertyUpdateType::UpdateBatchEnd {
             break;
         }

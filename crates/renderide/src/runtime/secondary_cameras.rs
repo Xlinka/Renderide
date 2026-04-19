@@ -42,7 +42,7 @@ fn build_desktop_multi_view_frame_list<'a>(
     main_collection: WorldMeshDrawCollection,
 ) -> Vec<FrameView<'a>> {
     let mut views: Vec<FrameView<'a>> = Vec::new();
-    for (prep, collection) in prepared.iter().zip(secondary_prefetched.into_iter()) {
+    for (prep, collection) in prepared.iter().zip(secondary_prefetched) {
         let ext = ExternalOffscreenTargets {
             render_texture_asset_id: prep.rt_id,
             color_view: prep.color_view.as_ref(),
@@ -156,7 +156,7 @@ impl RendererRuntime {
             .collect();
 
         let mut views: Vec<FrameView<'_>> = Vec::with_capacity(prepared.len());
-        for (prep, collection) in prepared.iter().zip(prefetched.into_iter()) {
+        for (prep, collection) in prepared.iter().zip(prefetched) {
             let ext = ExternalOffscreenTargets {
                 render_texture_asset_id: prep.rt_id,
                 color_view: prep.color_view.as_ref(),
