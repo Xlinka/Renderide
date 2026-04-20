@@ -81,6 +81,12 @@ fn clamp_msaa_request_to_supported(requested: u32, supported: &[u32]) -> u32 {
 }
 
 /// Intersects [`wgpu::Adapter::features`] with the feature bits Renderide requires for rendering.
+///
+/// When the `tracy` Cargo feature is active, also requests
+/// `TIMESTAMP_QUERY | TIMESTAMP_QUERY_INSIDE_ENCODERS` so the GPU profiler can insert timestamp
+/// queries around render-graph phases. Either feature being absent is gracefully tolerated:
+/// [`crate::profiling::GpuProfilerHandle::try_new`] disables timer queries when
+/// `TIMESTAMP_QUERY_INSIDE_ENCODERS` is missing.
 fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Features {
     let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
         | wgpu::Features::TEXTURE_COMPRESSION_ETC2
@@ -89,12 +95,14 @@ fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Featur
     let adapter_format_features = wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
     let optional_depth32_stencil8 = wgpu::Features::DEPTH32FLOAT_STENCIL8;
     let multisample_array = wgpu::Features::MULTISAMPLE_ARRAY;
+    let timestamp = crate::profiling::timestamp_query_features_if_supported(adapter);
     adapter.features()
         & (compression
             | optional_float32_filterable
             | adapter_format_features
             | optional_depth32_stencil8
             | multisample_array)
+        | timestamp
 }
 
 async fn request_device_for_adapter(
@@ -160,6 +168,9 @@ pub struct GpuContext {
     primary_offscreen: Option<PrimaryOffscreenTargets>,
     /// Debug HUD: wall-clock CPU (tick start → last submit) and GPU (last submit → idle) timing.
     frame_timing: FrameCpuGpuTimingHandle,
+    /// GPU timestamp profiler for the Tracy timeline. [`None`] when the `tracy` feature is off,
+    /// or when the adapter lacks [`wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS`].
+    gpu_profiler: Option<crate::profiling::GpuProfilerHandle>,
 }
 
 /// Persistent offscreen color + depth pair owned by [`GpuContext`] in headless mode.
@@ -279,6 +290,13 @@ impl GpuContext {
             msaa_max_stereo
         );
 
+        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
+        if cfg!(feature = "tracy") && gpu_profiler.is_none() {
+            logger::warn!(
+                "GPU profiler unavailable: adapter lacks TIMESTAMP_QUERY_INSIDE_ENCODERS; \
+                 Tracy GPU timeline will be empty (CPU spans still work)"
+            );
+        }
         Ok(Self {
             adapter_info,
             msaa_supported_sample_counts,
@@ -296,6 +314,7 @@ impl GpuContext {
             depth_extent_px: (0, 0),
             primary_offscreen: None,
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
+            gpu_profiler,
         })
     }
 
@@ -370,6 +389,7 @@ impl GpuContext {
             config.format,
             instance_flags,
         );
+        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
         Ok(Self {
             adapter_info,
             msaa_supported_sample_counts,
@@ -387,6 +407,7 @@ impl GpuContext {
             depth_extent_px: (0, 0),
             primary_offscreen: None,
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
+            gpu_profiler,
         })
     }
 
@@ -442,6 +463,13 @@ impl GpuContext {
             msaa_supported_sample_counts_stereo,
             msaa_max_stereo
         );
+        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
+        if cfg!(feature = "tracy") && gpu_profiler.is_none() {
+            logger::warn!(
+                "GPU profiler unavailable (OpenXR path): adapter lacks \
+                 TIMESTAMP_QUERY_INSIDE_ENCODERS; Tracy GPU timeline will be empty"
+            );
+        }
         Ok(Self {
             adapter_info,
             msaa_supported_sample_counts,
@@ -459,6 +487,7 @@ impl GpuContext {
             depth_extent_px: (0, 0),
             primary_offscreen: None,
             frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
+            gpu_profiler,
         })
     }
 
@@ -664,6 +693,47 @@ impl GpuContext {
     pub fn end_frame_timing(&self) {
         let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
         ft.end_frame();
+    }
+
+    /// Mutable reference to the GPU profiler, when one is active.
+    ///
+    /// Returns [`None`] when the `tracy` feature is off, or when the adapter lacks the required
+    /// timestamp-query features (see [`crate::profiling::GpuProfilerHandle::try_new`]).
+    pub fn gpu_profiler_mut(&mut self) -> Option<&mut crate::profiling::GpuProfilerHandle> {
+        self.gpu_profiler.as_mut()
+    }
+
+    /// Temporarily removes the GPU profiler handle from [`GpuContext`] and returns it.
+    ///
+    /// Use this when code must hold a borrowed reference into `GpuContext` (e.g. a
+    /// `ResolvedView` that borrows `depth_texture`) while also needing to drive the profiler
+    /// inside a nested loop. Pair every call with [`Self::restore_gpu_profiler`].
+    ///
+    /// Returns [`None`] when no profiler is active (feature off or adapter unsupported).
+    pub fn take_gpu_profiler(&mut self) -> Option<crate::profiling::GpuProfilerHandle> {
+        self.gpu_profiler.take()
+    }
+
+    /// Restores a profiler handle previously removed by [`Self::take_gpu_profiler`].
+    ///
+    /// If `profiler` is [`None`], this is a no-op.
+    pub fn restore_gpu_profiler(&mut self, profiler: Option<crate::profiling::GpuProfilerHandle>) {
+        if self.gpu_profiler.is_none() {
+            self.gpu_profiler = profiler;
+        }
+    }
+
+    /// Ends the GPU profiling frame and drains completed query results into Tracy.
+    ///
+    /// Call once per render tick after all command encoders for the tick have been submitted
+    /// (e.g. from [`crate::app::renderide_app::RenderideApp::frame_tick_epilogue`]).
+    /// Does nothing when no GPU profiler is active.
+    pub fn end_gpu_profiler_frame(&mut self) {
+        if let Some(p) = self.gpu_profiler.as_mut() {
+            p.end_frame();
+            let ts_period = self.queue.get_timestamp_period();
+            p.process_finished_frame(ts_period);
+        }
     }
 
     /// CPU time for this tick and the **latest completed** GPU submit→idle ms (may lag; see

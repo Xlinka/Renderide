@@ -47,3 +47,29 @@ The bootstrapper will launch the Resonite host and connect Renderide automatical
 1. Enable validation layers in the config hud to get more detailed error messages for GPU crashes. Requires a restart.
 
 1. Inspect logs in the `logs/` folder for panics, crashes, backtraces, and validation errors.
+
+## Profiling
+
+Renderide integrates with [Tracy](https://github.com/wolfpld/tracy) for CPU and GPU profiling.
+CPU spans come from the `profiling` crate; GPU timestamp queries come from `wgpu-profiler`.
+GPU timing requires `TIMESTAMP_QUERY` and `TIMESTAMP_QUERY_INSIDE_ENCODERS` adapter support.
+If either is missing, a warning is logged and only CPU spans are emitted.
+
+### Building with profiling enabled
+
+```bash
+cargo build --profile dev-fast --features tracy
+```
+```
+
+### Connecting Tracy
+
+1. Download the Tracy profiler GUI from the [Tracy releases page](https://github.com/wolfpld/tracy/releases)
+   and launch it.
+
+1. Start Renderide normally (bootstrapper or renderer directly).
+
+1. In the Tracy GUI, connect to `localhost` on port **8086**.
+
+Renderide uses Tracy's `ondemand` mode: data is only streamed while the GUI is connected, so
+profiled builds carry near-zero runtime cost when Tracy is not attached.

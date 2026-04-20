@@ -83,10 +83,12 @@ pub fn run_headless(
         //   attempt so we do not re-enter a full render on every 5ms tick while lavapipe is still
         //   busy or before the offscreen texture exists.
         let outcome = if due_for_full_frame {
+            profiling::scope!("headless::full_frame");
             let o = runtime.tick_one_frame(&mut gpu, InputState::default());
             next_full_frame_at = Instant::now() + render_interval;
             o
         } else {
+            profiling::scope!("headless::lockstep_tick");
             runtime.tick_one_frame_lockstep_only(InputState::default())
         };
         if outcome.shutdown_requested {
@@ -95,6 +97,7 @@ pub fn run_headless(
         }
         if outcome.fatal_error {
             logger::error!("Headless: fatal IPC error, exiting");
+            crate::profiling::emit_frame_mark();
             return Ok(Some(4));
         }
         if let Some(err) = outcome.graph_error {
@@ -110,6 +113,7 @@ pub fn run_headless(
             }
         }
 
+        crate::profiling::emit_frame_mark();
         std::thread::sleep(HEADLESS_TICK_SLEEP);
     }
 

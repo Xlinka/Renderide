@@ -193,6 +193,7 @@ impl FrameResourceManager {
         if self.light_prep_done_this_tick {
             return;
         }
+        profiling::scope!("render::prepare_lights");
         self.light_scratch.clear();
         self.resolved_flatten_scratch.clear();
         for id in scene.render_space_ids() {

@@ -299,8 +299,11 @@ impl RendererRuntime {
     /// Drains IPC and dispatches commands. Each poll batch is ordered so `renderer_init_data` runs
     /// first, then frame submits, then the rest (see [`RendererFrontend::poll_commands`]).
     pub fn poll_ipc(&mut self) {
+        profiling::scope!("ipc::poll_batch");
         let mut batch = self.frontend.poll_commands();
         for cmd in batch.drain(..) {
+            let _tag = renderer_command_kind::renderer_command_variant_tag(&cmd);
+            profiling::scope!("ipc::dispatch", _tag);
             ipc_init_dispatch::dispatch_ipc_command(self, cmd);
         }
         self.frontend.recycle_command_batch(batch);

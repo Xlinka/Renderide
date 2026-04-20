@@ -239,6 +239,14 @@ pub fn run() -> Result<Option<i32>, RunError> {
 
     let external_shutdown = install_external_shutdown();
 
+    crate::profiling::register_main_thread();
+    if let Err(e) = rayon::ThreadPoolBuilder::new()
+        .start_handler(crate::profiling::rayon_thread_start_handler())
+        .build_global()
+    {
+        logger::warn!("Rayon global pool already initialized or build_global failed: {e}");
+    }
+
     if let Some(headless_params) = get_headless_params() {
         return run_headless(
             &mut runtime,

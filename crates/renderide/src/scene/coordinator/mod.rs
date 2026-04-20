@@ -208,6 +208,7 @@ impl SceneCoordinator {
 
     /// Recomputes cached world matrices for every dirty space (no-op if caches clean).
     pub fn flush_world_caches(&mut self) -> Result<(), SceneError> {
+        profiling::scope!("scene::flush_world_caches");
         self.world_dirty_flush_scratch.clear();
         self.world_dirty_flush_scratch
             .extend(self.world_dirty.iter().copied());

@@ -204,6 +204,7 @@ pub(super) fn acquire_swapchain_for_multi_view_if_needed(
     if gpu.is_headless() {
         return Err(GraphExecuteError::SwapchainRequiresWindow);
     }
+    profiling::scope!("gpu::swapchain_acquire");
     match acquire_surface_outcome(gpu)? {
         SurfaceFrameOutcome::Skip | SurfaceFrameOutcome::Reconfigured => {
             Ok(MultiViewSwapchainAcquire::SkipPresent)

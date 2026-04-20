@@ -365,6 +365,7 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
     ctx: &DrawCollectionContext<'_>,
     parallelism: WorldMeshDrawCollectParallelism,
 ) -> WorldMeshDrawCollection {
+    profiling::scope!("mesh::collect_and_sort");
     let space_ids: Vec<RenderSpaceId> = ctx.scene.render_space_ids().collect();
 
     let mut cap_hint = 0usize;
@@ -379,17 +380,20 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
         }
     }
 
-    let per_space: Vec<(Vec<WorldMeshDrawItem>, (usize, usize, usize))> = match parallelism {
-        WorldMeshDrawCollectParallelism::Full => space_ids
-            .par_iter()
-            .copied()
-            .map(|space_id| collect_draws_for_one_space(space_id, ctx))
-            .collect(),
-        WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => space_ids
-            .iter()
-            .copied()
-            .map(|space_id| collect_draws_for_one_space(space_id, ctx))
-            .collect(),
+    let per_space: Vec<(Vec<WorldMeshDrawItem>, (usize, usize, usize))> = {
+        profiling::scope!("mesh::collect");
+        match parallelism {
+            WorldMeshDrawCollectParallelism::Full => space_ids
+                .par_iter()
+                .copied()
+                .map(|space_id| collect_draws_for_one_space(space_id, ctx))
+                .collect(),
+            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => space_ids
+                .iter()
+                .copied()
+                .map(|space_id| collect_draws_for_one_space(space_id, ctx))
+                .collect(),
+        }
     };
 
     let mut out = Vec::with_capacity(cap_hint.saturating_mul(8));
@@ -405,10 +409,13 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
         item.collect_order = i;
     }
 
-    match parallelism {
-        WorldMeshDrawCollectParallelism::Full => sort_world_mesh_draws(&mut out),
-        WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => {
-            sort_world_mesh_draws_serial(&mut out);
+    {
+        profiling::scope!("mesh::sort");
+        match parallelism {
+            WorldMeshDrawCollectParallelism::Full => sort_world_mesh_draws(&mut out),
+            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => {
+                sort_world_mesh_draws_serial(&mut out);
+            }
         }
     }
     WorldMeshDrawCollection {

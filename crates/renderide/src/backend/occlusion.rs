@@ -129,6 +129,7 @@ impl OcclusionSystem {
     /// Non-blocking: uses at most one [`wgpu::Device::poll`]; if a read is not ready, prior
     /// snapshots are kept.
     pub fn hi_z_begin_frame_readback(&mut self, device: &wgpu::Device) {
+        profiling::scope!("hi_z::readback_drain");
         self.main.begin_frame_readback(device);
         for (_, s) in self.offscreen.iter_mut() {
             s.begin_frame_readback(device);

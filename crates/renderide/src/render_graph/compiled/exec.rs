@@ -225,7 +225,10 @@ impl CompiledRenderGraph {
             for (_, resources) in transient_by_key {
                 resources.release_to_pool(pool);
             }
-            pool.gc_tick(120);
+            {
+                profiling::scope!("render::transient_gc");
+                pool.gc_tick(120);
+            }
         }
 
         Ok(())
@@ -238,6 +241,7 @@ impl CompiledRenderGraph {
         view: &mut FrameView<'_>,
         transient_by_key: &mut HashMap<GraphResolveKey, GraphResolvedResources>,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("graph::per_view");
         let MultiViewExecutionContext {
             gpu,
             scene,
@@ -252,10 +256,30 @@ impl CompiledRenderGraph {
         let draw_filter = view.draw_filter.clone();
         let host_camera = view.host_camera;
         let target_is_swapchain = matches!(view.target, FrameViewTarget::Swapchain);
+
+        // Create the encoder and open the GPU profiler query before `resolve_view_from_target`
+        // to avoid a double mutable borrow of `gpu`: `resolved` holds lifetime references into
+        // `gpu` (e.g. `depth_texture`), and `gpu_profiler_mut()` also borrows `gpu`. By opening
+        // the query first (which borrows gpu only transiently via the method call chain), then
+        // releasing that borrow before `resolve_view_from_target` takes its borrow, and only
+        // closing the query after the inner block where `resolved` is last used (NLL releases the
+        // borrow there), the two exclusive borrows are kept non-overlapping.
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("render-graph-per-view"),
+        });
+        let gpu_query = gpu
+            .gpu_profiler_mut()
+            .map(|p| p.begin_query("graph::per_view", &mut encoder));
+        // Take the profiler out before `resolve_view_from_target` borrows `gpu` so the
+        // per-pass loop can drive the profiler via a local handle without conflicting with the
+        // lifetime of `resolved`.
+        let mut pass_profiler = gpu.take_gpu_profiler();
+
         let resolved = Self::resolve_view_from_target(&view.target, gpu, backbuffer_view_holder)?;
         let key = GraphResolveKey::from_resolved(&resolved);
         let resolved_resources = match transient_by_key.entry(key) {
             Entry::Vacant(v) => {
+                profiling::scope!("render::transient_resolve");
                 let mut resources = GraphResolvedResources::with_capacity(
                     self.transient_textures.len(),
                     self.transient_buffers.len(),
@@ -293,10 +317,6 @@ impl CompiledRenderGraph {
         self.resolve_imported_textures(&resolved, resolved_resources);
         self.resolve_imported_buffers(&backend.frame_resources, &resolved, resolved_resources);
         let graph_resources: &GraphResolvedResources = &*resolved_resources;
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("render-graph-per-view"),
-        });
         {
             let mut frame_params = helpers::frame_render_params_from_resolved(
                 scene,
@@ -313,6 +333,10 @@ impl CompiledRenderGraph {
             );
             for &pass_idx in &self.per_view_pass_indices {
                 let pass = &mut self.passes[pass_idx];
+                profiling::scope!("graph::pass", pass.name());
+                let pass_query = pass_profiler
+                    .as_mut()
+                    .map(|p| p.begin_query(pass.name(), &mut encoder));
                 if pass.graph_managed_raster() {
                     let template = helpers::pass_info_raster_template(&self.pass_info, pass_idx)?;
                     let mut ctx = GraphRasterPassContext {
@@ -344,9 +368,22 @@ impl CompiledRenderGraph {
                     };
                     pass.execute(&mut ctx)?;
                 }
+                if let Some(q) = pass_query {
+                    if let Some(p) = pass_profiler.as_mut() {
+                        p.end_query(&mut encoder, q);
+                    }
+                }
             }
         }
 
+        // Restore the profiler before closing the frame-level query.
+        gpu.restore_gpu_profiler(pass_profiler);
+        if let Some(query) = gpu_query {
+            if let Some(prof) = gpu.gpu_profiler_mut() {
+                prof.end_query(&mut encoder, query);
+                prof.resolve_queries(&mut encoder);
+            }
+        }
         if target_is_swapchain {
             let Some(bb) = backbuffer_view_holder.as_ref() else {
                 return Err(GraphExecuteError::MissingSwapchainView);
@@ -387,6 +424,7 @@ impl CompiledRenderGraph {
         views: &[FrameView<'_>],
         transient_by_key: &mut HashMap<GraphResolveKey, GraphResolvedResources>,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("graph::frame_global");
         let MultiViewExecutionContext {
             gpu,
             scene,
@@ -404,6 +442,13 @@ impl CompiledRenderGraph {
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render-graph-frame-global"),
         });
+        let gpu_query = gpu
+            .gpu_profiler_mut()
+            .map(|p| p.begin_query("graph::frame_global", &mut encoder));
+        // Take the profiler out before `resolve_view_from_target` borrows `gpu` through the
+        // returned `ResolvedView`. This lets the per-pass loop drive the profiler via a local
+        // handle without conflicting with the lifetime of `resolved`.
+        let mut pass_profiler = gpu.take_gpu_profiler();
         // Frame-global phase (e.g. mesh deform): use first view for host camera / scene context.
         {
             let resolved =
@@ -411,6 +456,7 @@ impl CompiledRenderGraph {
             let key = GraphResolveKey::from_resolved(&resolved);
             let resolved_resources = match transient_by_key.entry(key) {
                 Entry::Vacant(v) => {
+                    profiling::scope!("render::transient_resolve");
                     let mut resources = GraphResolvedResources::with_capacity(
                         self.transient_textures.len(),
                         self.transient_buffers.len(),
@@ -464,6 +510,10 @@ impl CompiledRenderGraph {
                 );
                 for &pass_idx in &self.frame_global_pass_indices {
                     let pass = &mut self.passes[pass_idx];
+                    profiling::scope!("graph::pass", pass.name());
+                    let pass_query = pass_profiler
+                        .as_mut()
+                        .map(|p| p.begin_query(pass.name(), &mut encoder));
                     if pass.graph_managed_raster() {
                         let template =
                             helpers::pass_info_raster_template(&self.pass_info, pass_idx)?;
@@ -496,7 +546,20 @@ impl CompiledRenderGraph {
                         };
                         pass.execute(&mut ctx)?;
                     }
+                    if let Some(q) = pass_query {
+                        if let Some(p) = pass_profiler.as_mut() {
+                            p.end_query(&mut encoder, q);
+                        }
+                    }
                 }
+            }
+        }
+        // Restore the profiler before closing the frame-level query.
+        gpu.restore_gpu_profiler(pass_profiler);
+        if let Some(query) = gpu_query {
+            if let Some(prof) = gpu.gpu_profiler_mut() {
+                prof.end_query(&mut encoder, query);
+                prof.resolve_queries(&mut encoder);
             }
         }
         let cmd = encoder.finish();

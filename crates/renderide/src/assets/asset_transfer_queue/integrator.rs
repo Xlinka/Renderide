@@ -83,6 +83,17 @@ impl AssetIntegrator {
     }
 }
 
+/// Returns a stable tag for [`AssetTask`] variants, used as Tracy zone data.
+#[cfg_attr(not(feature = "tracy"), allow(dead_code))]
+fn asset_task_kind_tag(task: &AssetTask) -> &'static str {
+    match task {
+        AssetTask::Mesh(_) => "Mesh",
+        AssetTask::Texture(_) => "Texture",
+        AssetTask::Texture3d(_) => "Texture3d",
+        AssetTask::Cubemap(_) => "Cubemap",
+    }
+}
+
 fn step_asset_task(
     asset: &mut AssetTransferQueue,
     device: &Arc<wgpu::Device>,
@@ -92,6 +103,7 @@ fn step_asset_task(
     ipc: &mut Option<&mut DualQueueIpc>,
     task: &mut AssetTask,
 ) -> StepResult {
+    profiling::scope!("asset::upload", asset_task_kind_tag(task));
     let q = queue.as_ref();
     match task {
         AssetTask::Mesh(m) => m.step(asset, device, gpu_limits, q, shm, ipc),
@@ -109,6 +121,7 @@ pub fn drain_asset_tasks(
     ipc: &mut Option<&mut DualQueueIpc>,
     normal_deadline: Instant,
 ) {
+    profiling::scope!("asset::drain_tasks");
     let Some(device) = asset.gpu_device.clone() else {
         return;
     };

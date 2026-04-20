@@ -558,6 +558,7 @@ impl RenderBackend {
         backbuffer: &wgpu::TextureView,
         extent: (u32, u32),
     ) -> Result<(), DebugHudEncodeError> {
+        profiling::scope!("hud::encode");
         self.debug_hud
             .encode_overlay(device, queue, encoder, backbuffer, extent)
     }

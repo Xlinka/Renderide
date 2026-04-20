@@ -125,6 +125,7 @@ impl RendererRuntime {
         &mut self,
         gpu: &mut GpuContext,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("render::secondary_cameras");
         self.backend
             .frame_resources
             .prepare_lights_from_scene(&self.scene);
