@@ -29,8 +29,11 @@ pub trait RasterPass: Send {
     fn setup(&mut self, builder: &mut PassBuilder<'_>) -> Result<(), SetupError>;
 
     /// Records GPU commands into the graph-opened render pass.
+    ///
+    /// Takes `&self` so per-view passes can be recorded on rayon workers concurrently.
+    /// Passes that hold mutable recording state must use interior mutability (e.g. `Mutex`).
     fn record(
-        &mut self,
+        &self,
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError>;

@@ -256,7 +256,7 @@ mod tests {
         }
 
         fn record(
-            &mut self,
+            &self,
             _ctx: &mut RasterPassCtx<'_, '_>,
             _rpass: &mut wgpu::RenderPass<'_>,
         ) -> Result<(), RenderPassError> {

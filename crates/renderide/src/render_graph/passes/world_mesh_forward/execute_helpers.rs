@@ -37,6 +37,7 @@ use crate::render_graph::frame_params::{
     PerViewFramePlanSlot, PrecomputedMaterialBind, PrecomputedMaterialBindsSlot,
     PrefetchedWorldMeshDrawsSlot,
 };
+use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::world_mesh_draw_prep::{
     collect_and_sort_world_mesh_draws, DrawCollectionContext, WorldMeshDrawCollection,
     WorldMeshDrawItem,
@@ -104,23 +105,24 @@ pub(super) fn take_or_collect_world_mesh_draws<'a>(
     culling: Option<&WorldMeshCullInput<'_>>,
     shader_perm: ShaderPermutation,
 ) -> WorldMeshDrawCollection {
-    let hc = frame.host_camera;
-    let render_context = frame.scene.active_main_render_context();
+    let hc = frame.view.host_camera;
+    let render_context = frame.shared.scene.active_main_render_context();
     if let Some(prefetched) = blackboard.take::<PrefetchedWorldMeshDrawsSlot>() {
         return prefetched;
     }
     let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
     let router_ref = frame
+        .shared
         .materials
         .material_registry()
         .map(|r| &r.router)
         .unwrap_or(&fallback_router);
     let pipeline_property_ids =
-        MaterialPipelinePropertyIds::new(frame.materials.property_id_registry());
-    let dict = MaterialDictionary::new(frame.materials.material_property_store());
+        MaterialPipelinePropertyIds::new(frame.shared.materials.property_id_registry());
+    let dict = MaterialDictionary::new(frame.shared.materials.material_property_store());
     collect_and_sort_world_mesh_draws(&DrawCollectionContext {
-        scene: frame.scene,
-        mesh_pool: &frame.asset_transfers.mesh_pool,
+        scene: frame.shared.scene,
+        mesh_pool: &frame.shared.asset_transfers.mesh_pool,
         material_dict: &dict,
         material_router: router_ref,
         pipeline_property_ids: &pipeline_property_ids,
@@ -131,7 +133,7 @@ pub(super) fn take_or_collect_world_mesh_draws<'a>(
             .secondary_camera_world_position
             .unwrap_or_else(|| hc.head_output_transform.col(3).truncate()),
         culling,
-        transform_filter: frame.transform_draw_filter.as_ref(),
+        transform_filter: frame.view.transform_draw_filter.as_ref(),
     })
 }
 
@@ -147,11 +149,11 @@ pub(super) fn capture_hi_z_temporal_after_collect(
     let Some(cull_in) = culling else {
         return;
     };
-    let view_id = frame.occlusion_view;
-    frame.occlusion.capture_hi_z_temporal_for_next_frame(
-        frame.scene,
+    let view_id = frame.view.occlusion_view;
+    frame.shared.occlusion.capture_hi_z_temporal_for_next_frame(
+        frame.shared.scene,
         cull_in.proj,
-        frame.viewport_px,
+        frame.view.viewport_px,
         view_id,
         hc.secondary_camera_world_to_view,
     );
@@ -233,7 +235,7 @@ pub(super) fn compute_view_projections(
 /// view's own buffer. Returns `false` if per-draw resources cannot be created (not yet attached).
 pub(super) fn pack_and_upload_per_draw_slab(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    upload_batch: &FrameUploadBatch,
     frame: &mut FrameRenderParams<'_>,
     render_context: RenderingContext,
     world_proj: Mat4,
@@ -244,13 +246,14 @@ pub(super) fn pack_and_upload_per_draw_slab(
         return true;
     }
 
-    let view_id = frame.occlusion_view;
-    let scene = frame.scene;
-    let hc = frame.host_camera;
+    let view_id = frame.view.occlusion_view;
+    let scene = frame.shared.scene;
+    let hc = frame.view.host_camera;
 
     // Step 1: ensure per-view buffer capacity (&mut on per_view_draw, released immediately).
     {
         let Some(pd) = frame
+            .shared
             .frame_resources
             .per_view_per_draw_or_create(view_id, device)
         else {
@@ -262,7 +265,7 @@ pub(super) fn pack_and_upload_per_draw_slab(
     // Step 2: pack VP uniforms and serialise to byte slab.
     // Both borrows are on distinct fields of FrameResourceManager (disjoint &mut is valid).
     {
-        let uniforms = &mut frame.frame_resources.per_draw_uniforms_scratch;
+        let uniforms = &mut frame.shared.frame_resources.per_draw_uniforms_scratch;
         uniforms.clear();
         uniforms.resize_with(draws.len(), PaddedPerDrawUniforms::zeroed);
 
@@ -303,18 +306,25 @@ pub(super) fn pack_and_upload_per_draw_slab(
             }
         }
 
-        let slab = &mut frame.frame_resources.per_draw_slab_byte_scratch;
+        let slab = frame
+            .shared
+            .frame_resources
+            .per_draw_slab_byte_scratch_by_view
+            .entry(view_id)
+            .or_default();
         let need = draws.len().saturating_mul(PER_DRAW_UNIFORM_STRIDE);
         slab.resize(need, 0);
         write_per_draw_uniform_slab(uniforms, slab);
     }
 
     // Step 3: upload to GPU. Two simultaneous shared borrows of distinct fields are valid.
-    let Some(pd) = frame.frame_resources.per_view_per_draw(view_id) else {
+    let Some(pd) = frame.shared.frame_resources.per_view_per_draw(view_id) else {
         return false;
     };
-    let slab_bytes = frame.frame_resources.per_draw_slab_byte_scratch.as_slice();
-    queue.write_buffer(&pd.per_draw_storage, 0, slab_bytes);
+    let Some(slab_vec) = frame.shared.frame_resources.per_draw_scratch(view_id) else {
+        return false;
+    };
+    upload_batch.write_buffer(&pd.per_draw_storage, 0, slab_vec.as_slice());
     true
 }
 
@@ -406,7 +416,7 @@ pub(super) fn precompute_material_bind_groups(
     });
 
     // Mark precomputed count for diagnostics (available via debug_hud if needed).
-    let _ = frame.debug_hud;
+    let _ = frame.shared.debug_hud;
 
     result
 }
@@ -416,19 +426,20 @@ pub(super) fn precompute_material_bind_groups(
 pub(super) fn prepare_world_mesh_forward_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
+    upload_batch: &FrameUploadBatch,
     gpu_limits: &GpuLimits,
     frame: &mut FrameRenderParams<'_>,
     blackboard: &mut Blackboard,
 ) -> Option<PreparedWorldMeshForwardFrame> {
     let supports_base_instance = gpu_limits.supports_base_instance;
-    let hc = frame.host_camera;
+    let hc = frame.view.host_camera;
     let pipeline = resolve_pass_config(
         hc,
-        frame.multiview_stereo,
-        frame.scene_color_format,
-        frame.depth_texture.format(),
+        frame.view.multiview_stereo,
+        frame.view.scene_color_format,
+        frame.view.depth_texture.format(),
         gpu_limits,
-        frame.sample_count,
+        frame.view.sample_count,
     );
     let use_multiview = pipeline.use_multiview;
     let shader_perm = pipeline.shader_perm;
@@ -436,11 +447,12 @@ pub(super) fn prepare_world_mesh_forward_frame(
     let culling = if hc.suppress_occlusion_temporal {
         None
     } else {
-        let cull_proj = build_world_mesh_cull_proj_params(frame.scene, frame.viewport_px, &hc);
+        let cull_proj =
+            build_world_mesh_cull_proj_params(frame.shared.scene, frame.view.viewport_px, &hc);
         let depth_mode = frame.output_depth_mode();
-        let view_id = frame.occlusion_view;
-        let hi_z_temporal = frame.occlusion.hi_z_temporal_snapshot(view_id);
-        let hi_z = frame.occlusion.hi_z_cull_data(depth_mode, view_id);
+        let view_id = frame.view.occlusion_view;
+        let hi_z_temporal = frame.shared.occlusion.hi_z_temporal_snapshot(view_id);
+        let hi_z = frame.shared.occlusion.hi_z_cull_data(depth_mode, view_id);
         Some(WorldMeshCullInput {
             proj: cull_proj,
             host_camera: &hc,
@@ -454,22 +466,22 @@ pub(super) fn prepare_world_mesh_forward_frame(
     capture_hi_z_temporal_after_collect(frame, culling.as_ref(), hc);
 
     maybe_set_world_mesh_draw_stats(
-        frame.debug_hud,
-        frame.materials,
+        frame.shared.debug_hud,
+        frame.shared.materials,
         &collection,
         &collection.items,
         supports_base_instance,
         shader_perm,
-        frame.offscreen_write_render_texture_asset_id,
+        frame.view.offscreen_write_render_texture_asset_id,
     );
 
     let draws = collection.items;
     let (render_context, world_proj, overlay_proj) =
-        compute_view_projections(frame.scene, hc, frame.viewport_px, &draws);
+        compute_view_projections(frame.shared.scene, hc, frame.view.viewport_px, &draws);
 
     if !pack_and_upload_per_draw_slab(
         device,
-        queue,
+        upload_batch,
         frame,
         render_context,
         world_proj,
@@ -485,46 +497,49 @@ pub(super) fn prepare_world_mesh_forward_frame(
     if let Some(frame_plan) = blackboard.get::<PerViewFramePlanSlot>() {
         use crate::gpu::frame_globals::FrameGpuUniforms;
         use bytemuck::Zeroable;
-        let (vw, vh) = frame.viewport_px;
-        let light_count = frame.frame_resources.frame_light_count_u32();
+        let (vw, vh) = frame.view.viewport_px;
+        let light_count = frame.shared.frame_resources.frame_light_count_u32();
         let camera_world = hc
             .secondary_camera_world_position
             .unwrap_or_else(|| hc.head_output_transform.col(3).truncate());
         let stereo_cluster = use_multiview && hc.vr_active && hc.stereo_views.is_some();
         let uniforms = if stereo_cluster {
-            if let Some((left, right)) = cluster_frame_params_stereo(&hc, frame.scene, (vw, vh)) {
+            if let Some((left, right)) =
+                cluster_frame_params_stereo(&hc, frame.shared.scene, (vw, vh))
+            {
                 left.frame_gpu_uniforms(camera_world, light_count, right.view_space_z_coeffs())
-            } else if let Some(mono) = cluster_frame_params(&hc, frame.scene, (vw, vh)) {
+            } else if let Some(mono) = cluster_frame_params(&hc, frame.shared.scene, (vw, vh)) {
                 let z = mono.view_space_z_coeffs();
                 mono.frame_gpu_uniforms(camera_world, light_count, z)
             } else {
                 FrameGpuUniforms::zeroed()
             }
-        } else if let Some(mono) = cluster_frame_params(&hc, frame.scene, (vw, vh)) {
+        } else if let Some(mono) = cluster_frame_params(&hc, frame.shared.scene, (vw, vh)) {
             let z = mono.view_space_z_coeffs();
             mono.frame_gpu_uniforms(camera_world, light_count, z)
         } else {
             FrameGpuUniforms::zeroed()
         };
-        queue.write_buffer(
+        upload_batch.write_buffer(
             &frame_plan.frame_uniform_buffer,
             0,
             bytemuck::bytes_of(&uniforms),
         );
-        if let Some(fgpu) = frame.frame_resources.frame_gpu_mut() {
+        if let Some(fgpu) = frame.shared.frame_resources.frame_gpu_mut() {
             fgpu.sync_cluster_viewport(device, (vw, vh), stereo_cluster);
         }
         frame
+            .shared
             .frame_resources
             .sync_cluster_viewport_ensure_lights_upload(device, queue, (vw, vh), stereo_cluster);
     } else {
         write_frame_uniforms_and_cluster(
             device,
             queue,
-            frame.frame_resources,
+            frame.shared.frame_resources,
             hc,
-            frame.scene,
-            frame.viewport_px,
+            frame.shared.scene,
+            frame.view.viewport_px,
             use_multiview,
         );
     }
@@ -536,7 +551,7 @@ pub(super) fn prepare_world_mesh_forward_frame(
         frame,
         &draws,
         pipeline.shader_perm,
-        frame.offscreen_write_render_texture_asset_id,
+        frame.view.offscreen_write_render_texture_asset_id,
     );
     blackboard.insert::<PrecomputedMaterialBindsSlot>(precomputed_binds);
 
@@ -633,6 +648,7 @@ fn record_world_mesh_forward_subpass(
 
 fn frame_has_local_lights(frame: &FrameRenderParams<'_>) -> bool {
     frame
+        .shared
         .frame_resources
         .frame_lights()
         .iter()
@@ -652,20 +668,23 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
     }
 
     let Some(per_draw_bg) = frame
+        .shared
         .frame_resources
-        .per_view_per_draw(frame.occlusion_view)
+        .per_view_per_draw(frame.view.occlusion_view)
         .map(|d| d.bind_group.clone())
     else {
         return false;
     };
     let Some(frame_bg_arc) = frame
+        .shared
         .frame_resources
-        .per_view_frame(frame.occlusion_view)
+        .per_view_frame(frame.view.occlusion_view)
         .map(|s| s.frame_bind_group.clone())
     else {
         return false;
     };
     let Some(empty_bg_arc) = frame
+        .shared
         .frame_resources
         .empty_material()
         .map(|e| e.bind_group.clone())
@@ -685,12 +704,12 @@ pub(super) fn record_world_mesh_forward_opaque_graph_raster(
         pass_desc: &prepared.pipeline.pass_desc,
         shader_perm: prepared.pipeline.shader_perm,
         supports_base_instance: prepared.supports_base_instance,
-        offscreen_write_render_texture_asset_id: frame.offscreen_write_render_texture_asset_id,
+        offscreen_write_render_texture_asset_id: frame.view.offscreen_write_render_texture_asset_id,
         has_local_lights,
         warned_missing_embedded_bind: &mut warned_missing_embedded_bind,
     };
 
-    let Some(gpu_limits) = frame.gpu_limits.clone() else {
+    let Some(gpu_limits) = frame.view.gpu_limits.clone() else {
         return false;
     };
     let mut encode_refs = frame.world_mesh_forward_encode_refs();
@@ -723,8 +742,9 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
     }
 
     let Some(per_draw_bg) = frame
+        .shared
         .frame_resources
-        .per_view_per_draw(frame.occlusion_view)
+        .per_view_per_draw(frame.view.occlusion_view)
         .map(|d| d.bind_group.clone())
     else {
         return false;
@@ -733,13 +753,15 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
     // intersection draws pick up the updated bind group after copy_scene_depth_snapshot_for_view
     // rebuilds it with the freshly copied depth texture view.
     let Some(frame_bg_arc) = frame
+        .shared
         .frame_resources
-        .per_view_frame(frame.occlusion_view)
+        .per_view_frame(frame.view.occlusion_view)
         .map(|s| s.frame_bind_group.clone())
     else {
         return false;
     };
     let Some(empty_bg_arc) = frame
+        .shared
         .frame_resources
         .empty_material()
         .map(|e| e.bind_group.clone())
@@ -759,12 +781,12 @@ pub(super) fn record_world_mesh_forward_intersection_graph_raster(
         pass_desc: &prepared.pipeline.pass_desc,
         shader_perm: prepared.pipeline.shader_perm,
         supports_base_instance: prepared.supports_base_instance,
-        offscreen_write_render_texture_asset_id: frame.offscreen_write_render_texture_asset_id,
+        offscreen_write_render_texture_asset_id: frame.view.offscreen_write_render_texture_asset_id,
         has_local_lights,
         warned_missing_embedded_bind: &mut warned_missing_embedded_bind,
     };
 
-    let Some(gpu_limits) = frame.gpu_limits.clone() else {
+    let Some(gpu_limits) = frame.view.gpu_limits.clone() else {
         return false;
     };
     let mut encode_refs = frame.world_mesh_forward_encode_refs();
@@ -798,26 +820,29 @@ pub(super) fn encode_world_mesh_forward_depth_snapshot(
         return false;
     }
 
-    if frame.sample_count > 1 {
+    if frame.view.sample_count > 1 {
         if let (Some(msaa_views), Some(res)) = (msaa_views, msaa_depth_resolve) {
             encode_msaa_depth_resolve_for_frame(device, encoder, frame, msaa_views, res);
         }
     }
 
-    let hc = frame.host_camera;
+    let hc = frame.view.host_camera;
     let stereo_cluster =
         prepared.pipeline.use_multiview && hc.vr_active && hc.stereo_views.is_some();
-    if frame.frame_resources.frame_gpu().is_none() {
+    if frame.shared.frame_resources.frame_gpu().is_none() {
         return false;
     }
-    frame.frame_resources.copy_scene_depth_snapshot_for_view(
-        device,
-        encoder,
-        frame.depth_texture,
-        frame.viewport_px,
-        prepared.pipeline.use_multiview,
-        stereo_cluster,
-    );
+    frame
+        .shared
+        .frame_resources
+        .copy_scene_depth_snapshot_for_view(
+            device,
+            encoder,
+            frame.view.depth_texture,
+            frame.view.viewport_px,
+            prepared.pipeline.use_multiview,
+            stereo_cluster,
+        );
     true
 }
 
@@ -829,7 +854,7 @@ pub(super) fn encode_msaa_depth_resolve_after_clear_only(
     msaa_views: Option<&ForwardMsaaResolvedViews>,
     msaa_depth_resolve: Option<&MsaaDepthResolveResources>,
 ) {
-    if frame.sample_count <= 1 {
+    if frame.view.sample_count <= 1 {
         return;
     }
     let (Some(msaa_views), Some(res)) = (msaa_views, msaa_depth_resolve) else {
@@ -847,7 +872,7 @@ fn encode_msaa_depth_resolve_for_frame(
     msaa: &ForwardMsaaResolvedViews,
     resolve: &MsaaDepthResolveResources,
 ) {
-    let Some(limits) = frame.gpu_limits.as_ref() else {
+    let Some(limits) = frame.view.gpu_limits.as_ref() else {
         logger::warn!("MSAA depth resolve: gpu_limits missing; skipping resolve");
         return;
     };
@@ -862,13 +887,13 @@ fn encode_msaa_depth_resolve_for_frame(
         resolve.encode_resolve_stereo(
             device,
             encoder,
-            frame.viewport_px,
+            frame.view.viewport_px,
             MsaaDepthResolveStereoTargets {
                 msaa_depth_layer_views: [&msaa_layers[0], &msaa_layers[1]],
                 r32_layer_views: [&r32_layers[0], &r32_layers[1]],
                 r32_array_view: &msaa.depth_resolve_r32_view,
-                dst_depth_view: frame.depth_view,
-                dst_depth_format: frame.depth_texture.format(),
+                dst_depth_view: frame.view.depth_view,
+                dst_depth_format: frame.view.depth_texture.format(),
             },
             limits,
         );
@@ -876,12 +901,12 @@ fn encode_msaa_depth_resolve_for_frame(
         resolve.encode_resolve(
             device,
             encoder,
-            frame.viewport_px,
+            frame.view.viewport_px,
             MsaaDepthResolveMonoTargets {
                 msaa_depth_view: &msaa.depth_view,
                 r32_view: &msaa.depth_resolve_r32_view,
-                dst_depth_view: frame.depth_view,
-                dst_depth_format: frame.depth_texture.format(),
+                dst_depth_view: frame.view.depth_view,
+                dst_depth_format: frame.view.depth_texture.format(),
             },
             limits,
         );

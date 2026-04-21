@@ -101,7 +101,7 @@ impl ComputePass for TestComputePass {
         Ok(())
     }
 
-    fn record(&mut self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+    fn record(&self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
         unreachable!("compile-only integration test must not execute the graph")
     }
 

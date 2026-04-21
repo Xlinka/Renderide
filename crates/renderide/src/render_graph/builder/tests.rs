@@ -102,7 +102,7 @@ impl ComputePass for TestComputePass {
         Ok(())
     }
 
-    fn record(&mut self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+    fn record(&self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
         Ok(())
     }
 }
@@ -207,7 +207,7 @@ impl RasterPass for TestRasterPass {
     }
 
     fn record(
-        &mut self,
+        &self,
         _ctx: &mut RasterPassCtx<'_, '_>,
         _rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
@@ -468,7 +468,7 @@ fn raster_pass_without_attachments_rejected() {
             Ok(())
         }
         fn record(
-            &mut self,
+            &self,
             _ctx: &mut RasterPassCtx<'_, '_>,
             _rpass: &mut wgpu::RenderPass<'_>,
         ) -> Result<(), RenderPassError> {
@@ -506,7 +506,7 @@ fn compute_pass_with_attachment_rejected() {
             );
             Ok(())
         }
-        fn record(&mut self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+        fn record(&self, _ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
             Ok(())
         }
     }

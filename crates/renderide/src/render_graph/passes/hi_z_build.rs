@@ -56,25 +56,25 @@ impl ComputePass for HiZBuildPass {
         Ok(())
     }
 
-    fn record(&mut self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+    fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
         if ctx.depth_view.is_none() {
             return Ok(());
         }
         let Some(frame) = ctx.frame.as_mut() else {
             return Ok(());
         };
-        let Some(depth_sample_view) = frame.depth_sample_view.as_ref() else {
+        let Some(depth_sample_view) = frame.view.depth_sample_view.as_ref() else {
             return Ok(());
         };
         let mode = frame.output_depth_mode();
-        let view_id = frame.occlusion_view;
-        frame.occlusion.encode_hi_z_build_pass(
+        let view_id = frame.view.occlusion_view;
+        frame.shared.occlusion.encode_hi_z_build_pass(
             ctx.device,
             ctx.queue.as_ref(),
             ctx.encoder,
             HiZBuildInput {
                 depth_view: depth_sample_view,
-                extent: frame.viewport_px,
+                extent: frame.view.viewport_px,
                 mode,
                 view: view_id,
             },

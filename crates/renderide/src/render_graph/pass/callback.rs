@@ -37,7 +37,10 @@ pub trait CallbackPass: Send {
     ///
     /// No encoder is provided. The pass may issue [`wgpu::Queue::write_buffer`] calls via
     /// `ctx.queue`, read scene data via `ctx.frame`, and mutate `ctx.blackboard`.
-    fn run(&mut self, ctx: &mut CallbackCtx<'_, '_>) -> Result<(), RenderPassError>;
+    ///
+    /// Takes `&self` so per-view passes can be recorded on rayon workers concurrently.
+    /// Passes that hold mutable recording state must use interior mutability (e.g. `Mutex`).
+    fn run(&self, ctx: &mut CallbackCtx<'_, '_>) -> Result<(), RenderPassError>;
 
     /// Scheduling phase. Defaults to [`PassPhase::PerView`].
     fn phase(&self) -> PassPhase {

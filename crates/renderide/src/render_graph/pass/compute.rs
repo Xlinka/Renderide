@@ -25,7 +25,10 @@ pub trait ComputePass: Send {
     ///
     /// The [`wgpu::CommandEncoder`] is accessible via `ctx.encoder`. The pass opens and closes
     /// compute sub-passes on it directly.
-    fn record(&mut self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError>;
+    ///
+    /// Takes `&self` so per-view passes can be recorded on rayon workers concurrently.
+    /// Passes that hold mutable recording state must use interior mutability (e.g. `Mutex`).
+    fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError>;
 
     /// Scheduling phase. Defaults to [`PassPhase::PerView`].
     fn phase(&self) -> PassPhase {

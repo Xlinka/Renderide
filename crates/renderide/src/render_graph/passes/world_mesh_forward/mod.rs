@@ -193,7 +193,7 @@ impl CallbackPass for WorldMeshForwardPreparePass {
         Ok(())
     }
 
-    fn run(&mut self, ctx: &mut CallbackCtx<'_, '_>) -> Result<(), RenderPassError> {
+    fn run(&self, ctx: &mut CallbackCtx<'_, '_>) -> Result<(), RenderPassError> {
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -215,6 +215,7 @@ impl CallbackPass for WorldMeshForwardPreparePass {
         let prepared = prepare_world_mesh_forward_frame(
             ctx.device,
             ctx.queue.as_ref(),
+            ctx.upload_batch,
             ctx.gpu_limits,
             frame,
             ctx.blackboard,
@@ -292,7 +293,7 @@ impl RasterPass for WorldMeshForwardOpaquePass {
     }
 
     fn record(
-        &mut self,
+        &self,
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
@@ -347,7 +348,7 @@ impl ComputePass for WorldMeshDepthSnapshotPass {
         Ok(())
     }
 
-    fn record(&mut self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+    fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -356,14 +357,14 @@ impl ComputePass for WorldMeshDepthSnapshotPass {
         let msaa_views = resolve_forward_msaa_views(
             ctx.graph_resources,
             self.resources,
-            frame.sample_count,
-            frame.multiview_stereo,
+            frame.view.sample_count,
+            frame.view.multiview_stereo,
         );
 
         let Some(mut prepared) = ctx.blackboard.take::<WorldMeshForwardPlanSlot>() else {
             return Ok(());
         };
-        let msaa_depth_resolve = frame.msaa_depth_resolve.clone();
+        let msaa_depth_resolve = frame.view.msaa_depth_resolve.clone();
         let recorded = encode_world_mesh_forward_depth_snapshot(
             ctx.device,
             ctx.encoder,
@@ -443,7 +444,7 @@ impl RasterPass for WorldMeshForwardIntersectPass {
     }
 
     fn record(
-        &mut self,
+        &self,
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
@@ -504,7 +505,7 @@ impl ComputePass for WorldMeshForwardDepthResolvePass {
         Ok(())
     }
 
-    fn record(&mut self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
+    fn record(&self, ctx: &mut ComputePassCtx<'_, '_, '_>) -> Result<(), RenderPassError> {
         let Some(frame) = ctx.frame.as_mut() else {
             return Err(RenderPassError::MissingFrameParams {
                 pass: self.name().to_string(),
@@ -513,10 +514,10 @@ impl ComputePass for WorldMeshForwardDepthResolvePass {
         let msaa_views = resolve_forward_msaa_views(
             ctx.graph_resources,
             self.resources,
-            frame.sample_count,
-            frame.multiview_stereo,
+            frame.view.sample_count,
+            frame.view.multiview_stereo,
         );
-        let msaa_depth_resolve = frame.msaa_depth_resolve.clone();
+        let msaa_depth_resolve = frame.view.msaa_depth_resolve.clone();
         encode_msaa_depth_resolve_after_clear_only(
             ctx.device,
             ctx.encoder,

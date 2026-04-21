@@ -437,10 +437,11 @@ impl RenderBackend {
         let Some(handle) = self.renderer_settings.as_ref() else {
             return;
         };
-        let live_settings = match handle.read() {
-            Ok(g) => g.post_processing.clone(),
+        let (live_parallelism, live_settings) = match handle.read() {
+            Ok(g) => (g.rendering.record_parallelism, g.post_processing.clone()),
             Err(_) => return,
         };
+        self.set_record_parallelism(live_parallelism);
         let live_signature = PostProcessChainSignature::from_settings(&live_settings);
         if live_signature == self.frame_graph_post_processing_signature
             && self.frame_graph.is_some()
@@ -453,6 +454,22 @@ impl RenderBackend {
             live_signature,
         );
         self.rebuild_frame_graph_for_post_processing(&live_settings);
+    }
+
+    /// Updates the per-view record parallelism mode from live [`crate::config::RenderingSettings`].
+    ///
+    /// On the first frame after the effective mode changes, logs the new mode at `info!`. Runtime
+    /// changes take effect on the next `execute_multi_view` call. See
+    /// [`crate::render_graph::CompiledRenderGraph::execute_multi_view`] for the parallel branch.
+    pub fn set_record_parallelism(&mut self, mode: crate::config::RecordParallelism) {
+        if self.record_parallelism != mode {
+            logger::info!(
+                "record parallelism mode change: {:?} -> {:?}",
+                self.record_parallelism,
+                mode
+            );
+            self.record_parallelism = mode;
+        }
     }
 
     /// Updates whether main HUD diagnostics run (mirrors [`crate::config::DebugSettings::debug_hud_enabled`]).

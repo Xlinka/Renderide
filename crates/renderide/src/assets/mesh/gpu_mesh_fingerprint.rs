@@ -72,10 +72,11 @@ mod tests {
     use crate::shared::BlendshapeBufferDescriptor;
 
     fn base_data() -> MeshUploadData {
-        let mut d = MeshUploadData::default();
-        d.asset_id = 42;
-        d.vertex_count = 8;
-        d
+        MeshUploadData {
+            asset_id: 42,
+            vertex_count: 8,
+            ..Default::default()
+        }
     }
 
     fn base_layout() -> MeshBufferLayout {

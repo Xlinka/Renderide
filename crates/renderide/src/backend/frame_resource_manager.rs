@@ -119,8 +119,11 @@ pub struct FrameResourceManager {
     mesh_deform_dispatched_this_tick: Cell<bool>,
     /// Reused for per-draw VP/pack before [`crate::backend::mesh_deform::write_per_draw_uniform_slab`].
     pub(crate) per_draw_uniforms_scratch: Vec<PaddedPerDrawUniforms>,
-    /// Reused byte slab for [`crate::backend::mesh_deform::write_per_draw_uniform_slab`].
-    pub(crate) per_draw_slab_byte_scratch: Vec<u8>,
+    /// Reused byte slab for [`crate::backend::mesh_deform::write_per_draw_uniform_slab`], keyed per view.
+    ///
+    /// Keyed by [`OcclusionViewId`] so parallel per-view recording never aliases the same scratch
+    /// across rayon workers. Mirrors the `per_view_frame` / `per_view_draw` pattern.
+    pub(crate) per_draw_slab_byte_scratch_by_view: HashMap<OcclusionViewId, Vec<u8>>,
 }
 
 impl Default for FrameResourceManager {
@@ -145,7 +148,7 @@ impl FrameResourceManager {
             lights_gpu_uploaded_this_tick: Cell::new(false),
             mesh_deform_dispatched_this_tick: Cell::new(false),
             per_draw_uniforms_scratch: Vec::new(),
-            per_draw_slab_byte_scratch: Vec::new(),
+            per_draw_slab_byte_scratch_by_view: HashMap::new(),
         }
     }
 
@@ -364,6 +367,35 @@ impl FrameResourceManager {
     pub fn retire_per_view_per_draw(&mut self, view_id: OcclusionViewId) {
         if self.per_view_draw.remove(&view_id).is_some() {
             logger::debug!("per-draw slab: retired slab for view {view_id:?}");
+        }
+    }
+
+    /// Returns the per-view byte scratch slab used for per-draw uniform packing, creating it on first use.
+    ///
+    /// Keyed per [`OcclusionViewId`] so parallel per-view recording cannot alias the same scratch
+    /// across rayon workers.
+    pub fn per_draw_scratch_mut(&mut self, view_id: OcclusionViewId) -> &mut Vec<u8> {
+        self.per_draw_slab_byte_scratch_by_view
+            .entry(view_id)
+            .or_default()
+    }
+
+    /// Returns the per-view byte scratch slab, or `None` if no packing has happened for this view yet.
+    pub fn per_draw_scratch(&self, view_id: OcclusionViewId) -> Option<&Vec<u8>> {
+        self.per_draw_slab_byte_scratch_by_view.get(&view_id)
+    }
+
+    /// Frees the per-view byte scratch for a view that is no longer active.
+    ///
+    /// Call alongside [`Self::retire_per_view_per_draw`] and [`Self::retire_per_view_frame`] when a
+    /// secondary RT camera is destroyed. Has no effect if the view was never allocated.
+    pub fn retire_per_view_per_draw_scratch(&mut self, view_id: OcclusionViewId) {
+        if self
+            .per_draw_slab_byte_scratch_by_view
+            .remove(&view_id)
+            .is_some()
+        {
+            logger::debug!("per-draw slab scratch: retired for view {view_id:?}");
         }
     }
 

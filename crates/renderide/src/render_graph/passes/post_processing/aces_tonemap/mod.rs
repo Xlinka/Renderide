@@ -85,7 +85,7 @@ impl RasterPass for AcesTonemapPass {
         let stereo = ctx
             .frame
             .as_ref()
-            .is_some_and(|frame| frame.multiview_stereo);
+            .is_some_and(|frame| frame.view.multiview_stereo);
         if stereo {
             NonZeroU32::new(3)
         } else {
@@ -94,7 +94,7 @@ impl RasterPass for AcesTonemapPass {
     }
 
     fn record(
-        &mut self,
+        &self,
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {
@@ -118,10 +118,10 @@ impl RasterPass for AcesTonemapPass {
             });
         };
         let target_format = output_attachment_format(self.resources.output, graph_resources);
-        let pipeline = self
-            .pipelines
-            .pipeline(ctx.device, target_format, frame.multiview_stereo);
-        let hdr_sample_view = tex.view_for_sampled_2d_array(frame.multiview_stereo);
+        let pipeline =
+            self.pipelines
+                .pipeline(ctx.device, target_format, frame.view.multiview_stereo);
+        let hdr_sample_view = tex.view_for_sampled_2d_array(frame.view.multiview_stereo);
         let bind_group = self.pipelines.bind_group(ctx.device, &hdr_sample_view);
         rpass.set_pipeline(pipeline.as_ref());
         rpass.set_bind_group(0, &bind_group, &[]);

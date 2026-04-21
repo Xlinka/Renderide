@@ -246,16 +246,40 @@ impl CompiledRenderGraph {
 
         let mut transient_by_key: HashMap<GraphResolveKey, GraphResolvedResources> = HashMap::new();
 
+        // Pre-resolve transient textures and buffers for every unique view key before any per-view
+        // recording begins. Milestone D hoists `backend.transient_pool_mut()` access out of the
+        // per-view loop so that the loop becomes read-only against `transient_by_key` (except for
+        // per-view imported overlays, which mutate disjoint entries today and will be split per-view
+        // in Milestone E).
+        self.pre_resolve_transients_for_views(&mut mv_ctx, views, &mut transient_by_key)?;
+
+        // Deferred `queue.write_buffer` sink shared by frame-global and per-view record paths.
+        // Drained onto the main thread after all recording completes and before submit.
+        let upload_batch = super::super::frame_upload_batch::FrameUploadBatch::new();
+
         // ── Frame-global pass (optional) ─────────────────────────────────────────────────────
-        let frame_global_cmd =
-            self.encode_frame_global_passes(&mut mv_ctx, views, &mut transient_by_key)?;
+        let frame_global_cmd = self.encode_frame_global_passes(
+            &mut mv_ctx,
+            views,
+            &mut transient_by_key,
+            &upload_batch,
+        )?;
 
         // ── Per-view recording (no submit per view) ──────────────────────────────────────────
         // Serial vs parallel recording is controlled by `backend.record_parallelism`.
-        // `PerViewParallel` requires passes to be `Send` (enforced by PassNode bounds) and
-        // the mutable pass access to be safe across threads. Currently we record serially and
-        // note that full rayon parallelism requires stateless pass state or per-view pass clones.
-        let _record_parallelism = mv_ctx.backend.record_parallelism;
+        //
+        // `PerViewParallel` is prepared by Milestones A-D: `record(&self, …)` on every pass trait,
+        // `FrameSystemsShared` / `FrameRenderParamsView` split, `FrameUploadBatch` drains on the
+        // main thread post-scope, transient textures/buffers pre-resolved once before the loop,
+        // and per-view scratch slabs keyed by `OcclusionViewId`. Full rayon fan-out with
+        // `rayon::scope` additionally requires `encode_per_view_to_cmd` to take `&self` and
+        // accept only shared (`&`) access to the GPU context and render backend, plus gating of
+        // the singleton `gpu.take_gpu_profiler()` pattern. Until that lands the parallel branch
+        // falls back to serial with a one-time `info!` on first frame.
+        let record_parallelism = mv_ctx.backend.record_parallelism;
+        if record_parallelism == crate::config::RecordParallelism::PerViewParallel && n_views > 1 {
+            super::super::record_parallel::warn_parallel_falls_back_once(n_views);
+        }
         let mut per_view_cmds: Vec<wgpu::CommandBuffer> = Vec::with_capacity(n_views);
         let mut per_view_occlusion_info: Vec<(
             OcclusionViewId,
@@ -294,6 +318,7 @@ impl CompiledRenderGraph {
                 view_idx,
                 &mut transient_by_key,
                 per_view_frame_bg_and_buf,
+                &upload_batch,
             )?;
             per_view_cmds.push(cmd);
             per_view_occlusion_info.push((occlusion_view, host_camera));
@@ -330,6 +355,10 @@ impl CompiledRenderGraph {
             } else {
                 None
             };
+
+            // Drain all per-view and frame-global deferred writes onto the main thread before
+            // submit so every command buffer sees a coherent queue state.
+            upload_batch.drain_and_flush(queue_ref);
 
             let all_cmds: Vec<wgpu::CommandBuffer> = frame_global_cmd
                 .into_iter()
@@ -414,6 +443,66 @@ impl CompiledRenderGraph {
         Ok(())
     }
 
+    /// Pre-resolves transient textures and buffers for every view's [`GraphResolveKey`].
+    ///
+    /// Hoists the transient-pool allocation out of the per-view record loop so that the loop
+    /// itself no longer calls `backend.transient_pool_mut()`. This is a prerequisite for parallel
+    /// per-view recording (Milestone E): concurrent workers cannot share `&mut` access to the
+    /// pool, but they can share `&` access to the resulting `transient_by_key` map.
+    ///
+    /// Imported textures/buffers still resolve per-view inside the record loop because their
+    /// bindings (backbuffer, per-view cluster refs) differ across views that share a key.
+    fn pre_resolve_transients_for_views(
+        &self,
+        mv_ctx: &mut MultiViewExecutionContext<'_>,
+        views: &mut [FrameView<'_>],
+        transient_by_key: &mut HashMap<GraphResolveKey, GraphResolvedResources>,
+    ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("render::pre_resolve_transients");
+        for view in views.iter() {
+            let resolved = Self::resolve_view_from_target(
+                &view.target,
+                mv_ctx.gpu,
+                mv_ctx.backbuffer_view_holder,
+            )?;
+            let key = GraphResolveKey::from_resolved(&resolved);
+            if let Entry::Vacant(v) = transient_by_key.entry(key) {
+                let mut resources = GraphResolvedResources::with_capacity(
+                    self.transient_textures.len(),
+                    self.transient_buffers.len(),
+                    self.imported_textures.len(),
+                    self.imported_buffers.len(),
+                );
+                let alloc_viewport = helpers::clamp_viewport_for_transient_alloc(
+                    resolved.viewport_px,
+                    mv_ctx.gpu_limits.max_texture_dimension_2d(),
+                );
+                let scene_color_format = mv_ctx.backend.scene_color_format_wgpu();
+                self.resolve_transient_textures(
+                    mv_ctx.device,
+                    mv_ctx.backend.transient_pool_mut(),
+                    TransientTextureResolveSurfaceParams {
+                        viewport_px: alloc_viewport,
+                        surface_format: resolved.surface_format,
+                        depth_stencil_format: resolved.depth_texture.format(),
+                        scene_color_format,
+                        sample_count: resolved.sample_count,
+                        multiview_stereo: resolved.multiview_stereo,
+                    },
+                    &mut resources,
+                )?;
+                self.resolve_transient_buffers(
+                    mv_ctx.device,
+                    mv_ctx.backend.transient_pool_mut(),
+                    alloc_viewport,
+                    &mut resources,
+                )?;
+                v.insert(resources);
+            }
+        }
+        Ok(())
+    }
+
     /// Encodes one per-view pass into a command buffer and returns it without submitting.
     ///
     /// The caller is responsible for submitting the returned buffer (with all other per-view
@@ -427,6 +516,7 @@ impl CompiledRenderGraph {
         view_idx: usize,
         transient_by_key: &mut HashMap<GraphResolveKey, GraphResolvedResources>,
         per_view_frame_bg_and_buf: Option<(std::sync::Arc<wgpu::BindGroup>, wgpu::Buffer)>,
+        upload_batch: &super::super::frame_upload_batch::FrameUploadBatch,
     ) -> Result<wgpu::CommandBuffer, GraphExecuteError> {
         profiling::scope!("graph::per_view");
         let MultiViewExecutionContext {
@@ -453,43 +543,12 @@ impl CompiledRenderGraph {
 
         let resolved = Self::resolve_view_from_target(&view.target, gpu, backbuffer_view_holder)?;
         let key = GraphResolveKey::from_resolved(&resolved);
-        let resolved_resources = match transient_by_key.entry(key) {
-            Entry::Vacant(v) => {
-                profiling::scope!("render::transient_resolve");
-                let mut resources = GraphResolvedResources::with_capacity(
-                    self.transient_textures.len(),
-                    self.transient_buffers.len(),
-                    self.imported_textures.len(),
-                    self.imported_buffers.len(),
-                );
-                let alloc_viewport = helpers::clamp_viewport_for_transient_alloc(
-                    resolved.viewport_px,
-                    gpu_limits.max_texture_dimension_2d(),
-                );
-                let scene_color_format = backend.scene_color_format_wgpu();
-                self.resolve_transient_textures(
-                    device,
-                    backend.transient_pool_mut(),
-                    TransientTextureResolveSurfaceParams {
-                        viewport_px: alloc_viewport,
-                        surface_format: resolved.surface_format,
-                        depth_stencil_format: resolved.depth_texture.format(),
-                        scene_color_format,
-                        sample_count: resolved.sample_count,
-                        multiview_stereo: resolved.multiview_stereo,
-                    },
-                    &mut resources,
-                )?;
-                self.resolve_transient_buffers(
-                    device,
-                    backend.transient_pool_mut(),
-                    alloc_viewport,
-                    &mut resources,
-                )?;
-                v.insert(resources)
-            }
-            Entry::Occupied(o) => o.into_mut(),
-        };
+        // Transients were pre-resolved in `pre_resolve_transients_for_views` before the per-view
+        // loop began, so a missing entry here is a bug.
+        let resolved_resources = transient_by_key.get_mut(&key).ok_or_else(|| {
+            logger::warn!("pre-resolve: missing transient resources for view key {key:?}");
+            GraphExecuteError::MissingTransientResources
+        })?;
         self.resolve_imported_textures(&resolved, resolved_resources);
         self.resolve_imported_buffers(&backend.frame_resources, &resolved, resolved_resources);
         let graph_resources: &GraphResolvedResources = &*resolved_resources;
@@ -551,6 +610,7 @@ impl CompiledRenderGraph {
                     device,
                     gpu_limits,
                     queue_arc,
+                    upload_batch,
                 )?;
 
                 if let Some(q) = pass_query {
@@ -581,6 +641,7 @@ impl CompiledRenderGraph {
         mv_ctx: &mut MultiViewExecutionContext<'_>,
         views: &[FrameView<'_>],
         transient_by_key: &mut HashMap<GraphResolveKey, GraphResolvedResources>,
+        upload_batch: &super::super::frame_upload_batch::FrameUploadBatch,
     ) -> Result<Option<wgpu::CommandBuffer>, GraphExecuteError> {
         profiling::scope!("graph::frame_global");
         let MultiViewExecutionContext {
@@ -688,6 +749,7 @@ impl CompiledRenderGraph {
                         device,
                         gpu_limits,
                         queue_arc,
+                        upload_batch,
                     )?;
 
                     if let Some(q) = pass_query {
@@ -730,6 +792,7 @@ impl CompiledRenderGraph {
         device: &'a wgpu::Device,
         gpu_limits: &'a crate::gpu::GpuLimits,
         queue_arc: &'a std::sync::Arc<wgpu::Queue>,
+        upload_batch: &super::super::frame_upload_batch::FrameUploadBatch,
     ) -> Result<(), GraphExecuteError> {
         let kind = self.passes[pass_idx].kind();
         match kind {
@@ -742,11 +805,14 @@ impl CompiledRenderGraph {
                     backbuffer: resolved.backbuffer,
                     depth_view: Some(resolved.depth_view),
                     frame: Some(frame_params),
+                    frame_shared: None,
+                    frame_view: None,
+                    upload_batch,
                     graph_resources: Some(graph_resources),
                     blackboard,
                 };
                 helpers::execute_graph_raster_pass_node(
-                    &mut self.passes[pass_idx],
+                    &self.passes[pass_idx],
                     &template,
                     graph_resources,
                     encoder,
@@ -762,6 +828,9 @@ impl CompiledRenderGraph {
                     encoder,
                     depth_view: Some(resolved.depth_view),
                     frame: Some(frame_params),
+                    frame_shared: None,
+                    frame_view: None,
+                    upload_batch,
                     graph_resources: Some(graph_resources),
                     blackboard,
                 };
@@ -777,6 +846,9 @@ impl CompiledRenderGraph {
                     encoder,
                     depth_view: Some(resolved.depth_view),
                     frame: Some(frame_params),
+                    frame_shared: None,
+                    frame_view: None,
+                    upload_batch,
                     graph_resources: Some(graph_resources),
                     blackboard,
                 };
@@ -790,6 +862,9 @@ impl CompiledRenderGraph {
                     gpu_limits,
                     queue: queue_arc,
                     frame: Some(frame_params),
+                    frame_shared: None,
+                    frame_view: None,
+                    upload_batch,
                     graph_resources: Some(graph_resources),
                     blackboard,
                 };

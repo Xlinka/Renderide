@@ -116,7 +116,7 @@ impl PassNode {
 
     /// Runs [`CallbackPass::run`]. Returns `Ok(())` for non-callback variants (no-op).
     pub(crate) fn run_callback(
-        &mut self,
+        &self,
         ctx: &mut CallbackCtx<'_, '_>,
     ) -> Result<(), RenderPassError> {
         match self {
@@ -127,7 +127,7 @@ impl PassNode {
 
     /// Records compute commands into the encoder held in `ctx`. Returns `Ok(())` for non-compute variants.
     pub(crate) fn record_compute(
-        &mut self,
+        &self,
         ctx: &mut ComputePassCtx<'_, '_, '_>,
     ) -> Result<(), RenderPassError> {
         match self {
@@ -138,7 +138,7 @@ impl PassNode {
 
     /// Records copy commands into the encoder held in `ctx`. Returns `Ok(())` for non-copy variants.
     pub(crate) fn record_copy(
-        &mut self,
+        &self,
         ctx: &mut CopyPassCtx<'_, '_, '_>,
     ) -> Result<(), RenderPassError> {
         match self {
@@ -150,7 +150,7 @@ impl PassNode {
     /// Records raster draw commands into an already-open render pass.
     /// Returns `Ok(())` for non-raster variants (no-op).
     pub(crate) fn record_raster(
-        &mut self,
+        &self,
         ctx: &mut RasterPassCtx<'_, '_>,
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError> {

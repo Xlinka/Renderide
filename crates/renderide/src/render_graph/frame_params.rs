@@ -2,6 +2,12 @@
 //!
 //! Cross-pass per-view state that is too large or too volatile to live on the pass struct lives
 //! in the per-view [`crate::render_graph::blackboard::Blackboard`] via typed slots defined here.
+//!
+//! [`FrameRenderParams`] is a thin compositor over [`FrameSystemsShared`] (once-per-frame mutable
+//! system handles) and [`FrameRenderParamsView`] (per-view surface state). This separation is the
+//! prerequisite for per-view parallel recording (Phase 4 milestone E): the shared handles will
+//! gain interior mutability, and contexts will bind them directly without going through
+//! [`FrameRenderParams`].
 
 use std::sync::Arc;
 
@@ -238,35 +244,46 @@ pub struct PerViewFramePlan {
     pub view_idx: usize,
 }
 
-/// Data passes need beyond raw GPU handles: host scene, narrow backend slices, and main-surface formats.
+/// System handles shared across all views within a frame.
 ///
-/// Built with disjoint borrows from [`crate::backend::RenderBackend`] so passes do not take a full backend handle.
-pub struct FrameRenderParams<'a> {
+/// Fields hold mutable references during milestones B–D. Phase 4 milestone E converts
+/// mutation-at-record-time fields to interior-mut wrappers (`Mutex` / atomics) so that
+/// multiple rayon workers can safely record different views concurrently.
+pub struct FrameSystemsShared<'a> {
     /// World caches and mesh renderables after [`SceneCoordinator::flush_world_caches`].
     pub scene: &'a SceneCoordinator,
-    /// Hi-Z pyramid GPU/CPU state and temporal culling for this view.
+    /// Hi-Z pyramid GPU/CPU state and temporal culling for this frame.
+    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
     pub occlusion: &'a mut OcclusionSystem,
     /// Per-frame `@group(0/1/2)` binds, lights, per-draw slab, and CPU light scratch.
+    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
     pub frame_resources: &'a mut FrameResourceManager,
     /// Materials registry, embedded binds, and property store.
+    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
     pub materials: &'a mut MaterialSystem,
     /// Mesh/texture pools and upload queues.
+    // TODO(phase-4-e): convert to interior-mut for concurrent per-view record access.
     pub asset_transfers: &'a mut AssetTransferQueue,
-    /// Skinning/blendshape compute pipelines after GPU attach (`MeshDeformPass`).
+    /// Skinning/blendshape compute pipelines (set after GPU attach, `None` before).
     pub mesh_preprocess: Option<&'a MeshPreprocessPipelines>,
-    /// Deform scratch buffers (`MeshDeformPass`).
+    /// Deform scratch buffers for the `MeshDeformPass` (valid during frame-global recording only).
     pub mesh_deform_scratch: Option<&'a mut MeshDeformScratch>,
-    /// Deformed mesh arenas for deform dispatch and forward draws (lives on [`crate::backend::RenderBackend`]).
+    /// Deformed mesh arenas for deform dispatch and forward draws.
     pub skin_cache: Option<&'a mut GpuSkinCache>,
-    /// GPU limits after attach (`None` only before a successful attach).
-    pub gpu_limits: Option<Arc<GpuLimits>>,
-    /// MSAA depth resolve pipelines when supported (cloned from the backend attach path).
-    pub msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
     /// Dear ImGui overlay hooks for mesh-draw diagnostics.
     pub debug_hud: &'a mut DebugHudBundle,
+}
+
+/// Per-view surface and camera state for one render target within a multi-view frame.
+///
+/// All fields are value types or immutable references: they are derived from the resolved view
+/// target before recording begins and do not change during per-view pass execution. Phase 4
+/// milestone E promotes this struct to be the primary per-view context type, replacing the
+/// legacy [`FrameRenderParams`].
+pub struct FrameRenderParamsView<'a> {
     /// Backing depth texture for the main forward pass (copy source for scene-depth snapshots).
     pub depth_texture: &'a wgpu::Texture,
-    /// Depth attachment for the main forward pass.
+    /// Depth attachment view for the main forward pass.
     pub depth_view: &'a wgpu::TextureView,
     /// Depth-only view for compute sampling (e.g. Hi-Z build); created once per view.
     pub depth_sample_view: Option<wgpu::TextureView>,
@@ -282,29 +299,43 @@ pub struct FrameRenderParams<'a> {
     pub multiview_stereo: bool,
     /// Optional transform filter for secondary cameras (selective / exclude lists).
     pub transform_draw_filter: Option<CameraTransformDrawFilter>,
-    /// When rendering a secondary camera to a host [`crate::resources::GpuRenderTexture`], the asset id
-    /// of the **color target** being written. Materials must not sample that same render texture in the
-    /// same pass (wgpu forbids `TEXTURE_BINDING` + `RENDER_ATTACHMENT` on one subresource); embedded
-    /// bind resolves fall back to a white placeholder for this id.
+    /// When rendering a secondary camera to a host render texture, the asset id of the color
+    /// target being written. Materials must not sample that texture in the same pass.
     pub offscreen_write_render_texture_asset_id: Option<i32>,
     /// Which Hi-Z pyramid / temporal slot this view reads and writes.
     pub occlusion_view: OcclusionViewId,
     /// Effective raster sample count for mesh forward (1 = off). Clamped to the GPU max for this view.
     pub sample_count: u32,
+    /// GPU limits after attach (`None` only before a successful attach).
+    pub gpu_limits: Option<Arc<GpuLimits>>,
+    /// MSAA depth resolve pipelines when supported (cloned from the backend attach path).
+    pub msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
+}
+
+/// Transitional compositor over [`FrameSystemsShared`] and [`FrameRenderParamsView`].
+///
+/// Built with disjoint borrows from [`crate::backend::RenderBackend`] so passes do not take a
+/// full backend handle. Removed after Phase 4 milestone E when the parallel path constructs
+/// each sub-struct independently without this wrapper.
+pub struct FrameRenderParams<'a> {
+    /// System handles shared across all views for this frame.
+    pub shared: FrameSystemsShared<'a>,
+    /// Per-view surface and camera state.
+    pub view: FrameRenderParamsView<'a>,
 }
 
 impl<'a> FrameRenderParams<'a> {
     /// Output depth layout for Hi-Z and occlusion ([`OutputDepthMode::from_multiview_stereo`]).
     pub fn output_depth_mode(&self) -> OutputDepthMode {
-        OutputDepthMode::from_multiview_stereo(self.multiview_stereo)
+        OutputDepthMode::from_multiview_stereo(self.view.multiview_stereo)
     }
 
     /// Disjoint material/pool/skin borrows for world-mesh forward raster encoding.
     pub(crate) fn world_mesh_forward_encode_refs(&mut self) -> WorldMeshForwardEncodeRefs<'_> {
         WorldMeshForwardEncodeRefs::from_frame_params(
-            self.materials,
-            self.asset_transfers,
-            self.skin_cache.as_deref(),
+            self.shared.materials,
+            self.shared.asset_transfers,
+            self.shared.skin_cache.as_deref(),
         )
     }
 }

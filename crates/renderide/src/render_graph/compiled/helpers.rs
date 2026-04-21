@@ -5,8 +5,8 @@ use crate::scene::SceneCoordinator;
 
 use super::super::context::{GraphResolvedResources, RasterPassCtx, ResolvedGraphTexture};
 use super::super::error::GraphExecuteError;
-use super::super::frame_params::FrameRenderParams;
 use super::super::frame_params::HostCameraFrame;
+use super::super::frame_params::{FrameRenderParams, FrameRenderParamsView, FrameSystemsShared};
 use super::super::pass::PassNode;
 use super::super::resources::{
     BufferSizePolicy, TextureAttachmentResolve, TextureAttachmentTarget, TextureHandle,
@@ -46,31 +46,36 @@ pub(super) fn frame_render_params_from_resolved<'a>(
         debug_hud,
     ) = backend.split_for_graph_frame_params();
     FrameRenderParams {
-        scene,
-        occlusion,
-        frame_resources,
-        materials,
-        asset_transfers,
-        mesh_preprocess,
-        mesh_deform_scratch,
-        skin_cache,
-        gpu_limits,
-        msaa_depth_resolve,
-        debug_hud,
-        depth_texture: resolved.depth_texture,
-        depth_view: resolved.depth_view,
-        depth_sample_view: Some(depth_sample_view),
-        surface_format: resolved.surface_format,
-        scene_color_format,
-        viewport_px: resolved.viewport_px,
-        host_camera,
-        multiview_stereo: resolved.multiview_stereo,
-        transform_draw_filter,
-        offscreen_write_render_texture_asset_id: resolved.offscreen_write_render_texture_asset_id,
-        occlusion_view: resolved.occlusion_view,
-        sample_count: resolved.sample_count,
-        // MSAA views now live in the per-view blackboard (MsaaViewsSlot), resolved from
-        // graph transient textures by the executor via resolve_forward_msaa_views_from_graph_resources.
+        shared: FrameSystemsShared {
+            scene,
+            occlusion,
+            frame_resources,
+            materials,
+            asset_transfers,
+            mesh_preprocess,
+            mesh_deform_scratch,
+            skin_cache,
+            debug_hud,
+        },
+        view: FrameRenderParamsView {
+            depth_texture: resolved.depth_texture,
+            depth_view: resolved.depth_view,
+            depth_sample_view: Some(depth_sample_view),
+            surface_format: resolved.surface_format,
+            scene_color_format,
+            viewport_px: resolved.viewport_px,
+            host_camera,
+            multiview_stereo: resolved.multiview_stereo,
+            transform_draw_filter,
+            offscreen_write_render_texture_asset_id: resolved
+                .offscreen_write_render_texture_asset_id,
+            occlusion_view: resolved.occlusion_view,
+            sample_count: resolved.sample_count,
+            gpu_limits,
+            msaa_depth_resolve,
+            // MSAA views now live in the per-view blackboard (MsaaViewsSlot), resolved from
+            // graph transient textures by the executor via resolve_forward_msaa_views_from_graph_resources.
+        },
     }
 }
 
@@ -95,14 +100,14 @@ pub(super) fn resolve_forward_msaa_views_from_graph_resources(
     let handles = msaa_handles?;
     let [color_h, depth_h, r32_h] = handles;
     let graph_resources = graph_resources?;
-    if frame.sample_count <= 1 {
+    if frame.view.sample_count <= 1 {
         return None;
     }
     let color = graph_resources.transient_texture(color_h)?;
     let depth = graph_resources.transient_texture(depth_h)?;
     let r32 = graph_resources.transient_texture(r32_h)?;
 
-    if frame.multiview_stereo {
+    if frame.view.multiview_stereo {
         let depth_layers = first_two_layer_views(depth)?;
         let r32_layers = first_two_layer_views(r32)?;
         Some(super::super::frame_params::MsaaViews {
@@ -220,7 +225,7 @@ pub(super) fn pass_info_raster_template(
 pub(super) fn frame_sample_count_from_raster_ctx(ctx: &RasterPassCtx<'_, '_>) -> u32 {
     ctx.frame
         .as_ref()
-        .map(|frame| frame.sample_count.max(1))
+        .map(|frame| frame.view.sample_count.max(1))
         .unwrap_or(1)
 }
 
@@ -258,7 +263,7 @@ pub(super) fn resolve_attachment_resolve_target(
 ///
 /// This is the primary path for raster passes in the new pass-node system.
 pub(super) fn execute_graph_raster_pass_node(
-    pass: &mut PassNode,
+    pass: &PassNode,
     template: &RenderPassTemplate,
     graph_resources: &GraphResolvedResources,
     encoder: &mut wgpu::CommandEncoder,
