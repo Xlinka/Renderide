@@ -126,24 +126,36 @@ impl RendererRuntime {
         gpu: &mut GpuContext,
     ) -> Result<(), GraphExecuteError> {
         profiling::scope!("render::secondary_cameras");
-        self.backend
-            .frame_resources
-            .prepare_lights_from_scene(&self.scene);
+        {
+            profiling::scope!("render::prepare_lights_from_scene");
+            self.backend
+                .frame_resources
+                .prepare_lights_from_scene(&self.scene);
+        }
         self.sync_debug_hud_diagnostics_from_settings();
 
-        let prepared = self.collect_secondary_rt_prepared();
+        let prepared = {
+            profiling::scope!("render::collect_secondary_rts");
+            self.collect_secondary_rt_prepared()
+        };
         if prepared.is_empty() {
             return Ok(());
         }
 
-        let requested_msaa = self
-            .settings
-            .read()
-            .map(|s| s.rendering.msaa.as_count())
-            .unwrap_or(1);
-        let prev_msaa = gpu.swapchain_msaa_effective();
-        gpu.set_swapchain_msaa_requested(requested_msaa);
-        self.transient_evict_stale_msaa_tiers_if_changed(prev_msaa, gpu.swapchain_msaa_effective());
+        {
+            profiling::scope!("render::setup_msaa");
+            let requested_msaa = self
+                .settings
+                .read()
+                .map(|s| s.rendering.msaa.as_count())
+                .unwrap_or(1);
+            let prev_msaa = gpu.swapchain_msaa_effective();
+            gpu.set_swapchain_msaa_requested(requested_msaa);
+            self.transient_evict_stale_msaa_tiers_if_changed(
+                prev_msaa,
+                gpu.swapchain_msaa_effective(),
+            );
+        }
 
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
@@ -167,45 +179,51 @@ impl RendererRuntime {
         };
 
         // Hi-Z snapshot reads must stay serial: [`OcclusionSystem`] is not `Sync` (wgpu readback state).
-        let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = prepared
-            .iter()
-            .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
-            .collect();
+        let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = {
+            profiling::scope!("render::gather_secondary_cull_snapshots");
+            prepared
+                .iter()
+                .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
+                .collect()
+        };
 
-        let prefetched: Vec<crate::render_graph::WorldMeshDrawCollection> = prepared
-            .par_iter()
-            .zip(cull_snapshots.par_iter())
-            .map(|(prep, snap)| {
-                let dict = MaterialDictionary::new(property_store);
-                let culling = snap.as_ref().map(|s| WorldMeshCullInput {
-                    proj: s.proj,
-                    host_camera: &prep.host_camera,
-                    hi_z: s.hi_z.clone(),
-                    hi_z_temporal: s.hi_z_temporal.clone(),
-                });
-                collect_and_sort_world_mesh_draws_with_parallelism(
-                    &DrawCollectionContext {
-                        scene: scene_ref,
-                        mesh_pool,
-                        material_dict: &dict,
-                        material_router: router_ref,
-                        pipeline_property_ids: &pipeline_property_ids,
-                        shader_perm: ShaderPermutation(0),
-                        render_context,
-                        head_output_transform: prep.host_camera.head_output_transform,
-                        view_origin_world: prep
-                            .host_camera
-                            .secondary_camera_world_position
-                            .unwrap_or_else(|| {
-                                prep.host_camera.head_output_transform.col(3).truncate()
-                            }),
-                        culling: culling.as_ref(),
-                        transform_filter: Some(&prep.filter),
-                    },
-                    inner_parallelism,
-                )
-            })
-            .collect();
+        let prefetched: Vec<crate::render_graph::WorldMeshDrawCollection> = {
+            profiling::scope!("render::collect_secondary_draws");
+            prepared
+                .par_iter()
+                .zip(cull_snapshots.par_iter())
+                .map(|(prep, snap)| {
+                    let dict = MaterialDictionary::new(property_store);
+                    let culling = snap.as_ref().map(|s| WorldMeshCullInput {
+                        proj: s.proj,
+                        host_camera: &prep.host_camera,
+                        hi_z: s.hi_z.clone(),
+                        hi_z_temporal: s.hi_z_temporal.clone(),
+                    });
+                    collect_and_sort_world_mesh_draws_with_parallelism(
+                        &DrawCollectionContext {
+                            scene: scene_ref,
+                            mesh_pool,
+                            material_dict: &dict,
+                            material_router: router_ref,
+                            pipeline_property_ids: &pipeline_property_ids,
+                            shader_perm: ShaderPermutation(0),
+                            render_context,
+                            head_output_transform: prep.host_camera.head_output_transform,
+                            view_origin_world: prep
+                                .host_camera
+                                .secondary_camera_world_position
+                                .unwrap_or_else(|| {
+                                    prep.host_camera.head_output_transform.col(3).truncate()
+                                }),
+                            culling: culling.as_ref(),
+                            transform_filter: Some(&prep.filter),
+                        },
+                        inner_parallelism,
+                    )
+                })
+                .collect()
+        };
 
         let mut views: Vec<FrameView<'_>> = Vec::with_capacity(prepared.len());
         for (prep, collection) in prepared.iter().zip(prefetched) {
@@ -237,21 +255,34 @@ impl RendererRuntime {
     /// substituted for an `OffscreenRt` view backed by [`GpuContext::primary_offscreen_targets`]
     /// before submission. The render graph stack itself stays oblivious to mode.
     pub fn render_all_views(&mut self, gpu: &mut GpuContext) -> Result<(), GraphExecuteError> {
-        self.backend
-            .frame_resources
-            .prepare_lights_from_scene(&self.scene);
+        profiling::scope!("render::render_all_views");
+        {
+            profiling::scope!("render::prepare_lights_from_scene");
+            self.backend
+                .frame_resources
+                .prepare_lights_from_scene(&self.scene);
+        }
         self.sync_debug_hud_diagnostics_from_settings();
 
-        let prepared = self.collect_secondary_rt_prepared();
+        let prepared = {
+            profiling::scope!("render::collect_secondary_rts");
+            self.collect_secondary_rt_prepared()
+        };
 
-        let requested_msaa = self
-            .settings
-            .read()
-            .map(|s| s.rendering.msaa.as_count())
-            .unwrap_or(1);
-        let prev_msaa = gpu.swapchain_msaa_effective();
-        gpu.set_swapchain_msaa_requested(requested_msaa);
-        self.transient_evict_stale_msaa_tiers_if_changed(prev_msaa, gpu.swapchain_msaa_effective());
+        {
+            profiling::scope!("render::setup_msaa");
+            let requested_msaa = self
+                .settings
+                .read()
+                .map(|s| s.rendering.msaa.as_count())
+                .unwrap_or(1);
+            let prev_msaa = gpu.swapchain_msaa_effective();
+            gpu.set_swapchain_msaa_requested(requested_msaa);
+            self.transient_evict_stale_msaa_tiers_if_changed(
+                prev_msaa,
+                gpu.swapchain_msaa_effective(),
+            );
+        }
 
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
@@ -274,51 +305,58 @@ impl RendererRuntime {
             WorldMeshDrawCollectParallelism::Full
         };
 
-        let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = prepared
-            .iter()
-            .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
-            .collect();
+        let cull_snapshots: Vec<Option<SecondaryCullSnapshot>> = {
+            profiling::scope!("render::gather_secondary_cull_snapshots");
+            prepared
+                .iter()
+                .map(|prep| secondary_cull_snapshot(scene_ref, occlusion_ref, prep))
+                .collect()
+        };
 
-        let secondary_prefetched: Vec<crate::render_graph::WorldMeshDrawCollection> = prepared
-            .par_iter()
-            .zip(cull_snapshots.par_iter())
-            .map(|(prep, snap)| {
-                let dict = MaterialDictionary::new(property_store);
-                let culling = snap.as_ref().map(|s| WorldMeshCullInput {
-                    proj: s.proj,
-                    host_camera: &prep.host_camera,
-                    hi_z: s.hi_z.clone(),
-                    hi_z_temporal: s.hi_z_temporal.clone(),
-                });
-                collect_and_sort_world_mesh_draws_with_parallelism(
-                    &DrawCollectionContext {
-                        scene: scene_ref,
-                        mesh_pool,
-                        material_dict: &dict,
-                        material_router: router_ref,
-                        pipeline_property_ids: &pipeline_property_ids,
-                        shader_perm: ShaderPermutation(0),
-                        render_context,
-                        head_output_transform: prep.host_camera.head_output_transform,
-                        view_origin_world: prep
-                            .host_camera
-                            .secondary_camera_world_position
-                            .unwrap_or_else(|| {
-                                prep.host_camera.head_output_transform.col(3).truncate()
-                            }),
-                        culling: culling.as_ref(),
-                        transform_filter: Some(&prep.filter),
-                    },
-                    inner_parallelism,
-                )
-            })
-            .collect();
+        let secondary_prefetched: Vec<crate::render_graph::WorldMeshDrawCollection> = {
+            profiling::scope!("render::collect_secondary_draws");
+            prepared
+                .par_iter()
+                .zip(cull_snapshots.par_iter())
+                .map(|(prep, snap)| {
+                    let dict = MaterialDictionary::new(property_store);
+                    let culling = snap.as_ref().map(|s| WorldMeshCullInput {
+                        proj: s.proj,
+                        host_camera: &prep.host_camera,
+                        hi_z: s.hi_z.clone(),
+                        hi_z_temporal: s.hi_z_temporal.clone(),
+                    });
+                    collect_and_sort_world_mesh_draws_with_parallelism(
+                        &DrawCollectionContext {
+                            scene: scene_ref,
+                            mesh_pool,
+                            material_dict: &dict,
+                            material_router: router_ref,
+                            pipeline_property_ids: &pipeline_property_ids,
+                            shader_perm: ShaderPermutation(0),
+                            render_context,
+                            head_output_transform: prep.host_camera.head_output_transform,
+                            view_origin_world: prep
+                                .host_camera
+                                .secondary_camera_world_position
+                                .unwrap_or_else(|| {
+                                    prep.host_camera.head_output_transform.col(3).truncate()
+                                }),
+                            culling: culling.as_ref(),
+                            transform_filter: Some(&prep.filter),
+                        },
+                        inner_parallelism,
+                    )
+                })
+                .collect()
+        };
 
         let hc = self.host_camera;
         let dict = MaterialDictionary::new(property_store);
         let culling_main = if hc.suppress_occlusion_temporal {
             None
         } else {
+            profiling::scope!("render::cull_main");
             let cull_proj =
                 build_world_mesh_cull_proj_params(scene_ref, gpu.surface_extent_px(), &hc);
             let main_snap = main_cull_snapshot(self);
@@ -330,37 +368,46 @@ impl RendererRuntime {
             })
         };
         let culling_main_ref = culling_main.as_ref();
-        let main_collection = collect_and_sort_world_mesh_draws(&DrawCollectionContext {
-            scene: scene_ref,
-            mesh_pool,
-            material_dict: &dict,
-            material_router: router_ref,
-            pipeline_property_ids: &pipeline_property_ids,
-            shader_perm: ShaderPermutation(0),
-            render_context,
-            head_output_transform: hc.head_output_transform,
-            view_origin_world: hc
-                .secondary_camera_world_position
-                .unwrap_or_else(|| hc.head_output_transform.col(3).truncate()),
-            culling: culling_main_ref,
-            transform_filter: None,
-        });
+        let main_collection = {
+            profiling::scope!("render::collect_main_draws");
+            collect_and_sort_world_mesh_draws(&DrawCollectionContext {
+                scene: scene_ref,
+                mesh_pool,
+                material_dict: &dict,
+                material_router: router_ref,
+                pipeline_property_ids: &pipeline_property_ids,
+                shader_perm: ShaderPermutation(0),
+                render_context,
+                head_output_transform: hc.head_output_transform,
+                view_origin_world: hc
+                    .secondary_camera_world_position
+                    .unwrap_or_else(|| hc.head_output_transform.col(3).truncate()),
+                culling: culling_main_ref,
+                transform_filter: None,
+            })
+        };
 
         // Headless substitution: snapshot persistent offscreen handles BEFORE building views so
         // we can borrow from a local instead of a long-lived `&mut gpu` (which would conflict
         // with the `&mut gpu` we hand to `execute_multi_view_frame`).
-        let headless_snapshot = if gpu.is_headless() {
-            HeadlessOffscreenSnapshot::from_gpu(gpu)
-        } else {
-            None
+        let headless_snapshot = {
+            profiling::scope!("render::headless_snapshot");
+            if gpu.is_headless() {
+                HeadlessOffscreenSnapshot::from_gpu(gpu)
+            } else {
+                None
+            }
         };
 
-        let mut views = build_desktop_multi_view_frame_list(
-            &prepared,
-            secondary_prefetched,
-            hc,
-            main_collection,
-        );
+        let mut views = {
+            profiling::scope!("render::build_frame_list");
+            build_desktop_multi_view_frame_list(
+                &prepared,
+                secondary_prefetched,
+                hc,
+                main_collection,
+            )
+        };
 
         if let Some(snapshot) = headless_snapshot.as_ref() {
             snapshot.substitute_swapchain_views(&mut views);

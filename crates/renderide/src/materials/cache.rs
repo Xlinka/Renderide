@@ -94,6 +94,7 @@ impl MaterialPipelineCache {
         blend_mode: MaterialBlendMode,
         render_state: MaterialRenderState,
     ) -> Result<MaterialPipelineSet, PipelineBuildError> {
+        profiling::scope!("materials::get_or_create_pipeline");
         let key = MaterialPipelineCacheKey {
             kind: kind.clone(),
             permutation,

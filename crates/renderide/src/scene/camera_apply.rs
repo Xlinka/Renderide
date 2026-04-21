@@ -28,6 +28,7 @@ pub(crate) fn apply_camera_renderables_update(
     update: &CameraRenderablesUpdate,
     scene_id: i32,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_cameras");
     if update.removals.length > 0 {
         let ctx = format!("camera removals scene_id={scene_id}");
         let removals = shm

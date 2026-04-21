@@ -716,6 +716,7 @@ impl GpuContext {
     /// [`super::frame_cpu_gpu_timing::FrameCpuGpuTiming::last_completed_gpu_idle_ms`], which is
     /// updated asynchronously when [`wgpu::Queue::on_submitted_work_done`] runs—no blocking poll here.
     pub fn end_frame_timing(&self) {
+        profiling::scope!("gpu::end_frame_timing");
         let mut ft = self.frame_timing.lock().unwrap_or_else(|e| e.into_inner());
         ft.end_frame();
     }
@@ -754,6 +755,7 @@ impl GpuContext {
     /// (e.g. from [`crate::app::renderide_app::RenderideApp::frame_tick_epilogue`]).
     /// Does nothing when no GPU profiler is active.
     pub fn end_gpu_profiler_frame(&mut self) {
+        profiling::scope!("gpu::drain_gpu_profiler");
         if let Some(p) = self.gpu_profiler.as_mut() {
             p.end_frame();
             let ts_period = self.queue.get_timestamp_period();

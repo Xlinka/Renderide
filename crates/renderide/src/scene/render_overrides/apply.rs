@@ -23,6 +23,7 @@ pub(crate) fn apply_render_transform_overrides_update(
     scene_id: i32,
     transform_removals: &[TransformRemovalEvent],
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_render_transform_overrides");
     fixup_transform_override_nodes_for_transform_removals(space, transform_removals);
 
     if update.removals.length > 0 {
@@ -107,6 +108,7 @@ pub(crate) fn apply_render_material_overrides_update(
     scene_id: i32,
     transform_removals: &[TransformRemovalEvent],
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_render_material_overrides");
     fixup_material_override_nodes_for_transform_removals(space, transform_removals);
 
     if update.removals.length > 0 {

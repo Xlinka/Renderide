@@ -188,6 +188,7 @@ impl CompiledRenderGraph {
         backend: &mut RenderBackend,
         views: &mut [FrameView<'a>],
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("graph::execute_multi_view");
         if views.is_empty() {
             return Ok(());
         }

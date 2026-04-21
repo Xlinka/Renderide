@@ -243,6 +243,7 @@ pub fn apply_transforms_update(
     buffers: TransformsUpdateBuffers<'_>,
     removal_events_out: &mut Vec<TransformRemovalEvent>,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_transforms");
     removal_events_out.clear();
     let sid = space_id.0;
     let mut invalidate_world = false;

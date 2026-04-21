@@ -233,6 +233,7 @@ impl SceneCoordinator {
         shm: &mut SharedMemoryAccessor,
         data: &FrameSubmitData,
     ) -> Result<(), SceneError> {
+        profiling::scope!("scene::apply_frame_submit");
         warn_if_multiple_active_non_overlay_spaces(data);
         mark_reflection_probe_sh2_task_failures(shm, data);
 
@@ -253,6 +254,7 @@ impl SceneCoordinator {
         frame_index: i32,
         update: &RenderSpaceUpdate,
     ) -> Result<(), SceneError> {
+        profiling::scope!("scene::apply_render_space_chunk");
         let space = self
             .spaces
             .entry(RenderSpaceId(update.id))

@@ -132,22 +132,28 @@ pub fn drain_asset_tasks(
         return;
     };
 
-    while let Some(mut task) = asset.integrator.high_priority.pop_front() {
-        let step_result =
-            step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
-        if step_result == StepResult::Continue {
-            asset.integrator.push_front(task, true);
+    {
+        profiling::scope!("asset::high_priority_drain");
+        while let Some(mut task) = asset.integrator.high_priority.pop_front() {
+            let step_result =
+                step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
+            if step_result == StepResult::Continue {
+                asset.integrator.push_front(task, true);
+            }
         }
     }
 
-    while Instant::now() < normal_deadline {
-        let Some(mut task) = asset.integrator.normal_priority.pop_front() else {
-            break;
-        };
-        let step_result =
-            step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
-        if step_result == StepResult::Continue {
-            asset.integrator.push_front(task, false);
+    {
+        profiling::scope!("asset::normal_priority_drain");
+        while Instant::now() < normal_deadline {
+            let Some(mut task) = asset.integrator.normal_priority.pop_front() else {
+                break;
+            };
+            let step_result =
+                step_asset_task(asset, &device, &gpu_limits, &queue_arc, shm, ipc, &mut task);
+            if step_result == StepResult::Continue {
+                asset.integrator.push_front(task, false);
+            }
         }
     }
 }

@@ -117,6 +117,7 @@ impl RendererRuntime {
 
     /// Updates debug HUD snapshots after [`crate::gpu::GpuContext::end_frame_timing`] for the winit tick.
     pub fn capture_debug_hud_after_frame_end(&mut self, gpu: &GpuContext) {
+        profiling::scope!("hud::capture_snapshot");
         let wall_ms = self.backend.debug_frame_time_ms();
         self.frame_time_history.push(wall_ms as f32);
         // Host CPU / RAM / process RAM are sampled every tick so the Frame timing overlay can show

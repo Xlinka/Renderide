@@ -54,17 +54,22 @@ pub fn openxr_begin_frame_tick(
     handles: &mut XrWgpuHandles,
     runtime: &mut impl XrHostCameraSync,
 ) -> Option<OpenxrFrameTick> {
+    profiling::scope!("xr::begin_frame_tick");
     let _ = handles.xr_session.poll_events();
-    let fs = match handles.xr_session.wait_frame() {
-        Ok(Some(state)) => state,
-        Ok(None) => return None,
-        Err(e) => {
-            logger::warn!("OpenXR wait_frame failed: {e:?}");
-            runtime.note_openxr_wait_frame_failed();
-            return None;
+    let fs = {
+        profiling::scope!("xr::wait_frame");
+        match handles.xr_session.wait_frame() {
+            Ok(Some(state)) => state,
+            Ok(None) => return None,
+            Err(e) => {
+                logger::warn!("OpenXR wait_frame failed: {e:?}");
+                runtime.note_openxr_wait_frame_failed();
+                return None;
+            }
         }
     };
     let views = if fs.should_render {
+        profiling::scope!("xr::locate_views");
         match handles.xr_session.locate_views(fs.predicted_display_time) {
             Ok(v) => v,
             Err(e) => {

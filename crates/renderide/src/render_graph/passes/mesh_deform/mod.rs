@@ -134,6 +134,7 @@ impl MeshDeformPass {
 
     /// Parallel per-space collection merged into [`Self::mesh_deform_work_scratch`].
     fn collect_deform_work_into_scratch(&mut self, scene: &SceneCoordinator, mesh_pool: &MeshPool) {
+        profiling::scope!("mesh_deform::collect_work");
         let est = deform_work_upper_bound(scene);
         self.mesh_deform_space_ids_scratch.clear();
         self.mesh_deform_space_ids_scratch
@@ -214,6 +215,7 @@ impl ComputePass for MeshDeformPass {
         let render_context = frame.scene.active_main_render_context();
         let head_output_transform = frame.host_camera.head_output_transform;
 
+        profiling::scope!("mesh_deform::dispatch");
         for item in self.mesh_deform_work_scratch.drain(..) {
             let need = EntryNeed {
                 needs_blend: deform_needs_blend_snapshot(&item.mesh),

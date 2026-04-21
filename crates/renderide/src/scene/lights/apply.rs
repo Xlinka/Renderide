@@ -19,6 +19,7 @@ pub fn apply_light_renderables_update(
     update: &LightRenderablesUpdate,
     space_id: i32,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_lights");
     let i32_size = size_of::<i32>() as i32;
     let state_size = LIGHT_STATE_HOST_ROW_BYTES as i32;
 
@@ -61,6 +62,7 @@ pub fn apply_lights_buffer_renderers_update(
     update: &LightsBufferRendererUpdate,
     space_id: i32,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_lights_buffer_renderers");
     let i32_size = size_of::<i32>() as i32;
     let state_size = size_of::<LightsBufferRendererState>() as i32;
 

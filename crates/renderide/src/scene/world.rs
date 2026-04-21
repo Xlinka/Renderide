@@ -235,6 +235,7 @@ pub fn compute_world_matrices_for_space(
     node_parents: &[i32],
     cache: &mut WorldTransformCache,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::compute_world_matrices");
     let n = nodes.len();
     if n == 0 {
         *cache = WorldTransformCache::default();

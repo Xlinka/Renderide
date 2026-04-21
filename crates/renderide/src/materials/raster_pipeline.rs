@@ -223,6 +223,7 @@ pub(crate) fn build_pipeline_from_pass(
     pass: &MaterialPassDesc,
     render_state: MaterialRenderState,
 ) -> wgpu::RenderPipeline {
+    profiling::scope!("materials::build_pipeline_from_pass");
     let pass_label = format!("{}__{}", shared.label, pass.name);
     shared
         .device

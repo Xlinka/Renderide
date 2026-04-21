@@ -353,6 +353,7 @@ fn warm_cache_for_renderer(
 /// Builds a [`FrameMaterialBatchCache`] by walking all active render spaces before the parallel
 /// collection phase. The cache is then shared as an immutable reference across rayon workers.
 fn build_frame_material_batch_cache(ctx: &DrawCollectionContext<'_>) -> FrameMaterialBatchCache {
+    profiling::scope!("mesh::material_batch_cache");
     let mut cache = FrameMaterialBatchCache::new(ctx.shader_perm);
     for space_id in ctx.scene.render_space_ids() {
         let Some(space) = ctx.scene.space(space_id) else {
@@ -380,6 +381,7 @@ fn build_chunk_specs(
     space_ids: &[RenderSpaceId],
     ctx: &DrawCollectionContext<'_>,
 ) -> Vec<WorldMeshChunkSpec> {
+    profiling::scope!("mesh::build_chunk_specs");
     let mut chunks = Vec::new();
     for &space_id in space_ids {
         let Some(space) = ctx.scene.space(space_id) else {

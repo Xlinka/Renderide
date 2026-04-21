@@ -236,6 +236,7 @@ impl DebugHud {
 
     /// Updates ImGui delta time, display size, and injects [`DebugHudInput`] for this frame.
     fn apply_overlay_frame_io(&mut self, (width, height): (u32, u32), input: &DebugHudInput) {
+        profiling::scope!("hud::apply_input");
         let delta = self.last_frame_at.elapsed().max(Duration::from_millis(1));
         self.last_frame_at = Instant::now();
 
@@ -278,6 +279,7 @@ impl DebugHud {
         encoder: &mut wgpu::CommandEncoder,
         backbuffer: &wgpu::TextureView,
     ) -> Result<(bool, bool), DebugHudEncodeError> {
+        profiling::scope!("hud::encode_imgui_wgpu");
         let draw_data = self.imgui.render();
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -314,6 +316,7 @@ impl DebugHud {
         (width, height): (u32, u32),
         input: &DebugHudInput,
     ) -> Result<(bool, bool), DebugHudEncodeError> {
+        profiling::scope!("hud::encode_overlay");
         self.apply_overlay_frame_io((width, height), input);
 
         let (frame_timing_hud, main_hud, transforms_hud, textures_hud, any_debug_content) =

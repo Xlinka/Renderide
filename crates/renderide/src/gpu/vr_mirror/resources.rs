@@ -173,6 +173,7 @@ impl VrMirrorBlitResources {
         F: FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut GpuContext) -> Result<(), E>,
         E: std::fmt::Display,
     {
+        profiling::scope!("vr::mirror_blit_encode");
         if !self.staging_valid {
             return Ok(());
         }

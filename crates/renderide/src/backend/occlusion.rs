@@ -112,6 +112,7 @@ impl OcclusionSystem {
         encoder: &mut wgpu::CommandEncoder,
         input: HiZBuildInput<'_>,
     ) {
+        profiling::scope!("hi_z::build");
         let state = self.hi_z_state_mut(input.view);
         encode_hi_z_build(
             device,
@@ -159,6 +160,7 @@ impl OcclusionSystem {
         view: OcclusionViewId,
         secondary_camera_world_to_view: Option<Mat4>,
     ) {
+        profiling::scope!("hi_z::capture_temporal");
         let temporal = Some(capture_hi_z_temporal(
             scene,
             prev_cull,

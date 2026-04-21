@@ -87,6 +87,7 @@ impl RenderBackend {
         views: &mut Vec<FrameView<'_>>,
         skip_hi_z_begin_readback: bool,
     ) -> Result<(), GraphExecuteError> {
+        profiling::scope!("backend::execute_multi_view_frame");
         self.with_compiled_graph(gpu, skip_hi_z_begin_readback, |graph, gpu_ctx, backend| {
             graph.execute_multi_view(gpu_ctx, scene, backend, views.as_mut_slice())
         })

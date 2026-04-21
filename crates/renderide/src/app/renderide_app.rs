@@ -95,6 +95,7 @@ pub(crate) struct RenderideApp {
 
 /// Reconfigures the swapchain/depth for the given physical dimensions (shared by resize path and helpers).
 fn reconfigure_gpu_for_physical_size(gpu: &mut GpuContext, width: u32, height: u32) {
+    profiling::scope!("startup::reconfigure_gpu");
     gpu.reconfigure(width, height);
 }
 
@@ -192,6 +193,7 @@ impl RenderideApp {
         if self.window.is_some() {
             return;
         }
+        profiling::scope!("startup::ensure_window_gpu");
 
         let attrs = winit::window::Window::default_attributes()
             .with_title("Renderide")
@@ -629,6 +631,7 @@ impl ApplicationHandler for RenderideApp {
         if window.id() != window_id {
             return;
         }
+        profiling::scope!("frontend::window_event");
 
         apply_window_event(&mut self.input, window, &event);
 

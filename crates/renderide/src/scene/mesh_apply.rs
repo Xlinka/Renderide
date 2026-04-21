@@ -47,6 +47,7 @@ pub(crate) fn apply_mesh_renderables_update(
     _frame_index: i32,
     scene_id: i32,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_meshes");
     if update.removals.length > 0 {
         let ctx = format!("mesh removals scene_id={scene_id}");
         let removals = shm
@@ -294,6 +295,7 @@ pub(crate) fn apply_skinned_mesh_renderables_update(
     scene_id: i32,
     transform_removals: &[TransformRemovalEvent],
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_skinned_meshes");
     fixup_skinned_bones_for_transform_removals(space, transform_removals);
 
     apply_skinned_removals_and_additions(space, shm, update, scene_id)?;

@@ -358,6 +358,7 @@ impl OpenxrInput {
         stage: &xr::Space,
         predicted_time: xr::Time,
     ) -> Result<Vec<VRControllerState>, xr::sys::Result> {
+        profiling::scope!("xr::input_sync_and_sample");
         session.sync_actions(&[xr::ActiveActionSet::new(&self.action_set)])?;
         let left_loc = self.left_space.locate(stage, predicted_time)?;
         let right_loc = self.right_space.locate(stage, predicted_time)?;

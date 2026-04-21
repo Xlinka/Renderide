@@ -14,6 +14,7 @@ pub(crate) fn apply_layer_update(
     update: &LayerUpdate,
     scene_id: i32,
 ) -> Result<(), SceneError> {
+    profiling::scope!("scene::apply_layers");
     if update.removals.length > 0 {
         let ctx = format!("layer removals scene_id={scene_id}");
         let removals = shm
