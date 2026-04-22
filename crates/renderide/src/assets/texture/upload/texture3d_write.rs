@@ -84,6 +84,7 @@ fn texture3d_mip_volume_payload_slice<'a>(
 }
 
 /// Prepares decoded RGBA8 slab or passes raw host bytes through for 3D volume upload.
+#[allow(clippy::too_many_arguments)]
 fn texture3d_mip_to_upload_pixels(
     asset_id: i32,
     fmt_format: crate::shared::TextureFormat,

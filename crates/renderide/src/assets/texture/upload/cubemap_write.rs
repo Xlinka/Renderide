@@ -70,6 +70,7 @@ fn resolve_cubemap_face_mip_slice<'a>(
 }
 
 /// Converts host face mip bytes for [`write_cubemap_face_mip`] (decode, optional row flip).
+#[allow(clippy::too_many_arguments)]
 fn cubemap_mip_src_to_upload_pixels(
     asset_id: i32,
     fmt_format: crate::shared::TextureFormat,

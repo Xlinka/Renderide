@@ -25,6 +25,7 @@ struct MipChainWalkState<'a> {
 }
 
 /// Converts host mip bytes into a buffer suitable for [`write_one_mip`] (decode, optional row flip).
+#[allow(clippy::too_many_arguments)]
 fn mip_src_to_upload_pixels(
     asset_id: i32,
     fmt_format: crate::shared::TextureFormat,
@@ -67,10 +68,10 @@ fn mip_src_to_upload_pixels(
             Ok(mip_src.to_vec())
         }
     } else if needs_rgba8_decode {
-        return Err(TextureUploadError::from(format!(
+        Err(TextureUploadError::from(format!(
             "host {:?} must use RGBA decode but GPU format is {:?}",
             fmt_format, wgpu_format
-        )));
+        )))
     } else if flip && !host_format_is_compressed(fmt_format) {
         let mut v = mip_src.to_vec();
         let bpp_host = mip_tight_bytes_per_texel(v.len(), gw, gh).ok_or_else(|| {

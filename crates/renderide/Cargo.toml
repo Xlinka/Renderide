@@ -38,6 +38,9 @@ tracy = [
   "wgpu-profiler/tracy",
 ]
 
+[package.metadata.cargo-machete]
+ignored = ["tracy-client"]
+
 [dependencies]
 ## Thin profiler abstraction. When no backend feature (`profile-with-tracy`, etc.) is active,
 ## every macro (`profiling::scope!`, `profiling::finish_frame!`, etc.) expands to nothing.
@@ -45,8 +48,6 @@ profiling = "1.0"
 ahash = "0.8"
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.32", features = ["bytemuck"] }
-memmap2 = "0.9"
-interprocess = { path = "../interprocess" }
 logger = { path = "../logger" }
 renderide-shared = { path = "../renderide-shared" }
 pollster = "0.4"
@@ -55,7 +56,6 @@ crossbeam-channel = "0.5"
 lru = "0.17"
 thiserror = "2"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 toml = "1.1"
 figment = { version = "0.10", features = ["toml", "env"] }
 hashbrown = "0.17"
