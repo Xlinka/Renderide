@@ -9,7 +9,9 @@ use super::material_pass_tables::{
     unity_color_writes, unity_compare_function, unity_depth_compare_function,
     unity_stencil_operation,
 };
-use super::material_passes::{first_float_by_pids, MaterialPipelinePropertyIds};
+use super::material_passes::{
+    first_float_from_maps, MaterialPipelinePropertyIds, PropertyMapRef,
+};
 
 /// Unity `Cull` / `CullMode` material override for raster pipeline keys and [`MaterialRenderState::resolved_cull_mode`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -200,24 +202,28 @@ fn unity_offset_units(v: f32) -> i32 {
     v.round().clamp(i32::MIN as f32, i32::MAX as f32) as i32
 }
 
-/// Resolves Unity color, stencil, and depth properties for a material/property-block pair.
-pub fn material_render_state_for_lookup(
-    dict: &MaterialDictionary<'_>,
-    lookup: MaterialPropertyLookupIds,
+/// Resolves Unity color, stencil, and depth properties using pre-fetched inner maps. Prefer this
+/// in hot paths that also call [`crate::materials::material_blend_mode_from_maps`] for the same
+/// lookup — the two outer-map probes are amortised across both calls.
+pub fn material_render_state_from_maps(
+    material_map: PropertyMapRef<'_>,
+    property_block_map: PropertyMapRef<'_>,
     ids: &MaterialPipelinePropertyIds,
 ) -> MaterialRenderState {
-    let stencil_ref = first_float_by_pids(dict, lookup, &ids.stencil_ref);
-    let stencil_comp = first_float_by_pids(dict, lookup, &ids.stencil_comp);
-    let stencil_op = first_float_by_pids(dict, lookup, &ids.stencil_op);
-    let stencil_fail_op = first_float_by_pids(dict, lookup, &ids.stencil_fail_op);
-    let stencil_depth_fail_op = first_float_by_pids(dict, lookup, &ids.stencil_depth_fail_op);
-    let stencil_read_mask = first_float_by_pids(dict, lookup, &ids.stencil_read_mask);
-    let stencil_write_mask = first_float_by_pids(dict, lookup, &ids.stencil_write_mask);
-    let color_mask = first_float_by_pids(dict, lookup, &ids.color_mask).map(unity_u8);
-    let depth_write =
-        first_float_by_pids(dict, lookup, &ids.z_write).map(|v| v.round().clamp(0.0, 1.0) >= 0.5);
-    let depth_compare = first_float_by_pids(dict, lookup, &ids.z_test).map(unity_u8);
-    let cull_override = match first_float_by_pids(dict, lookup, &ids.cull).map(unity_u8) {
+    // Shorthand to keep the ~12 per-field lookups readable.
+    let get = |pids: &[i32]| first_float_from_maps(material_map, property_block_map, pids);
+
+    let stencil_ref = get(&ids.stencil_ref);
+    let stencil_comp = get(&ids.stencil_comp);
+    let stencil_op = get(&ids.stencil_op);
+    let stencil_fail_op = get(&ids.stencil_fail_op);
+    let stencil_depth_fail_op = get(&ids.stencil_depth_fail_op);
+    let stencil_read_mask = get(&ids.stencil_read_mask);
+    let stencil_write_mask = get(&ids.stencil_write_mask);
+    let color_mask = get(&ids.color_mask).map(unity_u8);
+    let depth_write = get(&ids.z_write).map(|v| v.round().clamp(0.0, 1.0) >= 0.5);
+    let depth_compare = get(&ids.z_test).map(unity_u8);
+    let cull_override = match get(&ids.cull).map(unity_u8) {
         None => MaterialCullOverride::Unspecified,
         // UnityEngine.Rendering.CullMode: Off / Front / Back
         Some(0) => MaterialCullOverride::Off,
@@ -226,8 +232,8 @@ pub fn material_render_state_for_lookup(
         Some(_) => MaterialCullOverride::Unspecified,
     };
     let depth_offset = {
-        let factor = first_float_by_pids(dict, lookup, &ids.offset_factor);
-        let units = first_float_by_pids(dict, lookup, &ids.offset_units);
+        let factor = get(&ids.offset_factor);
+        let units = get(&ids.offset_units);
         if factor.is_some() || units.is_some() {
             MaterialDepthOffsetState::new(
                 factor.unwrap_or(0.0),
@@ -265,6 +271,16 @@ pub fn material_render_state_for_lookup(
         depth_offset,
         cull_override,
     }
+}
+
+/// Resolves Unity color, stencil, and depth properties for a material/property-block pair.
+pub fn material_render_state_for_lookup(
+    dict: &MaterialDictionary<'_>,
+    lookup: MaterialPropertyLookupIds,
+    ids: &MaterialPipelinePropertyIds,
+) -> MaterialRenderState {
+    let (mat_map, pb_map) = dict.fetch_property_maps(lookup);
+    material_render_state_from_maps(mat_map, pb_map, ids)
 }
 
 #[cfg(test)]

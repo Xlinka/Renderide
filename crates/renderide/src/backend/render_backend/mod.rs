@@ -22,6 +22,7 @@ use crate::config::{PostProcessingSettings, RendererSettingsHandle, SceneColorFo
 use crate::diagnostics::{DebugHudEncodeError, DebugHudInput, SceneTransformsSnapshot};
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::render_graph::post_processing::PostProcessChainSignature;
+use crate::render_graph::FrameMaterialBatchCache;
 use crate::render_graph::{
     PerViewHudConfig, PerViewHudOutputs, TransientPool, WorldMeshDrawStateRow, WorldMeshDrawStats,
 };
@@ -120,6 +121,12 @@ pub struct RenderBackend {
     /// [`crate::config::RecordParallelism::PerViewParallel`] via `[rendering] record_parallelism`
     /// in the renderer config once per-view pass state is fully validated as `Send`-safe.
     pub(crate) record_parallelism: crate::config::RecordParallelism,
+    /// Persistent resolved-material cache, refreshed once per frame before per-view draw
+    /// collection. Entries invalidate against
+    /// [`crate::assets::material::MaterialPropertyStore`] and
+    /// [`crate::materials::MaterialRouter`] generation counters, so steady-state refresh cost is
+    /// proportional to the number of mutated materials rather than the total material count.
+    pub(crate) material_batch_cache: FrameMaterialBatchCache,
 }
 
 /// Disjoint borrows of [`MaterialSystem`], [`AssetTransferQueue`], and the GPU skin cache for world mesh forward encoding.
@@ -189,6 +196,7 @@ impl RenderBackend {
             transient_pool: TransientPool::new(),
             renderer_settings: None,
             record_parallelism: crate::config::RecordParallelism::Serial,
+            material_batch_cache: FrameMaterialBatchCache::new(),
         }
     }
 

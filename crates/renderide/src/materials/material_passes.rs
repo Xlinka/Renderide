@@ -188,17 +188,51 @@ impl MaterialPipelinePropertyIds {
     }
 }
 
-pub(crate) fn first_float_by_pids(
-    dict: &MaterialDictionary<'_>,
-    lookup: MaterialPropertyLookupIds,
+/// One side of a [`MaterialPropertyLookupIds`] fetched via
+/// [`MaterialDictionary::fetch_property_maps`]: the inner `property_id → value` map for either the
+/// material or the property block. `None` when no properties have been stored for that id.
+pub(crate) type PropertyMapRef<'a> =
+    Option<&'a std::collections::HashMap<i32, MaterialPropertyValue>>;
+
+/// Like [`first_float_by_pids`] but takes the two inner maps already fetched once via
+/// [`MaterialDictionary::fetch_property_maps`]. Iterates `pids` doing only one inner-map lookup
+/// per side per id, matching [`crate::assets::material::MaterialPropertyStore::get_merged`]'s
+/// "property block overrides material" semantics.
+pub(crate) fn first_float_from_maps(
+    material_map: PropertyMapRef<'_>,
+    property_block_map: PropertyMapRef<'_>,
     pids: &[i32],
 ) -> Option<f32> {
-    pids.iter()
-        .find_map(|&pid| match dict.get_merged(lookup, pid) {
-            Some(MaterialPropertyValue::Float(f)) => Some(*f),
-            Some(MaterialPropertyValue::Float4(v)) => Some(v[0]),
+    pids.iter().find_map(|&pid| {
+        let v = property_block_map
+            .and_then(|m| m.get(&pid))
+            .or_else(|| material_map.and_then(|m| m.get(&pid)))?;
+        match v {
+            MaterialPropertyValue::Float(f) => Some(*f),
+            MaterialPropertyValue::Float4(v4) => Some(v4[0]),
             _ => None,
-        })
+        }
+    })
+}
+
+/// Resolves a material/property-block `BlendMode` override using pre-fetched inner maps. Prefer
+/// this in hot paths that also call [`crate::materials::material_render_state_from_maps`] for
+/// the same lookup — the two outer-map probes are amortised across both calls.
+pub fn material_blend_mode_from_maps(
+    material_map: PropertyMapRef<'_>,
+    property_block_map: PropertyMapRef<'_>,
+    ids: &MaterialPipelinePropertyIds,
+) -> MaterialBlendMode {
+    if let Some(v) = first_float_from_maps(material_map, property_block_map, &ids.blend_mode) {
+        return MaterialBlendMode::from_resonite_value(v);
+    }
+    if let (Some(src), Some(dst)) = (
+        first_float_from_maps(material_map, property_block_map, &ids.src_blend),
+        first_float_from_maps(material_map, property_block_map, &ids.dst_blend),
+    ) {
+        return MaterialBlendMode::from_unity_blend_factors(src, dst);
+    }
+    MaterialBlendMode::StemDefault
 }
 
 /// Resolves a material/property-block `BlendMode` override.
@@ -207,17 +241,8 @@ pub fn material_blend_mode_for_lookup(
     lookup: MaterialPropertyLookupIds,
     ids: &MaterialPipelinePropertyIds,
 ) -> MaterialBlendMode {
-    if let Some(v) = first_float_by_pids(dict, lookup, &ids.blend_mode) {
-        return MaterialBlendMode::from_resonite_value(v);
-    }
-    if let (Some(src), Some(dst)) = (
-        first_float_by_pids(dict, lookup, &ids.src_blend),
-        first_float_by_pids(dict, lookup, &ids.dst_blend),
-    ) {
-        return MaterialBlendMode::from_unity_blend_factors(src, dst);
-    }
-
-    MaterialBlendMode::StemDefault
+    let (mat_map, pb_map) = dict.fetch_property_maps(lookup);
+    material_blend_mode_from_maps(mat_map, pb_map, ids)
 }
 
 /// How a declared shader pass applies material-driven Unity render state.

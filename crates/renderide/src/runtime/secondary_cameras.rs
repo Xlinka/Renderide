@@ -13,7 +13,7 @@ use crate::render_graph::{
     build_world_mesh_cull_proj_params, camera_state_enabled, collect_and_sort_world_mesh_draws,
     collect_and_sort_world_mesh_draws_with_parallelism, draw_filter_from_camera_entry,
     host_camera_frame_for_render_texture, CameraTransformDrawFilter, DrawCollectionContext,
-    ExternalOffscreenTargets, FrameMaterialBatchCache, FramePreparedRenderables, FrameView,
+    ExternalOffscreenTargets, FramePreparedRenderables, FrameView,
     FrameViewTarget, GraphExecuteError, HostCameraFrame, OcclusionViewId, OutputDepthMode,
     WorldMeshCullInput, WorldMeshDrawCollectParallelism, WorldMeshDrawCollection,
 };
@@ -159,17 +159,18 @@ impl RendererRuntime {
 
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
-        let property_store = self.backend.material_property_store();
-        let pipeline_property_ids =
-            MaterialPipelinePropertyIds::new(self.backend.property_id_registry());
-        let mesh_pool = self.backend.mesh_pool();
         let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        // Direct field access enables the split-borrow against `material_batch_cache` below.
+        let property_store = self.backend.materials.material_property_store();
+        let pipeline_property_ids =
+            MaterialPipelinePropertyIds::new(self.backend.materials.property_id_registry());
         let router_ref = self
             .backend
             .materials
             .material_registry()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
+        let mesh_pool = &self.backend.asset_transfers.mesh_pool;
 
         let occlusion_ref: &OcclusionSystem = &self.backend.occlusion;
         let inner_parallelism = if prepared.len() > 1 {
@@ -177,6 +178,22 @@ impl RendererRuntime {
         } else {
             WorldMeshDrawCollectParallelism::Full
         };
+
+        // Refresh the persistent material batch cache once, then share it across every per-view
+        // collection (mirrors `render_all_views`; without hoisting, each per-view collect would
+        // lazily rebuild the same entries).
+        {
+            profiling::scope!("render::build_frame_material_cache");
+            let dict = MaterialDictionary::new(property_store);
+            self.backend.material_batch_cache.refresh_for_frame(
+                scene_ref,
+                &dict,
+                router_ref,
+                &pipeline_property_ids,
+                ShaderPermutation(0),
+            );
+        }
+        let frame_material_cache = &self.backend.material_batch_cache;
 
         // Hi-Z snapshot reads are now `Sync` (see `OcclusionSystem` / `HiZGpuState` — the readback
         // channel type is `crossbeam-channel`, which is `Sync` unlike `std::sync::mpsc`), so the
@@ -220,7 +237,7 @@ impl RendererRuntime {
                                 }),
                             culling: culling.as_ref(),
                             transform_filter: Some(&prep.filter),
-                            material_cache: None,
+                            material_cache: Some(frame_material_cache),
                             prepared: None,
                         },
                         inner_parallelism,
@@ -290,17 +307,21 @@ impl RendererRuntime {
 
         let render_context = self.scene.active_main_render_context();
         let scene_ref: &SceneCoordinator = &self.scene;
-        let property_store = self.backend.material_property_store();
-        let pipeline_property_ids =
-            MaterialPipelinePropertyIds::new(self.backend.property_id_registry());
-        let mesh_pool = self.backend.mesh_pool();
         let fallback_router = MaterialRouter::new(RasterPipelineKind::DebugWorldNormals);
+        // Use direct field access on `self.backend` so the compiler can split-borrow the disjoint
+        // `materials` (read) and `material_batch_cache` (write) fields during the refresh call
+        // below. Routing through `self.backend.material_property_store()` would borrow the whole
+        // `RenderBackend` and block the subsequent `&mut material_batch_cache`.
+        let property_store = self.backend.materials.material_property_store();
+        let pipeline_property_ids =
+            MaterialPipelinePropertyIds::new(self.backend.materials.property_id_registry());
         let router_ref = self
             .backend
             .materials
             .material_registry()
             .map(|r| &r.router)
             .unwrap_or(&fallback_router);
+        let mesh_pool = &self.backend.asset_transfers.mesh_pool;
 
         let occlusion_ref: &OcclusionSystem = &self.backend.occlusion;
         let inner_parallelism = if prepared.len() > 1 {
@@ -309,20 +330,24 @@ impl RendererRuntime {
             WorldMeshDrawCollectParallelism::Full
         };
 
-        // Build the per-frame material batch cache **once** before any per-view collection runs.
-        // Every per-view call reuses the same immutable cache via `material_cache`, which removes
-        // the N+1 dictionary/router resolution walks that dominated secondary-camera frame cost.
-        let frame_material_cache = {
+        // Refresh the persistent material batch cache **once** before any per-view collection
+        // runs. Every per-view call reuses the same immutable cache via `material_cache`, which
+        // removes the N+1 dictionary/router resolution walks that dominated secondary-camera
+        // frame cost. The cache persists across frames on [`RenderBackend::material_batch_cache`]
+        // and invalidates individual entries via monotonic generation counters, so in steady
+        // state this call only touches existing entries with a single HashMap probe each.
+        {
             profiling::scope!("render::build_frame_material_cache");
             let dict = MaterialDictionary::new(property_store);
-            FrameMaterialBatchCache::build_for_frame(
+            self.backend.material_batch_cache.refresh_for_frame(
                 scene_ref,
                 &dict,
                 router_ref,
                 &pipeline_property_ids,
                 ShaderPermutation(0),
-            )
-        };
+            );
+        }
+        let frame_material_cache = &self.backend.material_batch_cache;
 
         // Pre-expand the scene walk into a dense draw list once per frame. Every per-view
         // collection iterates this shared list instead of walking each active render space
@@ -373,7 +398,7 @@ impl RendererRuntime {
                                 }),
                             culling: culling.as_ref(),
                             transform_filter: Some(&prep.filter),
-                            material_cache: Some(&frame_material_cache),
+                            material_cache: Some(frame_material_cache),
                             prepared: Some(&frame_prepared),
                         },
                         inner_parallelism,
@@ -415,7 +440,7 @@ impl RendererRuntime {
                     .unwrap_or_else(|| hc.head_output_transform.col(3).truncate()),
                 culling: culling_main_ref,
                 transform_filter: None,
-                material_cache: Some(&frame_material_cache),
+                material_cache: Some(frame_material_cache),
                 prepared: Some(&frame_prepared),
             })
         };

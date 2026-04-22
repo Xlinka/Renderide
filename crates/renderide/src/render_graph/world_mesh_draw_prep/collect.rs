@@ -621,18 +621,22 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
 
     // Build per-material cache and per-space filter masks before the parallel phase. When the
     // caller already shared a frame-scope cache (multi-view paths), reuse it instead of rebuilding
-    // — that is the whole point of `material_cache` on [`DrawCollectionContext`].
+    // — that is the whole point of `material_cache` on [`DrawCollectionContext`]. When no cache
+    // is shared (single-view fallback), refresh a local one in place; this path loses
+    // cross-frame reuse but keeps the within-call deduplication.
     let owned_cache;
     let cache: &FrameMaterialBatchCache = match ctx.material_cache {
         Some(shared) => shared,
         None => {
-            owned_cache = FrameMaterialBatchCache::build_for_frame(
+            let mut local = FrameMaterialBatchCache::new();
+            local.refresh_for_frame(
                 ctx.scene,
                 ctx.material_dict,
                 ctx.material_router,
                 ctx.pipeline_property_ids,
                 ctx.shader_perm,
             );
+            owned_cache = local;
             &owned_cache
         }
     };
