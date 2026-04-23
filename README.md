@@ -15,12 +15,12 @@ The split lets the engine and renderer evolve independently and lets the rendere
 
 ## Design goals
 
-- **Cross-platform parity** — Linux, macOS, and Windows are all first-class. Mobile is a future direction; portability constraints are respected today.
-- **Data-driven render graph** — Passes, materials, and resources route through shared systems rather than one-off code paths.
-- **No per-frame allocations** — The hot path reuses pooled buffers and asset slots; allocation is restricted to init and asset integration.
-- **OpenXR-first VR** — Stereo rendering and head-tracked input are part of the core path, not an afterthought.
-- **Profiling-friendly** — Tracy CPU and GPU instrumentation is built in and zero-cost when disabled.
-- **Safe by default** — `unsafe` is restricted to FFI and justified hot paths; library code avoids `unwrap`, `expect`, and `panic!`.
+- **Cross-platform parity** - Linux, macOS, and Windows are all first-class. Mobile is a future direction; portability constraints are respected today.
+- **Data-driven render graph** - Passes, materials, and resources route through shared systems rather than one-off code paths.
+- **No per-frame allocations** - The hot path reuses pooled buffers and asset slots; allocation is restricted to init and asset integration.
+- **OpenXR-first VR** - Stereo rendering and head-tracked input are part of the core path, not an afterthought.
+- **Profiling-friendly** - Tracy CPU and GPU instrumentation is built in and zero-cost when disabled.
+- **Safe by default** - `unsafe` is restricted to FFI and justified hot paths; library code avoids `unwrap`, `expect`, and `panic!`.
 
 ## Architecture
 
@@ -37,9 +37,9 @@ Bootstrapper  ──shm queues──▶  Host (.NET / Resonite)
 
 Inside the renderer, work is organized into three layers:
 
-1. **Frontend** — polls IPC queues, drives the winit event loop, and runs the lock-step protocol that gates frames against the host.
-2. **Scene** — owns transforms, render spaces, mesh and skinned renderables, lights, and cameras. Pure data; does not touch wgpu.
-3. **Backend** — owns the wgpu device, asset pools, the material system, and the compiled render graph. Produces command buffers and presents.
+1. **Frontend** - polls IPC queues, drives the winit event loop, and runs the lock-step protocol that gates frames against the host.
+2. **Scene** - owns transforms, render spaces, mesh and skinned renderables, lights, and cameras. Pure data; does not touch wgpu.
+3. **Backend** - owns the wgpu device, asset pools, the material system, and the compiled render graph. Produces command buffers and presents.
 
 Each tick: poll IPC, integrate a budgeted slice of pending assets, run the optional OpenXR frame loop, complete the lock-step exchange with the host, render, then present.
 
@@ -50,7 +50,7 @@ The workspace lives under `crates/`:
 | Crate | Purpose |
 | --- | --- |
 | [`bootstrapper`](crates/bootstrapper) | Launches the Resonite host and the renderer; owns bootstrap IPC (heartbeats, clipboard, start signals). |
-| [`renderide`](crates/renderide) | The renderer itself — winit, wgpu, OpenXR, scene, render graph, materials, assets. |
+| [`renderide`](crates/renderide) | The renderer itself - winit, wgpu, OpenXR, scene, render graph, materials, assets. |
 | [`renderide-shared`](crates/renderide-shared) | Generated IPC types and the hand-maintained wire-format helpers. |
 | [`interprocess`](crates/interprocess) | Cloudtoid-compatible shared-memory ring queues used by every IPC channel. |
 | [`logger`](crates/logger) | File-first logging used by the bootstrapper, host capture, and renderer. |
@@ -142,4 +142,4 @@ Contributions are welcome. The workspace builds with the standard Cargo commands
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE).
+MIT - see [`LICENSE`](LICENSE).
