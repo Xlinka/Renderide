@@ -112,6 +112,11 @@ pub(super) fn dispatch_running_command(runtime: &mut RendererRuntime, cmd: Rende
                 "runtime: render_texture_result from host (ignored; renderer is source)"
             );
         }
+        RendererCommand::RendererEngineReady(_) => {
+            logger::trace!(
+                "runtime: renderer_engine_ready from host (post-init lifecycle ack; no action)"
+            );
+        }
         ref cmd => {
             let tag = renderer_command_variant_tag(cmd);
             runtime.record_unhandled_renderer_command(tag);
