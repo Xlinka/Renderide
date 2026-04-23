@@ -8,8 +8,9 @@ use super::super::frame_cpu_gpu_timing::FrameCpuGpuTiming;
 use super::super::instance_limits::instance_flags_for_gpu_init;
 use super::super::limits::GpuLimits;
 use super::{
-    adapter_render_features_intersection, msaa_supported_sample_counts,
-    msaa_supported_sample_counts_stereo, request_device_for_adapter, GpuContext, GpuError,
+    adapter_render_features_intersection, install_uncaptured_error_handler,
+    msaa_supported_sample_counts, msaa_supported_sample_counts_stereo, request_device_for_adapter,
+    GpuContext, GpuError,
 };
 
 impl GpuContext {
@@ -237,6 +238,7 @@ impl GpuContext {
         window: Arc<Window>,
         vsync: bool,
     ) -> Result<Self, GpuError> {
+        install_uncaptured_error_handler(device.as_ref());
         let surface = instance
             .create_surface(window.clone())
             .map_err(|e| GpuError::Surface(format!("{e:?}")))?;
