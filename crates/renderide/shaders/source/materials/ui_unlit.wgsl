@@ -7,11 +7,14 @@
 //! float4 color stream at `@location(3)` with opaque-white fallback when the host mesh lacks color.
 //!
 //! Mask-mode caveat: Unity's UI_Unlit shader gates mask handling on
-//! `_MASK_TEXTURE_MUL` / `_MASK_TEXTURE_CLIP` multi-compile keywords. FrooxEngine sets those
-//! through `ShaderKeywords.SetKeyword`, which the renderer never receives. Without the
-//! `ShaderKeywords.Variant` bitmask (and each shader's keyword-index table) on the wire we
-//! default to MUL-mode alpha masking. When no host mask texture is bound the default-white
-//! fallback makes it a no-op (`(1+1+1)/3 * 1 = 1`).
+//! `_MASK_TEXTURE_MUL` / `_MASK_TEXTURE_CLIP` multi-compile keywords that FrooxEngine sets
+//! through `ShaderKeywords.SetKeyword`, which the renderer never receives — decoding them
+//! would require plumbing `ShaderKeywords.Variant` and each shader's keyword-index table
+//! through IPC. The shader instead infers the mode from signals that *are* on the wire:
+//! alpha-test active (`_Cutoff ∈ (0, 1)`) → CLIP; transparent blend
+//! (`(_SrcBlend, _DstBlend) ≠ (1, 0)`) → MUL; opaque no-cutoff → mask skipped. The
+//! default-white texture fallback keeps every branch inert when no host mask is bound
+//! (`mask.a == 1.0`).
 //!
 //! Per-draw uniforms (`@group(2)`) use [`renderide::per_draw`].
 
@@ -89,10 +92,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var clip_a = in.color.a * acs::texture_alpha_base_mip(_MainTex, _MainTex_sampler, uv_s);
 
     let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
-    let mask = textureSample(_MaskTex, _MaskTex_sampler, uv_mask);
-    let mask_mul = (mask.r + mask.g + mask.b) * 0.33333334 * mask.a;
-    color.a = color.a * mask_mul;
-    clip_a = clip_a * acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+    let cutoff_active = mat._Cutoff > 0.0 && mat._Cutoff < 1.0;
+    let is_opaque_blend = mat._SrcBlend == 1.0 && mat._DstBlend == 0.0;
+    if (cutoff_active) {
+        clip_a = clip_a * acs::texture_alpha_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+    } else if (!is_opaque_blend) {
+        color.a = color.a * textureSample(_MaskTex, _MaskTex_sampler, uv_mask).a;
+    }
 
     if (mat._Cutoff > 0.0 && mat._Cutoff < 1.0 && clip_a <= mat._Cutoff) {
         discard;

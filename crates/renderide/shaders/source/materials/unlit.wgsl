@@ -9,12 +9,15 @@
 //! Per-draw uniforms (`@group(2)`) use [`renderide::per_draw`].
 //!
 //! Mask-mode caveat: Unity's Unlit shader gates mask application on
-//! `_MASK_TEXTURE_MUL` / `_MASK_TEXTURE_CLIP` multi-compile keywords. FrooxEngine sets those
-//! through `ShaderKeywords.SetKeyword`, which the renderer never receives — only the
-//! `ShaderKeywords.Variant` bitmask would restore the distinction, and decoding that requires
-//! shipping each shader's keyword-index table through IPC (see `ShaderKeywords.cs`). Without
-//! that, this shader always applies MUL-mode alpha masking. When no host mask is bound, the
-//! default-white fallback makes it a no-op (`(1+1+1)/3 * 1 = 1` for alpha multiply).
+//! `_MASK_TEXTURE_MUL` / `_MASK_TEXTURE_CLIP` multi-compile keywords that FrooxEngine sets
+//! through `ShaderKeywords.SetKeyword`, which the renderer never receives — decoding them
+//! would require plumbing `ShaderKeywords.Variant` plus each shader's keyword-index table
+//! through IPC (see `ShaderKeywords.cs`). The shader instead infers the mode from signals
+//! that *are* on the wire: alpha-test active (`_Cutoff ∈ (0, 1)`) → CLIP; transparent blend
+//! (`(_SrcBlend, _DstBlend) ≠ (1, 0)`) → MUL; opaque no-cutoff → mask has no visible effect,
+//! skipped. The default-white texture fallback keeps every branch inert when no host mask
+//! is bound (`mask.a == 1.0`). The rare case of an opaque cutoff-less material with
+//! `MaskMode = AlphaClip` can only be recovered by plumbing the keyword bitmask.
 
 #import renderide::globals as rg
 #import renderide::per_draw as pd
@@ -88,10 +91,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var clip_a = mat._Color.a * acs::texture_alpha_base_mip(_Tex, _Tex_sampler, uv_main);
 
     let uv_mask = uvu::apply_st(in.uv, mat._MaskTex_ST);
-    let mask = textureSample(_MaskTex, _MaskTex_sampler, uv_mask);
-    let mask_mul = (mask.r + mask.g + mask.b) * 0.33333334 * mask.a;
-    albedo.a = albedo.a * mask_mul;
-    clip_a = clip_a * acs::mask_luminance_mul_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+    let cutoff_active = mat._Cutoff > 0.0 && mat._Cutoff < 1.0;
+    let is_opaque_blend = mat._SrcBlend == 1.0 && mat._DstBlend == 0.0;
+    if (cutoff_active) {
+        clip_a = clip_a * acs::texture_alpha_base_mip(_MaskTex, _MaskTex_sampler, uv_mask);
+    } else if (!is_opaque_blend) {
+        albedo.a = albedo.a * textureSample(_MaskTex, _MaskTex_sampler, uv_mask).a;
+    }
 
     // Alpha test is active when `_Cutoff` is a meaningful value in (0, 1); otherwise every
     // alpha at exactly 0 or exactly 1 would either never discard or always discard.
