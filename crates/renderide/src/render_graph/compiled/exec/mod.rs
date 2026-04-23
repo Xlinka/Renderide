@@ -575,12 +575,18 @@ impl CompiledRenderGraph {
         };
         let _ = queue_ref; // retained above for the HUD encoder; submit path now uses the driver
 
-        // Collect per-view Hi-Z `map_async` work as `on_submitted_work_done` callbacks so the
-        // staging buffers are mapped only after the driver has actually issued the submit. The
-        // encoded slot is taken out of the per-view state here (main thread, under the Hi-Z
-        // state lock) and baked into the closure by value — a late-firing callback cannot
-        // consume a newer frame's slot, which would let two submits alias the same staging
-        // buffer and trip the "buffer is still mapped" wgpu validation.
+        // Collect per-view Hi-Z submit-done notifications as `on_submitted_work_done`
+        // callbacks. Each callback only flips `HiZGpuState::submit_done[ws]`; the real
+        // `map_async` runs on the main thread from the next frame's
+        // [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`]. Doing wgpu work
+        // inside a device-poll callback can deadlock against wgpu-internal locks that also
+        // serialize `queue.write_texture` on the main thread (observed as a futex-wait hang
+        // inside `write_one_mip`).
+        //
+        // The encoded slot is captured out of the per-view state here (main thread, under
+        // the Hi-Z state lock) and baked into the closure by value — a late-firing callback
+        // cannot consume a newer frame's slot and alias two submits to the same staging
+        // buffer.
         let hi_z_callbacks: Vec<Box<dyn FnOnce() + Send + 'static>> = per_view_occlusion_info
             .iter()
             .filter_map(|(occlusion_view, _hc)| {
@@ -588,7 +594,7 @@ impl CompiledRenderGraph {
                 let ws = state.lock().hi_z_encoded_slot.take()?;
                 let cb: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
                     profiling::scope!("hi_z::on_submitted_callback");
-                    state.lock().do_hi_z_map_async(ws);
+                    state.lock().mark_submit_done(ws);
                 });
                 Some(cb)
             })

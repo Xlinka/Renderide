@@ -135,7 +135,8 @@ impl OcclusionSystem {
         );
     }
 
-    /// Drains completed Hi-Z `map_async` readbacks into CPU snapshots for [`Self::hi_z_cull_data`].
+    /// Drains completed Hi-Z `map_async` readbacks into CPU snapshots for [`Self::hi_z_cull_data`]
+    /// and promotes any `submit_done` slots into fresh `map_async` requests on the main thread.
     ///
     /// Non-blocking: uses at most one [`wgpu::Device::poll`]; if a read is not ready, prior
     /// snapshots are kept.
@@ -144,14 +145,25 @@ impl OcclusionSystem {
     /// [`wgpu::Queue::on_submitted_work_done`] callback installed by
     /// [`crate::render_graph::compiled::exec::CompiledRenderGraph::execute_multi_view`]
     /// (which itself locks the per-view [`HiZGpuState`]) can execute without re-entering
-    /// a lock held by this function.
+    /// a lock held by this function. That callback only flips
+    /// [`crate::render_graph::occlusion::HiZGpuState::submit_done`]; the actual `map_async`
+    /// runs here via [`crate::render_graph::occlusion::HiZGpuState::start_ready_maps`], so no
+    /// wgpu call is issued from inside the device-poll callback (which would risk deadlocks
+    /// with wgpu's internal queue-write locks — observed as a futex hang inside
+    /// `queue.write_texture` during asset upload).
     pub fn hi_z_begin_frame_readback(&mut self, device: &wgpu::Device) {
         profiling::scope!("hi_z::readback_drain");
         let _ = device.poll(wgpu::PollType::Poll);
-        self.main.lock().drain_completed_map_async();
+        {
+            let mut main = self.main.lock();
+            main.drain_completed_map_async();
+            main.start_ready_maps();
+        }
         let offscreen = self.offscreen.lock();
         for (_, slot) in offscreen.iter() {
-            slot.lock().drain_completed_map_async();
+            let mut state = slot.lock();
+            state.drain_completed_map_async();
+            state.start_ready_maps();
         }
     }
 

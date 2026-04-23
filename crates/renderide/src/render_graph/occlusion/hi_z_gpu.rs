@@ -49,6 +49,11 @@ pub struct HiZGpuState {
     /// [`wgpu::Queue::on_submitted_work_done`] callback has not yet fired. Guards
     /// [`Self::can_encode_hi_z`] from picking a slot that the driver thread is about to consume.
     pub(crate) pending_submit: [bool; HIZ_STAGING_RING],
+    /// Slots whose `on_submitted_work_done` callback has fired (submit confirmed complete) but
+    /// whose `map_async` has not yet been issued. Promoted to [`Self::desktop_pending`] by
+    /// [`Self::start_ready_maps`] on the main thread — never inside a device-poll callback, so no
+    /// wgpu call runs from within the callback's execution context.
+    pub(crate) submit_done: [bool; HIZ_STAGING_RING],
     /// Pending `map_async` callbacks per desktop / left-eye staging buffer.
     pub(crate) desktop_pending: [Option<MapRecv>; HIZ_STAGING_RING],
     /// Pending `map_async` per right-eye buffer when stereo; `None` when desktop-only.
@@ -70,6 +75,7 @@ impl Default for HiZGpuState {
             write_idx: 0,
             hi_z_encoded_slot: None,
             pending_submit: pending_submit_default(),
+            submit_done: pending_submit_default(),
             desktop_pending: pending_none_array(),
             right_pending: None,
             stereo_left_stash: pending_none_array(),
@@ -89,6 +95,7 @@ impl HiZGpuState {
             self.write_idx = 0;
             self.hi_z_encoded_slot = None;
             self.pending_submit = pending_submit_default();
+            self.submit_done = pending_submit_default();
             self.desktop_pending = pending_none_array();
             self.right_pending = None;
             self.stereo_left_stash = pending_none_array();
@@ -103,26 +110,29 @@ impl HiZGpuState {
         self.write_idx = 0;
         self.hi_z_encoded_slot = None;
         self.pending_submit = pending_submit_default();
+        self.submit_done = pending_submit_default();
         self.desktop_pending = pending_none_array();
         self.right_pending = None;
         self.stereo_left_stash = pending_none_array();
         self.stereo_right_stash = pending_none_array();
     }
 
-    /// Drains completed `map_async` work into [`Self::desktop`] / [`Self::stereo`] without blocking.
+    /// Drains completed `map_async` work into [`Self::desktop`] / [`Self::stereo`] and promotes
+    /// any newly-`submit_done` slots into fresh `map_async` requests. Non-blocking.
     ///
     /// Call at the **start** of each frame (before encoding the render graph). Uses at most one
     /// [`wgpu::Device::poll`] to advance callbacks; if a read is not ready, prior snapshots are kept.
     ///
     /// ### Re-entrance
     ///
-    /// [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`] now drains its
-    /// `on_submitted_work_done` callbacks with [`wgpu::Device::poll`] **before** locking this
-    /// state, so the [`Self::do_hi_z_map_async`] callback does not re-enter the mutex.
-    /// The poll here remains as a safety net for direct callers of this method (mainly tests).
+    /// [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`] drains
+    /// `on_submitted_work_done` callbacks via [`wgpu::Device::poll`] **before** locking this
+    /// state, so the [`Self::mark_submit_done`] callback does not re-enter the mutex.
+    /// This helper polls-then-locks itself and is meant for direct callers (mainly tests).
     pub fn begin_frame_readback(&mut self, device: &wgpu::Device) {
         let _ = device.poll(wgpu::PollType::Poll);
         self.drain_completed_map_async();
+        self.start_ready_maps();
     }
 
     /// Non-polling variant of [`Self::begin_frame_readback`] used when the caller has already
@@ -213,48 +223,71 @@ impl HiZGpuState {
         }
     }
 
-    /// Issues `map_async` against the staging buffer(s) for `ws` once the driver has reported
-    /// the submit complete. The slot is supplied explicitly (captured when the callback closure
-    /// was built on the main thread) rather than read from [`Self::hi_z_encoded_slot`], so a
-    /// late-firing callback cannot pick up a newer frame's slot.
-    ///
-    /// Call from a [`wgpu::Queue::on_submitted_work_done`] callback on whichever thread runs
-    /// [`wgpu::Device::poll`].
-    pub fn do_hi_z_map_async(&mut self, ws: usize) {
+    /// Records that the driver-thread submit carrying the copy-to-staging for `ws` has
+    /// completed. Does not touch wgpu — [`Self::start_ready_maps`] promotes the slot to a real
+    /// `map_async` on the main thread. Keeping this callback pure (just a flag flip) avoids
+    /// running any wgpu call from inside a [`wgpu::Device::poll`] callback, which can hold
+    /// wgpu-internal locks that also serialize [`wgpu::Queue::write_texture`] and would
+    /// otherwise risk a futex-wait deadlock with the asset-upload path on the main thread.
+    pub fn mark_submit_done(&mut self, ws: usize) {
         debug_assert!(ws < HIZ_STAGING_RING);
+        self.submit_done[ws] = true;
+    }
+
+    /// Issues `map_async` for every slot whose submit has completed since the last call.
+    /// Runs on the main thread from [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`]
+    /// after `device.poll` has flushed completion callbacks into [`Self::submit_done`].
+    pub(crate) fn start_ready_maps(&mut self) {
         let Some(scratch) = self.scratch.as_ref() else {
-            self.pending_submit[ws] = false;
+            for flag in self.submit_done.iter_mut() {
+                *flag = false;
+            }
+            for flag in self.pending_submit.iter_mut() {
+                *flag = false;
+            }
             return;
         };
-        self.pending_submit[ws] = false;
-        debug_assert!(self.desktop_pending[ws].is_none());
 
-        let slice = scratch.staging_desktop[ws].slice(..);
-        let (tx, rx) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.desktop_pending[ws] = Some(rx);
-
-        if let Some(ref staging_r) = scratch.staging_r {
-            if self.right_pending.is_none() {
-                self.right_pending = Some(pending_none_array());
+        for ws in 0..HIZ_STAGING_RING {
+            if !self.submit_done[ws] {
+                continue;
             }
-            if let Some(rp) = self.right_pending.as_mut() {
-                debug_assert!(rp[ws].is_none());
-                let slice_r = staging_r[ws].slice(..);
-                let (tx_r, rx_r) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
-                slice_r.map_async(wgpu::MapMode::Read, move |r| {
-                    let _ = tx_r.send(r);
-                });
-                rp[ws] = Some(rx_r);
+            self.submit_done[ws] = false;
+            self.pending_submit[ws] = false;
+
+            if self.desktop_pending[ws].is_some() {
+                continue;
+            }
+
+            let slice = scratch.staging_desktop[ws].slice(..);
+            let (tx, rx) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
+            slice.map_async(wgpu::MapMode::Read, move |r| {
+                let _ = tx.send(r);
+            });
+            self.desktop_pending[ws] = Some(rx);
+
+            if let Some(ref staging_r) = scratch.staging_r {
+                if self.right_pending.is_none() {
+                    self.right_pending = Some(pending_none_array());
+                }
+                if let Some(rp) = self.right_pending.as_mut() {
+                    if rp[ws].is_none() {
+                        let slice_r = staging_r[ws].slice(..);
+                        let (tx_r, rx_r) = mpsc::bounded::<Result<(), wgpu::BufferAsyncError>>(1);
+                        slice_r.map_async(wgpu::MapMode::Read, move |r| {
+                            let _ = tx_r.send(r);
+                        });
+                        rp[ws] = Some(rx_r);
+                    }
+                }
             }
         }
     }
 
     pub(crate) fn can_encode_hi_z(&self, scratch: &HiZGpuScratch) -> bool {
         let idx = self.write_idx;
-        if self.pending_submit[idx] || self.desktop_pending[idx].is_some() {
+        if self.pending_submit[idx] || self.submit_done[idx] || self.desktop_pending[idx].is_some()
+        {
             return false;
         }
         if scratch.staging_r.is_some() {
