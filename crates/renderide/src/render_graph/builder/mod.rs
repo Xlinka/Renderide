@@ -317,7 +317,7 @@ impl GraphBuilder {
                 .collect(),
             imported_textures: self.imports_tex,
             imported_buffers: self.imports_buf,
-            schedule: FrameSchedule::new(),
+            schedule: FrameSchedule::empty(),
             main_graph_msaa_transient_handles: None,
         }
     }
@@ -415,7 +415,7 @@ fn build_frame_schedule(
     if first_per_view < steps.len() {
         waves.push(first_per_view..steps.len());
     }
-    FrameSchedule { steps, waves }
+    FrameSchedule::new(steps, waves)
 }
 
 fn compile_pass_info(setups: &[SetupEntry], ordered: &[usize]) -> Vec<CompiledPassInfo> {

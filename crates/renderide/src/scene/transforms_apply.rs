@@ -197,6 +197,7 @@ fn apply_transform_parent_updates_extracted(
     changed: &mut NodeDirtyMask,
     invalidate_world: &mut bool,
 ) {
+    profiling::scope!("scene::apply_parent_updates");
     if parents.is_empty() {
         return;
     }
@@ -247,6 +248,7 @@ fn pose_terminator_index(poses: &[TransformPoseUpdate]) -> usize {
 /// Output order matches input order so the caller's serial commit preserves last-write-wins
 /// semantics for any duplicate transform indices in the host batch.
 fn validate_pose_rows(poses: &[TransformPoseUpdate], node_count: usize) -> Vec<ValidatedPoseRow> {
+    profiling::scope!("scene::validate_pose_rows");
     let active_len = pose_terminator_index(poses);
     let active = &poses[..active_len];
     let row_for = |pu: &TransformPoseUpdate| -> Option<ValidatedPoseRow> {
@@ -283,6 +285,7 @@ fn apply_transform_pose_updates_extracted(
     sid: i32,
     changed: &mut NodeDirtyMask,
 ) {
+    profiling::scope!("scene::apply_pose_updates");
     if poses.is_empty() {
         return;
     }

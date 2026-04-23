@@ -7,8 +7,8 @@ mod encode;
 mod snapshot;
 
 use std::fmt;
-use std::sync::Mutex;
 
+use parking_lot::Mutex;
 use rayon::prelude::*;
 
 use crate::backend::mesh_deform::EntryNeed;
@@ -26,10 +26,12 @@ use self::snapshot::{
 
 /// Encodes mesh deformation compute for all active render spaces.
 ///
-/// Per-frame collection reuses scratch buffers (held inside a [`Mutex`]) to avoid `Vec`
-/// allocations on the hot path. The mutex is never contended in practice because
-/// [`MeshDeformPass::phase`] returns [`PassPhase::FrameGlobal`], so `record` always runs
-/// on the main thread before per-view parallel encoding begins.
+/// Per-frame collection reuses scratch buffers (held inside a [`parking_lot::Mutex`]) to avoid
+/// `Vec` allocations on the hot path. [`parking_lot::Mutex`] is chosen over [`std::sync::Mutex`]
+/// so the `lock` API is infallible and the per-frame record path does not need poison-handling.
+/// The mutex is never contended in practice because [`MeshDeformPass::phase`] returns
+/// [`PassPhase::FrameGlobal`], so `record` always runs on the main thread before per-view
+/// parallel encoding begins.
 pub struct MeshDeformPass {
     scratch: Mutex<MeshDeformScratch>,
 }
@@ -227,10 +229,7 @@ impl ComputePass for MeshDeformPass {
 
         // Lock the scratch buffers. This is a FrameGlobal pass running on the main thread,
         // so the lock is never contended.
-        let mut scratch = self
-            .scratch
-            .lock()
-            .expect("MeshDeformPass scratch mutex poisoned");
+        let mut scratch = self.scratch.lock();
         collect_deform_work_into_scratch(&mut scratch, frame.shared.scene, mesh_pool);
 
         let Some(pre) = frame.shared.mesh_preprocess else {

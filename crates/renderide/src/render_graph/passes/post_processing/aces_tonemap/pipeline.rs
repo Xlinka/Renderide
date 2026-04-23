@@ -10,7 +10,9 @@
 //! variants by the build script's `#ifdef MULTIVIEW` path (no runtime composition needed).
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::Mutex;
 
 use crate::embedded_shaders::embedded_target_wgsl;
 
@@ -91,7 +93,7 @@ impl AcesTonemapPipelineCache {
         } else {
             &self.mono
         };
-        let mut guard = map.lock().expect("aces_tonemap pipeline cache poisoned");
+        let mut guard = map.lock();
         if let Some(p) = guard.get(&output_format) {
             return Arc::clone(p);
         }

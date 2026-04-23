@@ -11,7 +11,7 @@
 //! shared as a read-only reference across rayon workers, whereas [`wgpu::Queue`] access during
 //! concurrent recording risks host-side ordering bugs on some backends.
 
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 /// One deferred [`wgpu::Queue::write_buffer`] entry.
 enum QueueWrite {
@@ -29,10 +29,11 @@ enum QueueWrite {
 
 /// Collects per-frame [`wgpu::Queue::write_buffer`] calls for a single ordered replay.
 ///
-/// Writes from multiple threads are serialised through an internal [`Mutex`], and are replayed in
-/// the order they were pushed when [`FrameUploadBatch::drain_and_flush`] is called. Payloads are
-/// owned by the batch so the source slice can be dropped immediately after [`Self::write_buffer`]
-/// returns.
+/// Writes from multiple threads are serialised through an internal [`parking_lot::Mutex`] (picked
+/// over [`std::sync::Mutex`] so the hot per-view write path has an infallible `lock` and needs no
+/// poison-handling on every call), and are replayed in the order they were pushed when
+/// [`FrameUploadBatch::drain_and_flush`] is called. Payloads are owned by the batch so the source
+/// slice can be dropped immediately after [`Self::write_buffer`] returns.
 pub struct FrameUploadBatch {
     writes: Mutex<Vec<QueueWrite>>,
 }
@@ -54,10 +55,7 @@ impl FrameUploadBatch {
             offset,
             data: data.to_vec(),
         };
-        self.writes
-            .lock()
-            .expect("FrameUploadBatch mutex poisoned")
-            .push(write);
+        self.writes.lock().push(write);
     }
 
     /// Drains every pending write and replays it against `queue` in insertion order.
@@ -65,8 +63,7 @@ impl FrameUploadBatch {
     /// Called on the main thread after per-view encoding finishes and before the single
     /// [`wgpu::Queue::submit`]. After this returns the batch is empty.
     pub fn drain_and_flush(&self, queue: &wgpu::Queue) {
-        let drained =
-            std::mem::take(&mut *self.writes.lock().expect("FrameUploadBatch mutex poisoned"));
+        let drained = std::mem::take(&mut *self.writes.lock());
         for write in drained {
             match write {
                 QueueWrite::Buffer {
@@ -83,10 +80,7 @@ impl FrameUploadBatch {
     /// Returns the number of pending writes (diagnostics / tests).
     #[cfg(test)]
     pub(crate) fn pending_count(&self) -> usize {
-        self.writes
-            .lock()
-            .expect("FrameUploadBatch mutex poisoned")
-            .len()
+        self.writes.lock().len()
     }
 }
 

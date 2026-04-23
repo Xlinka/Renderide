@@ -4,9 +4,10 @@
 //! [`crate::render_graph::OcclusionViewId`]. The version field tracks whether the per-view
 //! cluster buffers changed since the last dispatch; when it does the bind group is rebuilt.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use hashbrown::HashMap;
+use parking_lot::Mutex;
 
 use crate::render_graph::OcclusionViewId;
 
@@ -15,16 +16,16 @@ use crate::render_graph::OcclusionViewId;
 /// Wraps a [`Mutex`] around a map of `(cluster_version, BindGroup)` pairs so that
 /// `record(&self, …)` can safely insert and look up bind groups without requiring
 /// `&mut self` on the pass, enabling concurrent per-view recording.
+///
+/// Uses [`parking_lot::Mutex`] to keep the `lock` API infallible — the hot per-view
+/// recording path must not defensively `.expect()` on every access.
 pub(super) struct ClusteredLightBindGroupCache(
     Mutex<HashMap<OcclusionViewId, (u64, Arc<wgpu::BindGroup>)>>,
 );
 
 impl std::fmt::Debug for ClusteredLightBindGroupCache {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let guard = self
-            .0
-            .lock()
-            .expect("ClusteredLightBindGroupCache poisoned");
+        let guard = self.0.lock();
         f.debug_struct("ClusteredLightBindGroupCache")
             .field("entry_count", &guard.len())
             .finish()
@@ -47,10 +48,7 @@ impl ClusteredLightBindGroupCache {
         cluster_ver: u64,
         create_fn: impl FnOnce() -> wgpu::BindGroup,
     ) -> Arc<wgpu::BindGroup> {
-        let mut cache = self
-            .0
-            .lock()
-            .expect("ClusteredLightBindGroupCache poisoned");
+        let mut cache = self.0.lock();
         let needs_rebuild = cache
             .get(&view_id)
             .is_none_or(|(ver, _)| *ver != cluster_ver);

@@ -477,7 +477,11 @@ impl TextureMipChainUploader {
                 Ok(res) => {
                     self.background_rx = None;
                     let pixels = res?;
-                    let (mip_level, gw, gh) = self.pending_mip.take().unwrap();
+                    let (mip_level, gw, gh) = self.pending_mip.take().ok_or_else(|| {
+                        TextureUploadError::from(
+                            "write_mip_chain: background decode completed without a pending mip slot; state machine desync",
+                        )
+                    })?;
 
                     write_one_mip(queue, texture, mip_level, gw, gh, wgpu_format, &pixels)?;
 

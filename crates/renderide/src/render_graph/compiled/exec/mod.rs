@@ -624,22 +624,16 @@ impl CompiledRenderGraph {
         device: &wgpu::Device,
         per_view_occlusion_info: &[(OcclusionViewId, HostCameraFrame)],
     ) -> Result<(), GraphExecuteError> {
-        let pv_post: Vec<usize> = self.schedule.per_view_steps().map(|s| s.pass_idx).collect();
-        let fg_post: Vec<usize> = self
-            .schedule
-            .frame_global_steps()
-            .map(|s| s.pass_idx)
-            .collect();
-
         // Frame-global post-submit (uses first view's occlusion slot).
         if let Some((first_occlusion, first_hc)) = per_view_occlusion_info.first().copied() {
+            profiling::scope!("graph::post_submit_frame_global");
             let mut post_ctx = PostSubmitContext {
                 device,
                 occlusion: &mut mv_ctx.backend.occlusion,
                 occlusion_view: first_occlusion,
                 host_camera: first_hc,
             };
-            for &pass_idx in &fg_post {
+            for &pass_idx in self.schedule.frame_global_pass_indices() {
                 self.passes[pass_idx]
                     .post_submit(&mut post_ctx)
                     .map_err(GraphExecuteError::Pass)?;
@@ -647,20 +641,23 @@ impl CompiledRenderGraph {
         }
 
         // Per-view post-submit.
-        for (view, (occlusion_view, host_camera)) in
-            views.iter().zip(per_view_occlusion_info.iter())
         {
-            let _ = view;
-            let mut post_ctx = PostSubmitContext {
-                device,
-                occlusion: &mut mv_ctx.backend.occlusion,
-                occlusion_view: *occlusion_view,
-                host_camera: *host_camera,
-            };
-            for &pass_idx in &pv_post {
-                self.passes[pass_idx]
-                    .post_submit(&mut post_ctx)
-                    .map_err(GraphExecuteError::Pass)?;
+            profiling::scope!("graph::post_submit_per_view");
+            for (view, (occlusion_view, host_camera)) in
+                views.iter().zip(per_view_occlusion_info.iter())
+            {
+                let _ = view;
+                let mut post_ctx = PostSubmitContext {
+                    device,
+                    occlusion: &mut mv_ctx.backend.occlusion,
+                    occlusion_view: *occlusion_view,
+                    host_camera: *host_camera,
+                };
+                for &pass_idx in self.schedule.per_view_pass_indices() {
+                    self.passes[pass_idx]
+                        .post_submit(&mut post_ctx)
+                        .map_err(GraphExecuteError::Pass)?;
+                }
             }
         }
         Ok(())

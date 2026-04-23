@@ -1,7 +1,9 @@
 //! Cached pipelines and bind layout for [`super::SceneColorComposePass`].
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
+
+use parking_lot::Mutex;
 
 const WGSL_MONO: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -83,9 +85,7 @@ impl SceneColorComposePipelineCache {
         } else {
             &self.mono
         };
-        let mut guard = map
-            .lock()
-            .expect("scene_color_compose pipeline cache poisoned");
+        let mut guard = map.lock();
         if let Some(p) = guard.get(&output_format) {
             return Arc::clone(p);
         }

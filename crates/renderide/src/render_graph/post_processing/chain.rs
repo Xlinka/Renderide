@@ -163,8 +163,9 @@ impl PostProcessChain {
             }
         }
 
-        let first_pass = first_pass.expect("active_effects is non-empty");
-        let last_pass = last_pass.expect("active_effects is non-empty");
+        let Some((first_pass, last_pass)) = first_pass.zip(last_pass) else {
+            return ChainOutput::PassThrough(input);
+        };
         ChainOutput::Chained {
             final_handle: current_in,
             first_pass,

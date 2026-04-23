@@ -300,7 +300,11 @@ impl Texture3dMipChainUploader {
                 Ok(res) => {
                     self.background_rx = None;
                     let pixels = res?;
-                    let (level, w, h, d) = self.pending_mip.take().unwrap();
+                    let (level, w, h, d) = self.pending_mip.take().ok_or_else(|| {
+                        TextureUploadError::from(
+                            "texture3d_write: background decode completed without a pending mip slot; state machine desync",
+                        )
+                    })?;
 
                     write_texture3d_volume_mip(&Texture3dVolumeMipWrite {
                         queue,

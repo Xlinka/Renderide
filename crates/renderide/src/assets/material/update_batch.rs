@@ -213,6 +213,7 @@ pub fn parse_materials_update_batch_into_store(
     store: &mut MaterialPropertyStore,
     options: &ParseMaterialBatchOptions,
 ) {
+    profiling::scope!("material::parse_update_batch");
     let _ = options.record_wire_metrics;
     let mut p = BatchParser {
         loader,

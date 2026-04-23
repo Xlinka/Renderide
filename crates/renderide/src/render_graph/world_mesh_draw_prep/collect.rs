@@ -669,15 +669,15 @@ pub fn collect_and_sort_world_mesh_draws_with_parallelism(
             "prepared renderables were built for a different render context than the per-view draw collection — material overrides would disagree"
         );
         profiling::scope!("mesh::collect_prepared");
-        let prepared_chunks: Vec<&[FramePreparedDraw]> =
-            prepared.draws.chunks(PREPARED_CHUNK_SIZE).collect();
         match parallelism {
-            WorldMeshDrawCollectParallelism::Full => prepared_chunks
-                .par_iter()
+            WorldMeshDrawCollectParallelism::Full => prepared
+                .draws
+                .par_chunks(PREPARED_CHUNK_SIZE)
                 .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, &filter_masks))
                 .collect(),
-            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => prepared_chunks
-                .iter()
+            WorldMeshDrawCollectParallelism::SerialInnerForNestedBatch => prepared
+                .draws
+                .chunks(PREPARED_CHUNK_SIZE)
                 .map(|chunk| collect_prepared_chunk(chunk, ctx, cache, &filter_masks))
                 .collect(),
         }

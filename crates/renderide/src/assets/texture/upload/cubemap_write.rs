@@ -308,7 +308,11 @@ impl CubemapMipChainUploader {
                 Ok(res) => {
                     self.background_rx = None;
                     let pixels = res?;
-                    let (face, mip_level, w, h) = self.pending_mip.take().unwrap();
+                    let (face, mip_level, w, h) = self.pending_mip.take().ok_or_else(|| {
+                        TextureUploadError::from(
+                            "cubemap_write: background decode completed without a pending mip slot; state machine desync",
+                        )
+                    })?;
 
                     write_cubemap_face_mip(&CubemapFaceMipWrite {
                         queue,

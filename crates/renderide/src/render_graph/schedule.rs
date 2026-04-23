@@ -32,11 +32,44 @@ pub struct FrameSchedule {
     pub steps: Vec<ScheduleStep>,
     /// Per-wave index ranges into `steps` (`steps[waves[w]]` are in wave `w`).
     pub waves: Vec<std::ops::Range<usize>>,
+    /// Cached `pass_idx` values for [`PassPhase::FrameGlobal`] steps, in execution order.
+    ///
+    /// Populated once by [`FrameSchedule::new`] so per-frame post-submit dispatch can iterate a
+    /// flat slice instead of re-filtering `steps` and allocating a scratch `Vec<usize>` every frame.
+    frame_global_pass_indices: Vec<usize>,
+    /// Cached `pass_idx` values for [`PassPhase::PerView`] steps, in execution order.
+    ///
+    /// Populated once by [`FrameSchedule::new`] so per-frame post-submit dispatch can iterate a
+    /// flat slice instead of re-filtering `steps` and allocating a scratch `Vec<usize>` every frame.
+    per_view_pass_indices: Vec<usize>,
 }
 
 impl FrameSchedule {
+    /// Builds a schedule from an already-ordered step list and matching wave ranges, and
+    /// precomputes the per-phase `pass_idx` slices exposed by
+    /// [`FrameSchedule::frame_global_pass_indices`] and
+    /// [`FrameSchedule::per_view_pass_indices`].
+    pub fn new(steps: Vec<ScheduleStep>, waves: Vec<std::ops::Range<usize>>) -> Self {
+        let frame_global_pass_indices = steps
+            .iter()
+            .filter(|s| s.phase == PassPhase::FrameGlobal)
+            .map(|s| s.pass_idx)
+            .collect();
+        let per_view_pass_indices = steps
+            .iter()
+            .filter(|s| s.phase == PassPhase::PerView)
+            .map(|s| s.pass_idx)
+            .collect();
+        Self {
+            steps,
+            waves,
+            frame_global_pass_indices,
+            per_view_pass_indices,
+        }
+    }
+
     /// Creates an empty schedule.
-    pub fn new() -> Self {
+    pub fn empty() -> Self {
         Self::default()
     }
 
@@ -54,6 +87,18 @@ impl FrameSchedule {
             .iter()
             .copied()
             .filter(|s| s.phase == PassPhase::PerView)
+    }
+
+    /// Returns cached `pass_idx` values for every [`PassPhase::FrameGlobal`] step, in execution
+    /// order. Used by the executor's post-submit dispatch to avoid per-frame allocation.
+    pub fn frame_global_pass_indices(&self) -> &[usize] {
+        &self.frame_global_pass_indices
+    }
+
+    /// Returns cached `pass_idx` values for every [`PassPhase::PerView`] step, in execution
+    /// order. Used by the executor's post-submit dispatch to avoid per-frame allocation.
+    pub fn per_view_pass_indices(&self) -> &[usize] {
+        &self.per_view_pass_indices
     }
 
     /// Number of retained passes.
@@ -200,31 +245,33 @@ mod tests {
 
     #[test]
     fn frame_global_steps_filters_correctly() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::PerView, 1, 1),
                 step(PassPhase::FrameGlobal, 2, 0),
                 step(PassPhase::PerView, 3, 1),
             ],
-            waves: vec![0..2, 2..4],
-        };
+            vec![0..2, 2..4],
+        );
         let global: Vec<_> = sched.frame_global_steps().collect();
         assert_eq!(global.len(), 2);
         assert_eq!(global[0].pass_idx, 0);
         assert_eq!(global[1].pass_idx, 2);
+        assert_eq!(sched.frame_global_pass_indices(), &[0usize, 2]);
+        assert_eq!(sched.per_view_pass_indices(), &[1usize, 3]);
     }
 
     #[test]
     fn per_view_steps_filters_correctly() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::PerView, 1, 1),
                 step(PassPhase::PerView, 2, 1),
             ],
-            waves: vec![0..1, 1..3],
-        };
+            vec![0..1, 1..3],
+        );
         let per_view: Vec<_> = sched.per_view_steps().collect();
         assert_eq!(per_view.len(), 2);
         assert_eq!(per_view[0].pass_idx, 1);
@@ -233,49 +280,51 @@ mod tests {
 
     #[test]
     fn pass_count_and_wave_count() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::PerView, 1, 1),
                 step(PassPhase::PerView, 2, 2),
             ],
-            waves: vec![0..1, 1..2, 2..3],
-        };
+            vec![0..1, 1..2, 2..3],
+        );
         assert_eq!(sched.pass_count(), 3);
         assert_eq!(sched.wave_count(), 3);
     }
 
     #[test]
     fn empty_schedule() {
-        let sched = FrameSchedule::new();
+        let sched = FrameSchedule::empty();
         assert_eq!(sched.pass_count(), 0);
         assert_eq!(sched.wave_count(), 0);
         assert_eq!(sched.frame_global_steps().count(), 0);
         assert_eq!(sched.per_view_steps().count(), 0);
+        assert!(sched.frame_global_pass_indices().is_empty());
+        assert!(sched.per_view_pass_indices().is_empty());
     }
 
     #[test]
     fn validate_accepts_well_formed_schedule() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::PerView, 1, 1),
                 step(PassPhase::PerView, 2, 1),
             ],
-            waves: vec![0..1, 1..3],
-        };
+            vec![0..1, 1..3],
+        );
         assert!(sched.validate().is_ok());
     }
 
     #[test]
     fn validate_rejects_per_view_before_frame_global() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::PerView, 0, 0),
                 step(PassPhase::FrameGlobal, 1, 0),
             ],
-            waves: core::iter::once(0..2).collect(),
-        };
+            core::iter::once(0..2).collect(),
+        );
         let err = sched.validate().unwrap_err();
         assert!(matches!(
             err,
@@ -285,13 +334,13 @@ mod tests {
 
     #[test]
     fn validate_rejects_wave_inversion() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 1),
                 step(PassPhase::PerView, 1, 0),
             ],
-            waves: core::iter::once(0..2).collect(),
-        };
+            core::iter::once(0..2).collect(),
+        );
         // Step 1 is PerView after a FrameGlobal — that part is fine — but wave_idx 0 < 1.
         let err = sched.validate().unwrap_err();
         assert!(matches!(
@@ -302,29 +351,29 @@ mod tests {
 
     #[test]
     fn validate_rejects_wave_range_gap() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::PerView, 1, 1),
             ],
-            waves: vec![0..1, 2..2], // gap at index 1
-        };
+            vec![0..1, 2..2], // gap at index 1
+        );
         let err = sched.validate().unwrap_err();
         assert!(matches!(err, ScheduleValidationError::WaveRangeGap { .. }));
     }
 
     #[test]
     fn hud_snapshot_counts_phases_and_wave_sizes() {
-        let sched = FrameSchedule {
-            steps: vec![
+        let sched = FrameSchedule::new(
+            vec![
                 step(PassPhase::FrameGlobal, 0, 0),
                 step(PassPhase::FrameGlobal, 1, 0),
                 step(PassPhase::PerView, 2, 1),
                 step(PassPhase::PerView, 3, 1),
                 step(PassPhase::PerView, 4, 2),
             ],
-            waves: vec![0..2, 2..4, 4..5],
-        };
+            vec![0..2, 2..4, 4..5],
+        );
         let snap = ScheduleHudSnapshot::from_schedule(&sched);
         assert_eq!(snap.pass_count, 5);
         assert_eq!(snap.wave_count, 3);
