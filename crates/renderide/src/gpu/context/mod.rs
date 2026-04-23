@@ -117,7 +117,33 @@ pub(super) async fn request_device_for_adapter(
         })
         .await
         .map_err(|e| GpuError::Device(format!("{e:?}")))?;
+    install_uncaptured_error_handler(&device);
     Ok((Arc::new(device), queue))
+}
+
+/// Installs a non-panicking uncaptured error handler on `device` so stray wgpu validation
+/// errors (for example, a [`wgpu::Device::create_view`] on a texture left invalid by a
+/// device-lost event) are logged instead of terminating the process via wgpu's default
+/// panicking handler. Callers that pass an externally built device (OpenXR bootstrap) must
+/// invoke this explicitly so that path gets the same protection as the owned-device paths.
+pub(super) fn install_uncaptured_error_handler(device: &wgpu::Device) {
+    device.on_uncaptured_error(Arc::new(|err: wgpu::Error| match err {
+        wgpu::Error::OutOfMemory { source } => {
+            logger::error!("wgpu out-of-memory error: {source}");
+        }
+        wgpu::Error::Validation {
+            description,
+            source,
+        } => {
+            logger::error!("wgpu validation error: {description} ({source})");
+        }
+        wgpu::Error::Internal {
+            description,
+            source,
+        } => {
+            logger::error!("wgpu internal error: {description} ({source})");
+        }
+    }));
 }
 
 /// GPU stack for presentation and future render passes.
