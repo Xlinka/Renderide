@@ -45,11 +45,15 @@ impl WindowsMapping {
 impl Drop for WindowsMapping {
     fn drop(&mut self) {
         if !self.view.Value.is_null() {
+            // SAFETY: `self.view` was returned by `MapViewOfFile` and is owned by `self`; unmapped
+            // exactly once on drop.
             unsafe {
                 UnmapViewOfFile(self.view);
             }
         }
         if !self.map_handle.is_null() && self.map_handle != INVALID_HANDLE_VALUE {
+            // SAFETY: `self.map_handle` was opened in `open_queue` and is owned by `self`; closed
+            // exactly once on drop.
             unsafe {
                 CloseHandle(self.map_handle);
             }
@@ -74,9 +78,12 @@ pub(super) fn open_queue(options: &QueueOptions) -> Result<(WindowsMapping, Sema
 
     let map_handle = create_or_open_file_mapping(&name_wide, storage_size)?;
 
+    // SAFETY: `map_handle` was just returned as valid by `create_or_open_file_mapping`; zero
+    // offsets request a full-length view.
     let view = unsafe { MapViewOfFile(map_handle, FILE_MAP_ALL_ACCESS, 0, 0, storage_size) };
 
     if view.Value.is_null() {
+        // SAFETY: `map_handle` is live; closed exactly once on this error path.
         unsafe { CloseHandle(map_handle) };
         return Err(OpenError(io::Error::other(format!(
             "MapViewOfFile failed for queue: {}",
@@ -111,6 +118,8 @@ fn create_or_open_file_mapping(
     let mut wait_sleep_ms: u64 = 0;
 
     loop {
+        // SAFETY: `name` is a NUL-terminated wide string; `INVALID_HANDLE_VALUE` plus a non-zero
+        // size requests an anonymous (pagefile-backed) named mapping.
         let handle = unsafe {
             CreateFileMappingW(
                 INVALID_HANDLE_VALUE,
@@ -126,6 +135,7 @@ fn create_or_open_file_mapping(
             return Ok(handle);
         }
 
+        // SAFETY: `name` is a NUL-terminated wide string.
         let handle = unsafe { OpenFileMappingW(FILE_MAP_ALL_ACCESS, 0, name.as_ptr()) };
 
         if !handle.is_null() && handle != INVALID_HANDLE_VALUE {

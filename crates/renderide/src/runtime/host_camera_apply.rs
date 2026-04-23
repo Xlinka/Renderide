@@ -31,7 +31,7 @@ pub(crate) fn apply_frame_submit_fields(host_camera: &mut HostCameraFrame, data:
     });
 }
 
-/// Head-output matrix from the active main render space root (legacy Unity `HeadOutput` path).
+/// Head-output matrix derived from the active main render space root (the host `HeadOutput` pose).
 pub(crate) fn head_output_from_active_main_space(scene: &SceneCoordinator) -> Mat4 {
     scene
         .active_main_space()

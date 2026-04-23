@@ -220,7 +220,7 @@ public partial class TypeAnalyzer
                     $"{type.FullName}: StructLayout.Size={declaredSize} differs from Marshal.SizeOf={marshalSize}; using Marshal.SizeOf for HostInteropSizeBytes.");
             }
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is ArgumentException or MissingMethodException)
         {
             _logger.LogWarning(LogCategory.Analysis, $"{type.FullName}: Marshal.SizeOf failed: {ex.Message}");
         }

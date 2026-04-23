@@ -13,7 +13,7 @@ pub type MaterialPropertySemanticHook = Arc<dyn Fn(&str, i32) + Send + Sync>;
 /// Intern table and optional name→semantics hooks (e.g. mapping `_MainTex` to a material family’s slot).
 ///
 /// Hooks are invoked on every host property-id **request** for a non-empty name (including when the
-/// name was already interned), matching the “apply each request row” behavior of the legacy renderer.
+/// name was already interned); callers that stream per-row request batches see every row observed.
 pub struct PropertyIdRegistry {
     inner: Mutex<PropertyIdRegistryInner>,
 }

@@ -24,6 +24,7 @@ use crate::scene::{
 use crate::shared::RenderingContext;
 
 use super::material_batch_cache::FrameMaterialBatchCache;
+use super::material_batch_cache::MaterialResolveCtx;
 use super::prepared::{FramePreparedDraw, FramePreparedRenderables};
 use super::sort::{batch_key_for_slot_cached, sort_world_mesh_draws, sort_world_mesh_draws_serial};
 use super::types::{WorldMeshDrawCollection, WorldMeshDrawItem};
@@ -309,10 +310,12 @@ fn push_one_slot_draw(
         slot.property_block_id,
         draw.skinned,
         cache,
-        ctx.material_dict,
-        ctx.material_router,
-        ctx.pipeline_property_ids,
-        ctx.shader_perm,
+        MaterialResolveCtx {
+            dict: ctx.material_dict,
+            router: ctx.material_router,
+            pipeline_property_ids: ctx.pipeline_property_ids,
+            shader_perm: ctx.shader_perm,
+        },
     );
     let camera_distance_sq = if batch_key.alpha_blended {
         match rigid_world_matrix {
@@ -550,10 +553,12 @@ fn collect_prepared_chunk(
             d.property_block_id,
             d.skinned,
             cache,
-            ctx.material_dict,
-            ctx.material_router,
-            ctx.pipeline_property_ids,
-            ctx.shader_perm,
+            MaterialResolveCtx {
+                dict: ctx.material_dict,
+                router: ctx.material_router,
+                pipeline_property_ids: ctx.pipeline_property_ids,
+                shader_perm: ctx.shader_perm,
+            },
         );
         let camera_distance_sq = if batch_key.alpha_blended {
             match rigid_world_matrix {

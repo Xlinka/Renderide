@@ -412,7 +412,7 @@ pub(super) fn precompute_material_bind_groups(
 }
 
 /// Collects forward draws and uploads per-view data. Returns `None` when required per-draw
-/// resources are unavailable, matching the legacy pass's early-out behavior.
+/// resources are unavailable so the pass can early-out without recording work.
 pub(super) fn prepare_world_mesh_forward_frame(
     device: &wgpu::Device,
     queue: &wgpu::Queue,

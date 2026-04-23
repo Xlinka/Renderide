@@ -43,6 +43,8 @@ impl PlatformGroup {
             LimitFlags: JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             ..unsafe { std::mem::zeroed() }
         };
+        // SAFETY: `JOBOBJECT_EXTENDED_LIMIT_INFORMATION` is a POD Win32 struct; all-zero is a valid
+        // bit pattern for unused fields.
         let info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
             BasicLimitInformation: basic,
             ..unsafe { std::mem::zeroed() }

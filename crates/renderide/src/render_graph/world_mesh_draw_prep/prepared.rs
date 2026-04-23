@@ -166,6 +166,25 @@ impl FramePreparedRenderables {
     }
 }
 
+/// One renderable's identity and mesh handles, threaded into [`expand_renderer_slots`].
+///
+/// Bundles the per-renderable fields that `expand_space_into` has already resolved so the slot
+/// expander doesn't take seven independent parameters.
+struct RenderableExpansion<'a> {
+    /// Render space the renderable lives in.
+    space_id: RenderSpaceId,
+    /// Index of the renderable within its kind-specific list (static or skinned).
+    renderable_index: usize,
+    /// Renderer record (shared base for static and skinned variants).
+    renderer: &'a crate::scene::StaticMeshRenderer,
+    /// GPU mesh resolved from the mesh pool.
+    mesh: &'a crate::assets::mesh::GpuMesh,
+    /// Whether this renderable is on the skinned path.
+    skinned: bool,
+    /// Whether the skinned mesh deforms into world space via the skin cache.
+    world_space_deformed: bool,
+}
+
 /// Expands every valid renderer (static and skinned) in `space_id` into `out`.
 fn expand_space_into(
     out: &mut Vec<FramePreparedDraw>,
@@ -194,13 +213,15 @@ fn expand_space_into(
         expand_renderer_slots(
             out,
             scene,
-            space_id,
-            renderable_index,
-            r,
-            mesh,
             render_context,
-            /* skinned = */ false,
-            /* world_space_deformed = */ false,
+            RenderableExpansion {
+                space_id,
+                renderable_index,
+                renderer: r,
+                mesh,
+                skinned: false,
+                world_space_deformed: false,
+            },
         );
     }
 
@@ -220,13 +241,15 @@ fn expand_space_into(
         expand_renderer_slots(
             out,
             scene,
-            space_id,
-            renderable_index,
-            r,
-            mesh,
             render_context,
-            /* skinned = */ true,
-            world_space_deformed,
+            RenderableExpansion {
+                space_id,
+                renderable_index,
+                renderer: r,
+                mesh,
+                skinned: true,
+                world_space_deformed,
+            },
         );
     }
 }
@@ -236,18 +259,20 @@ fn expand_space_into(
 /// Mirrors [`super::collect::push_draws_for_renderer`]'s slot resolution and
 /// [`super::collect::push_one_slot_draw`]'s override / validity guards so the per-view collection
 /// path can iterate prepared draws unconditionally.
-#[allow(clippy::too_many_arguments)]
 fn expand_renderer_slots(
     out: &mut Vec<FramePreparedDraw>,
     scene: &SceneCoordinator,
-    space_id: RenderSpaceId,
-    renderable_index: usize,
-    renderer: &crate::scene::StaticMeshRenderer,
-    mesh: &crate::assets::mesh::GpuMesh,
     render_context: RenderingContext,
-    skinned: bool,
-    world_space_deformed: bool,
+    renderable: RenderableExpansion<'_>,
 ) {
+    let RenderableExpansion {
+        space_id,
+        renderable_index,
+        renderer,
+        mesh,
+        skinned,
+        world_space_deformed,
+    } = renderable;
     let fallback_slot;
     let slots: &[MeshMaterialSlot] = if !renderer.material_slots.is_empty() {
         &renderer.material_slots

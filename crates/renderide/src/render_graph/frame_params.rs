@@ -303,9 +303,8 @@ pub struct FrameSystemsShared<'a> {
 /// Per-view surface and camera state for one render target within a multi-view frame.
 ///
 /// All fields are value types or immutable references: they are derived from the resolved view
-/// target before recording begins and do not change during per-view pass execution. Phase 4
-/// milestone E promotes this struct to be the primary per-view context type, replacing the
-/// legacy [`FrameRenderParams`].
+/// target before recording begins and do not change during per-view pass execution. This is the
+/// primary per-view context type; [`FrameRenderParams`] remains during a staged migration.
 pub struct FrameRenderParamsView<'a> {
     /// Backing depth texture for the main forward pass (copy source for scene-depth snapshots).
     pub depth_texture: &'a wgpu::Texture,

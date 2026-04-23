@@ -26,6 +26,24 @@ use crate::materials::{
 use crate::pipelines::ShaderPermutation;
 use crate::scene::{MeshMaterialSlot, RenderSpaceId, SceneCoordinator, StaticMeshRenderer};
 
+/// Read-only material-resolution context threaded through the cache refresh walker and the cached
+/// batch-key lookup.
+///
+/// Bundles the four handles that every batch-key computation needs: the material dictionary for
+/// shader assignment and property-block lookups, the router for pipeline selection, the pipeline
+/// property ids for render-state decoding, and the active shader permutation.
+#[derive(Copy, Clone)]
+pub(super) struct MaterialResolveCtx<'a> {
+    /// Material property dictionary for batch keys.
+    pub dict: &'a MaterialDictionary<'a>,
+    /// Shader stem / pipeline routing.
+    pub router: &'a MaterialRouter,
+    /// Interned material property ids that affect pipeline state.
+    pub pipeline_property_ids: &'a MaterialPipelinePropertyIds,
+    /// Default vs multiview permutation for embedded materials.
+    pub shader_perm: ShaderPermutation,
+}
+
 /// Batch key fields derived from one `(material_asset_id, property_block_id)` pair.
 ///
 /// All fields mirror what `batch_key_for_slot` computes on every draw; caching here avoids
@@ -151,6 +169,12 @@ impl FrameMaterialBatchCache {
         self.frame_counter = self.frame_counter.wrapping_add(1);
         let current_frame = self.frame_counter;
         let router_gen = router.generation();
+        let ctx = MaterialResolveCtx {
+            dict,
+            router,
+            pipeline_property_ids,
+            shader_perm,
+        };
 
         let active_space_ids: Vec<RenderSpaceId> = scene
             .render_space_ids()
@@ -158,17 +182,7 @@ impl FrameMaterialBatchCache {
             .collect();
 
         for space_id in active_space_ids {
-            visit_space(
-                self,
-                scene,
-                space_id,
-                dict,
-                router,
-                pipeline_property_ids,
-                shader_perm,
-                router_gen,
-                current_frame,
-            );
+            visit_space(self, scene, space_id, ctx, router_gen, current_frame);
         }
 
         // Evict entries not referenced this frame so the cache tracks the live working set.
@@ -179,21 +193,17 @@ impl FrameMaterialBatchCache {
 
     /// Ensures the cache has a valid entry for `(material_asset_id, property_block_id)` and
     /// stamps it as used this frame. Resolves / re-resolves on miss or generation mismatch.
-    #[allow(clippy::too_many_arguments)]
     fn touch_or_refresh(
         &mut self,
         material_asset_id: i32,
         property_block_id: Option<i32>,
-        dict: &MaterialDictionary<'_>,
-        router: &MaterialRouter,
-        pipeline_property_ids: &MaterialPipelinePropertyIds,
-        shader_perm: ShaderPermutation,
+        ctx: MaterialResolveCtx<'_>,
         router_gen: u64,
         current_frame: u64,
     ) {
-        let material_gen = dict.material_generation(material_asset_id);
+        let material_gen = ctx.dict.material_generation(material_asset_id);
         let property_block_gen = property_block_id
-            .map(|b| dict.property_block_generation(b))
+            .map(|b| ctx.dict.property_block_generation(b))
             .unwrap_or(0);
 
         let key = (material_asset_id, property_block_id);
@@ -202,7 +212,7 @@ impl FrameMaterialBatchCache {
                 if entry.material_gen == material_gen
                     && entry.property_block_gen == property_block_gen
                     && entry.router_gen == router_gen
-                    && entry.shader_perm == shader_perm =>
+                    && entry.shader_perm == ctx.shader_perm =>
             {
                 entry.last_used_frame = current_frame;
             }
@@ -210,10 +220,10 @@ impl FrameMaterialBatchCache {
                 let batch = resolve_material_batch(
                     material_asset_id,
                     property_block_id,
-                    dict,
-                    router,
-                    pipeline_property_ids,
-                    shader_perm,
+                    ctx.dict,
+                    ctx.router,
+                    ctx.pipeline_property_ids,
+                    ctx.shader_perm,
                 );
                 self.entries.insert(
                     key,
@@ -222,7 +232,7 @@ impl FrameMaterialBatchCache {
                         material_gen,
                         property_block_gen,
                         router_gen,
-                        shader_perm,
+                        shader_perm: ctx.shader_perm,
                         last_used_frame: current_frame,
                     },
                 );
@@ -233,15 +243,11 @@ impl FrameMaterialBatchCache {
 
 /// Walks one render space's renderer lists and ensures every referenced material slot has a fresh
 /// cache entry.
-#[allow(clippy::too_many_arguments)]
 fn visit_space(
     cache: &mut FrameMaterialBatchCache,
     scene: &SceneCoordinator,
     space_id: RenderSpaceId,
-    dict: &MaterialDictionary<'_>,
-    router: &MaterialRouter,
-    pipeline_property_ids: &MaterialPipelinePropertyIds,
-    shader_perm: ShaderPermutation,
+    ctx: MaterialResolveCtx<'_>,
     router_gen: u64,
     current_frame: u64,
 ) {
@@ -250,42 +256,20 @@ fn visit_space(
     };
     for r in &space.static_mesh_renderers {
         if r.mesh_asset_id >= 0 {
-            visit_renderer(
-                cache,
-                r,
-                dict,
-                router,
-                pipeline_property_ids,
-                shader_perm,
-                router_gen,
-                current_frame,
-            );
+            visit_renderer(cache, r, ctx, router_gen, current_frame);
         }
     }
     for sk in &space.skinned_mesh_renderers {
         if sk.base.mesh_asset_id >= 0 {
-            visit_renderer(
-                cache,
-                &sk.base,
-                dict,
-                router,
-                pipeline_property_ids,
-                shader_perm,
-                router_gen,
-                current_frame,
-            );
+            visit_renderer(cache, &sk.base, ctx, router_gen, current_frame);
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn visit_renderer(
     cache: &mut FrameMaterialBatchCache,
     r: &StaticMeshRenderer,
-    dict: &MaterialDictionary<'_>,
-    router: &MaterialRouter,
-    pipeline_property_ids: &MaterialPipelinePropertyIds,
-    shader_perm: ShaderPermutation,
+    ctx: MaterialResolveCtx<'_>,
     router_gen: u64,
     current_frame: u64,
 ) {
@@ -308,10 +292,7 @@ fn visit_renderer(
         cache.touch_or_refresh(
             slot.material_asset_id,
             slot.property_block_id,
-            dict,
-            router,
-            pipeline_property_ids,
-            shader_perm,
+            ctx,
             router_gen,
             current_frame,
         );
@@ -385,7 +366,7 @@ mod tests {
     use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind};
     use crate::pipelines::ShaderPermutation;
 
-    use super::FrameMaterialBatchCache;
+    use super::{FrameMaterialBatchCache, MaterialResolveCtx};
 
     fn make_test_deps() -> (MaterialPropertyStore, MaterialRouter, PropertyIdRegistry) {
         let store = MaterialPropertyStore::new();
@@ -401,15 +382,27 @@ mod tests {
         cache: &mut FrameMaterialBatchCache,
         mat: i32,
         pb: Option<i32>,
-        dict: &MaterialDictionary<'_>,
-        router: &MaterialRouter,
-        ids: &MaterialPipelinePropertyIds,
-        perm: ShaderPermutation,
+        ctx: MaterialResolveCtx<'_>,
         frame: u64,
     ) {
         cache.frame_counter = frame;
-        let rgen = router.generation();
-        cache.touch_or_refresh(mat, pb, dict, router, ids, perm, rgen, frame);
+        let rgen = ctx.router.generation();
+        cache.touch_or_refresh(mat, pb, ctx, rgen, frame);
+    }
+
+    /// Helper that bundles the four handles into a [`MaterialResolveCtx`] for a test call site.
+    fn make_ctx<'a>(
+        dict: &'a MaterialDictionary<'a>,
+        router: &'a MaterialRouter,
+        ids: &'a MaterialPipelinePropertyIds,
+        perm: ShaderPermutation,
+    ) -> MaterialResolveCtx<'a> {
+        MaterialResolveCtx {
+            dict,
+            router,
+            pipeline_property_ids: ids,
+            shader_perm: perm,
+        }
     }
 
     #[test]
@@ -422,10 +415,7 @@ mod tests {
             &mut cache,
             42,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         assert!(cache.get(42, None).is_some());
@@ -443,10 +433,7 @@ mod tests {
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         let before = cache.entries.get(&(1, None)).unwrap().clone();
@@ -454,10 +441,7 @@ mod tests {
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             2,
         );
         let after = cache.entries.get(&(1, None)).unwrap();
@@ -478,10 +462,7 @@ mod tests {
                 &mut cache,
                 1,
                 None,
-                &dict,
-                &router,
-                &ids,
-                ShaderPermutation(0),
+                make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
                 1,
             );
         }
@@ -493,10 +474,7 @@ mod tests {
                 &mut cache,
                 1,
                 None,
-                &dict,
-                &router,
-                &ids,
-                ShaderPermutation(0),
+                make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
                 2,
             );
         }
@@ -514,10 +492,7 @@ mod tests {
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         let rgen_before = cache.entries.get(&(1, None)).unwrap().router_gen;
@@ -529,10 +504,7 @@ mod tests {
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             2,
         );
         let rgen_after = cache.entries.get(&(1, None)).unwrap().router_gen;
@@ -549,20 +521,14 @@ mod tests {
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         touch(
             &mut cache,
             1,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(1),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(1)),
             2,
         );
         assert_eq!(
@@ -581,20 +547,14 @@ mod tests {
             &mut cache,
             10,
             None,
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         touch(
             &mut cache,
             10,
             Some(99),
-            &dict,
-            &router,
-            &ids,
-            ShaderPermutation(0),
+            make_ctx(&dict, &router, &ids, ShaderPermutation(0)),
             1,
         );
         assert_eq!(cache.len(), 2);

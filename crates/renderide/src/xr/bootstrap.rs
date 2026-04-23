@@ -111,9 +111,12 @@ fn verify_device_has_wait_semaphores(
     vk_instance: &ash::Instance,
     device: vk::Device,
 ) -> Result<(), XrBootstrapError> {
+    // SAFETY: `vk_instance` is a valid Vulkan instance and `device` is a `VkDevice` it created;
+    // the C-string literal has static lifetime and is NUL-terminated.
     let addr_core = unsafe {
         (vk_instance.fp_v1_0().get_device_proc_addr)(device, c"vkWaitSemaphores".as_ptr())
     };
+    // SAFETY: same preconditions as above.
     let addr_khr = unsafe {
         (vk_instance.fp_v1_0().get_device_proc_addr)(device, c"vkWaitSemaphoresKHR".as_ptr())
     };
@@ -131,6 +134,9 @@ fn verify_device_has_wait_semaphores(
 fn load_xr_entry() -> Result<xr::Entry, xr::LoadError> {
     let paths = super::openxr_loader_paths::openxr_loader_candidate_paths();
     for path in paths {
+        // SAFETY: `xr::Entry::load_from` dynamically loads the OpenXR loader from `path`; the
+        // crate requires callers to guarantee the library at that path is a valid, ABI-compatible
+        // OpenXR loader. The candidate paths come from platform-known install locations.
         match unsafe { xr::Entry::load_from(&path) } {
             Ok(entry) => {
                 logger::debug!("OpenXR loader loaded from {}", path.display());
@@ -141,6 +147,8 @@ fn load_xr_entry() -> Result<xr::Entry, xr::LoadError> {
             }
         }
     }
+    // SAFETY: `xr::Entry::load()` uses the default dynamic-linker search for the OpenXR loader;
+    // relies on the platform's standard library search path to resolve a valid loader.
     match unsafe { xr::Entry::load() } {
         Ok(entry) => {
             logger::debug!("OpenXR loader loaded via default library search");
@@ -243,9 +251,13 @@ fn create_openxr_vulkan_instance(
     gpu_validation_layers: bool,
     reqs: &VulkanGraphicsRequirements,
 ) -> Result<OpenxrAshVkInstance, XrBootstrapError> {
+    // SAFETY: `ash::Entry::load()` dynamically loads the platform's Vulkan loader. Relies on the
+    // dynamic linker's standard search path to locate a compatible `libvulkan`.
     let vk_entry =
         unsafe { ash::Entry::load() }.map_err(|e| XrBootstrapError::Vulkan(e.to_string()))?;
 
+    // SAFETY: `vk_entry` was just successfully loaded; calling
+    // `vkEnumerateInstanceVersion` via its static function table is sound.
     let instance_api_version = match unsafe { vk_entry.try_enumerate_instance_version() } {
         Ok(Some(v)) => v,
         Ok(None) => vk::API_VERSION_1_0,
@@ -277,6 +289,11 @@ fn create_openxr_vulkan_instance(
         .application_info(&vk_app_info)
         .enabled_extension_names(&extensions_cstr);
 
+    // SAFETY: transmuting `get_instance_proc_addr`'s first argument from `vk::Instance` to
+    // `*const c_void` is an ABI-compatible type pun — both are pointer-sized handles and OpenXR
+    // forwards them verbatim. `create_info` is fully initialised above and borrowed only for the
+    // call's duration. The resulting `vk::Instance` handle is loaded through `ash::Instance::load`,
+    // which ties it to `vk_entry`'s function table.
     let vk_instance = unsafe {
         let raw = xr_instance
             .create_vulkan_instance(
@@ -300,6 +317,8 @@ fn create_openxr_vulkan_instance(
         ash::Instance::load(vk_entry.static_fn(), vk::Instance::from_raw(handle))
     };
 
+    // SAFETY: `xr_instance` is a valid OpenXR instance; `vk_instance`'s handle is the VkInstance
+    // just created from it, so it is the correct argument for `xrGetVulkanGraphicsDeviceKHR`.
     let vk_physical_device = vk::PhysicalDevice::from_raw(unsafe {
         xr_instance
             .vulkan_graphics_device(xr_system_id, vk_instance.handle().as_raw() as *const c_void)?
@@ -335,6 +354,8 @@ fn build_wgpu_hal_and_queue_family(
         flags,
     } = ash_vk;
 
+    // SAFETY: `vk_physical_device` was enumerated from `vk_instance` above, so the call targets
+    // a valid physical device owned by that instance.
     let vk_device_properties =
         unsafe { vk_instance.get_physical_device_properties(vk_physical_device) };
     if vk_device_properties.api_version < vk_target_version {
@@ -345,6 +366,7 @@ fn build_wgpu_hal_and_queue_family(
         )));
     }
 
+    // SAFETY: as above — valid instance/device pair.
     let queue_family_index =
         unsafe { vk_instance.get_physical_device_queue_family_properties(vk_physical_device) }
             .into_iter()
@@ -358,6 +380,9 @@ fn build_wgpu_hal_and_queue_family(
             })
             .ok_or_else(|| XrBootstrapError::Message("No Vulkan graphics queue family.".into()))?;
 
+    // SAFETY: `vk_entry`/`vk_instance` are a live, matched pair just constructed above; the
+    // extensions list is the same one passed to `vk_instance` creation, preserving wgpu-hal's
+    // required invariants for `Instance::from_raw`.
     let wgpu_vk_instance = unsafe {
         hal::vulkan::Instance::from_raw(
             vk_entry.clone(),
@@ -458,6 +483,10 @@ fn create_vulkan_logical_device_openxr(
         .enabled_extension_names(&str_pointers);
     let device_create_info = enabled_phd_features.add_to_device_create(pre_info);
 
+    // SAFETY: see `create_openxr_vulkan_instance` — the same ABI-compatible pointer transmute.
+    // `vk_physical_device` was obtained from the matching `xr_instance`/`xr_system_id` pair;
+    // `device_create_info` references data that outlives the call. `ash::Device::load` ties the
+    // new `VkDevice` to `desc.vk_instance`'s function table.
     let vk_device = unsafe {
         let raw = desc
             .xr_instance
@@ -504,6 +533,9 @@ struct OpenXrSessionBootstrapDescriptor<'a> {
 fn openxr_session_state_and_input(
     desc: OpenXrSessionBootstrapDescriptor<'_>,
 ) -> Result<(super::session::XrSessionState, Option<OpenxrInput>), XrBootstrapError> {
+    // SAFETY: `desc.vk_instance`/`vk_physical_device`/`vk_device` form a matched OpenXR-negotiated
+    // Vulkan chain from `create_vulkan_logical_device_openxr`; `queue_family_index` was chosen
+    // above to be a graphics-capable family on the selected device.
     let (session, frame_wait, frame_stream) = unsafe {
         desc.xr_instance.create_session::<xr::Vulkan>(
             desc.xr_system_id,
@@ -565,6 +597,9 @@ fn wgpu_from_hal_openxr_chain(
     limits.max_multiview_view_count = limits.max_multiview_view_count.max(2);
     let memory_hints = wgpu::MemoryHints::default();
 
+    // SAFETY: `assembly.vk_device` was created through the wgpu-hal adapter described by
+    // `assembly.wgpu_exposed` with exactly the features/extensions passed here; the queue family
+    // and index were those used during `vkCreateDevice`.
     let wgpu_open_device = unsafe {
         assembly.wgpu_exposed.adapter.device_from_raw(
             assembly.vk_device,
@@ -579,7 +614,11 @@ fn wgpu_from_hal_openxr_chain(
     }
     .map_err(|e| XrBootstrapError::Wgpu(format!("device_from_raw: {e}")))?;
 
+    // SAFETY: `assembly.wgpu_vk_instance` is a valid `hal::vulkan::Instance` just built from a
+    // live `ash::Entry`/`ash::Instance` pair; ownership transfers into the wgpu `Instance`.
     let wgpu_instance = unsafe { wgpu::Instance::from_hal::<HalVulkan>(assembly.wgpu_vk_instance) };
+    // SAFETY: `assembly.wgpu_exposed` was enumerated from the same Vulkan instance now held by
+    // `wgpu_instance`, so the exposed adapter is coherent with it.
     let wgpu_adapter = unsafe { wgpu_instance.create_adapter_from_hal(assembly.wgpu_exposed) };
 
     let device_desc = wgpu::DeviceDescriptor {
@@ -591,6 +630,8 @@ fn wgpu_from_hal_openxr_chain(
         trace: Default::default(),
     };
 
+    // SAFETY: `wgpu_open_device` was opened from `wgpu_adapter`'s underlying hal adapter above;
+    // `device_desc` uses the same features/limits passed to `device_from_raw`.
     let (wgpu_device, wgpu_queue) =
         unsafe { wgpu_adapter.create_device_from_hal(wgpu_open_device, &device_desc) }
             .map_err(|e| XrBootstrapError::Wgpu(format!("create_device_from_hal: {e}")))?;

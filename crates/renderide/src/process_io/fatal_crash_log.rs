@@ -77,6 +77,10 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
         .set(UnixCrashFds { log_fd, term_fd })
         .map_err(|_| "fatal crash log fds already installed".to_string())?;
 
+    // SAFETY: `CrashHandler::attach` installs a process-wide signal handler; the closure only
+    // calls async-signal-safe operations (`libc::write`, `__errno_location`) and touches global
+    // state via a `OnceLock`. Invoked once during process startup; the handle is `mem::forget`ed
+    // below so the handler stays installed for the process lifetime.
     let handler = unsafe {
         CrashHandler::attach(crash_handler::make_crash_event(|ctx| {
             let mut buf = [0u8; 224];
@@ -96,6 +100,9 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
 #[cfg(unix)]
 impl UnixCrashFds {
     fn write_all(&self, data: &[u8]) {
+        // SAFETY: called from inside the signal handler; only uses async-signal-safe `libc::write`.
+        // The `RawFd` values were obtained from `File::into_raw_fd` / `OwnedFd::into_raw_fd` at
+        // install time and remain valid for the process lifetime (never closed).
         unsafe {
             let remainder = write_loop_fd(self.log_fd, data);
             if !remainder.is_empty() {
@@ -111,8 +118,14 @@ impl UnixCrashFds {
 
 /// Writes as much as possible to `fd`. Returns the **suffix of `data` that was not written** (empty
 /// on full success). Retries on **`EINTR`** only.
+///
+/// # Safety
+///
+/// `fd` must be an open file descriptor valid for `write(2)` for the duration of the call. Uses
+/// only async-signal-safe operations so it is callable from a crash signal handler.
 #[cfg(unix)]
 unsafe fn write_loop_fd(fd: std::os::unix::io::RawFd, mut data: &[u8]) -> &[u8] {
+    // SAFETY: see the function contract above — `fd` is a valid open descriptor for write(2).
     while !data.is_empty() {
         let n = libc::write(fd, data.as_ptr().cast(), data.len());
         if n < 0 {
@@ -130,9 +143,15 @@ unsafe fn write_loop_fd(fd: std::os::unix::io::RawFd, mut data: &[u8]) -> &[u8] 
 }
 
 /// Reads `errno` after a failed libc call (async-signal-safe on POSIX).
+///
+/// # Safety
+///
+/// Dereferences the thread-local errno pointer returned by libc. The pointer is guaranteed by
+/// POSIX to be valid for the lifetime of the thread; callers must not retain the reference.
 #[cfg(unix)]
 #[inline]
 unsafe fn errno_value() -> libc::c_int {
+    // SAFETY: see the function contract above — the thread-local errno pointer is always valid.
     #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         *libc::__errno_location()
@@ -224,6 +243,9 @@ fn install_impl(log_path: &Path) -> Result<(), String> {
         })
         .map_err(|_| "fatal crash log fds already installed".to_string())?;
 
+    // SAFETY: installs a process-wide vectored exception handler; the closure only performs
+    // synchronous writes to files guarded by poisoning-tolerant mutexes. Called once at startup;
+    // handler is leaked below so the installation persists for process lifetime.
     let handler = unsafe {
         CrashHandler::attach(crash_handler::make_crash_event(|ctx| {
             let mut buf = [0u8; 224];
@@ -367,6 +389,8 @@ mod formatter_tests {
     #[test]
     fn linux_fatal_signal_line_contains_signo() {
         use crash_handler::CrashContext;
+        // SAFETY: `CrashContext` on Linux is a plain aggregate of integer fields (siginfo_t-like);
+        // all-zero is a valid bit pattern. Test-only construction; never observed by the kernel.
         let mut ctx: CrashContext = unsafe { std::mem::zeroed() };
         ctx.siginfo.ssi_signo = 11;
         let mut buf = [0u8; 224];
@@ -381,6 +405,8 @@ mod formatter_tests {
     #[test]
     fn windows_fatal_line_contains_exception_code() {
         use crash_handler::CrashContext;
+        // SAFETY: Windows `CrashContext` is an integer/pointer aggregate; all-zero is a valid
+        // bit pattern. Test-only value that never traverses the real crash path.
         let mut ctx: CrashContext = unsafe { std::mem::zeroed() };
         ctx.exception_code = 0xC0000005u32 as i32;
         let mut buf = [0u8; 224];
@@ -404,6 +430,8 @@ mod formatter_tests {
     #[test]
     fn macos_fatal_line_no_exception() {
         use crash_handler::CrashContext;
+        // SAFETY: macOS `CrashContext` fields are integers/`Option<ExceptionInfo>`; all-zero is a
+        // valid bit pattern (`None` discriminant). Test-only value.
         let ctx: CrashContext = unsafe { std::mem::zeroed() };
         let mut buf = [0u8; 224];
         let n = super::format_macos_exception(&ctx, &mut buf);

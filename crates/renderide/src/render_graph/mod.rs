@@ -566,9 +566,9 @@ pub fn build_main_graph(
 
 /// Builds the main graph with a placeholder cache key for callers that still compile it once at attach.
 ///
-/// Uses [`crate::config::PostProcessingSettings::default`] (chain disabled) so the default graph
-/// matches the legacy behaviour of an empty post chain. Pass live settings via
-/// [`build_default_main_graph_with`] when the chain should be applied.
+/// Uses [`crate::config::PostProcessingSettings::default`] (chain disabled), yielding a graph with
+/// an empty post-processing chain. Pass live settings via [`build_default_main_graph_with`] when
+/// the chain should be applied.
 pub fn build_default_main_graph() -> Result<CompiledRenderGraph, GraphBuildError> {
     build_default_main_graph_with(&crate::config::PostProcessingSettings::default())
 }

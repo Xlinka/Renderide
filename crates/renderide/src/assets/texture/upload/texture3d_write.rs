@@ -8,8 +8,26 @@ use super::super::decode::{decode_mip_to_rgba8, needs_rgba8_decode_before_upload
 use super::super::layout::{host_format_is_compressed, mip_byte_len, mip_dimensions_at_level_3d};
 use super::error::TextureUploadError;
 use super::mip_write_common::{
-    is_rgba8_family, write_texture3d_volume_mip, Texture3dVolumeMipWrite,
+    is_rgba8_family, write_texture3d_volume_mip, MipUploadFormatCtx, Texture3dVolumeMipWrite,
 };
+
+/// Per-level 3D geometry bundle: volume dimensions plus the tight slice / volume byte sizes for
+/// one mip level.
+#[derive(Copy, Clone)]
+struct Texture3dMipGeom {
+    /// Width of the mip in texels.
+    w: u32,
+    /// Height of the mip in texels.
+    h: u32,
+    /// Depth of the mip in texels.
+    d: u32,
+    /// Mip level index for diagnostics.
+    level_idx: u32,
+    /// Tight byte length of one depth slice (stride × height).
+    slice_bytes: usize,
+    /// Tight byte length of the full volume (`slice_bytes × d`).
+    vol_bytes: usize,
+}
 
 /// Host mip dimensions, flat payload slice, and slice/volume byte sizes for one 3D level.
 type Texture3dMipPayload<'a> = (u32, u32, u32, &'a [u8], usize, usize);
@@ -84,20 +102,25 @@ fn texture3d_mip_volume_payload_slice<'a>(
 }
 
 /// Prepares decoded RGBA8 slab or passes raw host bytes through for 3D volume upload.
-#[allow(clippy::too_many_arguments)]
 fn texture3d_mip_to_upload_pixels(
-    asset_id: i32,
-    fmt_format: crate::shared::TextureFormat,
-    wgpu_format: wgpu::TextureFormat,
-    needs_rgba8_decode: bool,
-    w: u32,
-    h: u32,
-    d: u32,
-    level_idx: u32,
-    slice_bytes: usize,
-    vol_bytes: usize,
+    ctx: MipUploadFormatCtx,
+    geom: Texture3dMipGeom,
     mip_src: &[u8],
 ) -> Result<Vec<u8>, TextureUploadError> {
+    let MipUploadFormatCtx {
+        asset_id,
+        fmt_format,
+        wgpu_format,
+        needs_rgba8_decode,
+    } = ctx;
+    let Texture3dMipGeom {
+        w,
+        h,
+        d,
+        level_idx,
+        slice_bytes,
+        vol_bytes,
+    } = geom;
     let pixels = if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode || host_format_is_compressed(fmt_format) {
             let mut out = Vec::with_capacity(vol_bytes);
@@ -334,21 +357,23 @@ impl Texture3dMipChainUploader {
         let needs_rgba8_decode = needs_rgba8_decode_before_upload(device, fmt_format);
         let payload_arc = std::sync::Arc::clone(payload);
 
+        let ctx = MipUploadFormatCtx {
+            asset_id,
+            fmt_format,
+            wgpu_format,
+            needs_rgba8_decode,
+        };
+        let geom = Texture3dMipGeom {
+            w,
+            h,
+            d,
+            level_idx: level,
+            slice_bytes,
+            vol_bytes,
+        };
         rayon::spawn(move || {
             let mip_src = &payload_arc[mip_src_range];
-            let res = texture3d_mip_to_upload_pixels(
-                asset_id,
-                fmt_format,
-                wgpu_format,
-                needs_rgba8_decode,
-                w,
-                h,
-                d,
-                level,
-                slice_bytes,
-                vol_bytes,
-                mip_src,
-            );
+            let res = texture3d_mip_to_upload_pixels(ctx, geom, mip_src);
             let _ = tx.send(res);
         });
 

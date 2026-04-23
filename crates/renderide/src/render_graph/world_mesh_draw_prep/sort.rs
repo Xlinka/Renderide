@@ -14,7 +14,9 @@ use crate::materials::{
 };
 use crate::pipelines::ShaderPermutation;
 
-use super::material_batch_cache::{FrameMaterialBatchCache, ResolvedMaterialBatch};
+use super::material_batch_cache::{
+    FrameMaterialBatchCache, MaterialResolveCtx, ResolvedMaterialBatch,
+};
 use super::types::{MaterialDrawBatchKey, WorldMeshDrawItem};
 
 /// Builds a [`MaterialDrawBatchKey`] for one material slot from dictionary + router state.
@@ -113,16 +115,12 @@ fn batch_key_from_resolved(
 ///
 /// Falls back to the full dictionary / router lookup path when the material is not cached (e.g.
 /// render-context override materials not encountered during the eager pre-build pass).
-#[allow(clippy::too_many_arguments)]
 pub(super) fn batch_key_for_slot_cached(
     material_asset_id: i32,
     property_block_id: Option<i32>,
     skinned: bool,
     cache: &FrameMaterialBatchCache,
-    dict: &MaterialDictionary<'_>,
-    router: &MaterialRouter,
-    pipeline_property_ids: &MaterialPipelinePropertyIds,
-    shader_perm: ShaderPermutation,
+    ctx: MaterialResolveCtx<'_>,
 ) -> MaterialDrawBatchKey {
     if let Some(resolved) = cache.get(material_asset_id, property_block_id) {
         batch_key_from_resolved(material_asset_id, property_block_id, skinned, resolved)
@@ -131,10 +129,10 @@ pub(super) fn batch_key_for_slot_cached(
             material_asset_id,
             property_block_id,
             skinned,
-            dict,
-            router,
-            pipeline_property_ids,
-            shader_perm,
+            ctx.dict,
+            ctx.router,
+            ctx.pipeline_property_ids,
+            ctx.shader_perm,
         )
     }
 }

@@ -198,6 +198,7 @@ impl PassNode {
     }
 }
 
-// PassNode requires `Send` so per-view encoders can be built on rayon workers.
-// Each inner trait object is `Send` (enforced by the bounds on RasterPass, ComputePass, etc.).
+// SAFETY: every variant payload (`RasterPass`, `ComputePass`, …) is a `Box<dyn Trait + Send>`;
+// therefore every field of `PassNode` is `Send`, and the enum as a whole may be safely shared
+// across rayon worker threads when recording per-view encoders.
 unsafe impl Send for PassNode {}

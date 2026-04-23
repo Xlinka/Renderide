@@ -24,7 +24,7 @@ fn try_extract_settings(figment: Figment) -> Result<RendererSettings, figment::E
     figment.extract::<RendererSettings>()
 }
 
-#[allow(clippy::result_large_err)]
+#[allow(clippy::result_large_err)] // `figment::Error` is large; only used on startup paths.
 fn load_settings_from_toml_str(content: &str) -> Result<RendererSettings, figment::Error> {
     let figment = Figment::new()
         .merge(Serialized::defaults(RendererSettings::default()))

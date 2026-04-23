@@ -170,6 +170,8 @@ fn store_preserved_unix(stream: StdioStream, saved: i32) {
     use std::os::fd::FromRawFd;
     use std::os::fd::OwnedFd;
 
+    // SAFETY: `saved` was just produced by `libc::dup`, is open, owned by this process, and has
+    // not been handed to another `OwnedFd`/`File`. Transferring ownership to `OwnedFd` is sound.
     let owned = unsafe { OwnedFd::from_raw_fd(saved) };
     let file = File::from(owned);
     let cell = match stream {
@@ -187,6 +189,10 @@ fn try_redirect_unix_stream(
 ) -> Result<(), String> {
     use std::thread;
 
+    // SAFETY: all libc calls below operate on file descriptors that this function either just
+    // created (via `pipe`/`dup`) or received from the caller (`target_fd` is always a valid
+    // stdio fd). Ownership is tracked manually: each branch that errors out closes every fd it
+    // created; the success path transfers ownership into `OwnedFd` via `store_preserved_unix`.
     unsafe {
         let mut fds = [0i32; 2];
         if libc::pipe(fds.as_mut_ptr()) != 0 {
@@ -264,6 +270,8 @@ fn try_redirect_windows_stream(
     use windows_sys::Win32::System::Console::{GetStdHandle, SetStdHandle};
     use windows_sys::Win32::System::Pipes::CreatePipe;
 
+    // SAFETY: Win32 API calls on handles this function owns; each error path closes every
+    // handle it created, and the success path transfers handles into `OwnedHandle`/`File`.
     unsafe {
         let mut read_h: HANDLE = INVALID_HANDLE_VALUE;
         let mut write_h: HANDLE = INVALID_HANDLE_VALUE;
@@ -350,6 +358,8 @@ fn forward_pipe_lines_to_logger_unix(rfd: i32, stream: StdioStream) {
     use std::fs::File;
     use std::os::unix::io::FromRawFd;
 
+    // SAFETY: `rfd` is the read end of the pipe created in `try_redirect_unix_stream`; ownership
+    // is transferred exclusively to the spawned thread via this call and has no other owner.
     let f = unsafe { File::from_raw_fd(rfd) };
     forward_pipe_lines_to_logger_impl(f, stream);
 }

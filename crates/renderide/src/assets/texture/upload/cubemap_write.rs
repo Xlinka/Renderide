@@ -10,6 +10,7 @@ use super::super::layout::{
 use super::error::TextureUploadError;
 use super::mip_write_common::{
     is_rgba8_family, uncompressed_row_bytes, write_cubemap_face_mip, CubemapFaceMipWrite,
+    MipUploadFormatCtx,
 };
 use super::write_mip_chain::MipChainAdvance;
 
@@ -70,12 +71,8 @@ fn resolve_cubemap_face_mip_slice<'a>(
 }
 
 /// Converts host face mip bytes for [`write_cubemap_face_mip`] (decode, optional row flip).
-#[allow(clippy::too_many_arguments)]
 fn cubemap_mip_src_to_upload_pixels(
-    asset_id: i32,
-    fmt_format: crate::shared::TextureFormat,
-    wgpu_format: wgpu::TextureFormat,
-    needs_rgba8_decode: bool,
+    ctx: MipUploadFormatCtx,
     w: u32,
     h: u32,
     flip: bool,
@@ -83,6 +80,12 @@ fn cubemap_mip_src_to_upload_pixels(
     face: u32,
     mip_src: &[u8],
 ) -> Result<Vec<u8>, TextureUploadError> {
+    let MipUploadFormatCtx {
+        asset_id,
+        fmt_format,
+        wgpu_format,
+        needs_rgba8_decode,
+    } = ctx;
     let pixels = if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode || host_format_is_compressed(fmt_format) {
             decode_mip_to_rgba8(fmt_format, w, h, flip, mip_src).ok_or_else(|| {
@@ -400,20 +403,15 @@ impl CubemapMipChainUploader {
         let flip = self.flip;
         let face = self.face;
 
+        let ctx = MipUploadFormatCtx {
+            asset_id,
+            fmt_format,
+            wgpu_format,
+            needs_rgba8_decode,
+        };
         rayon::spawn(move || {
             let mip_src = &payload_arc[mip_src_range];
-            let res = cubemap_mip_src_to_upload_pixels(
-                asset_id,
-                fmt_format,
-                wgpu_format,
-                needs_rgba8_decode,
-                w,
-                h,
-                flip,
-                mip_i,
-                face,
-                mip_src,
-            );
+            let res = cubemap_mip_src_to_upload_pixels(ctx, w, h, flip, mip_i, face, mip_src);
             let _ = tx.send(res);
         });
 

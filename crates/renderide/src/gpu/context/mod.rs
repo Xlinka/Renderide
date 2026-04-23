@@ -1,18 +1,16 @@
 //! [`GpuContext`]: instance, surface, device, and swapchain state.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
-#[allow(dead_code)]
-fn _assert_queue_send_sync() {
+/// Compile-time assertion that `wgpu::Queue` is `Send + Sync`; relied on by the submission path.
+const _: fn() = || {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<wgpu::Queue>();
-}
-
-use super::frame_cpu_gpu_timing::{
-    make_gpu_done_callback, FrameCpuGpuTiming, FrameCpuGpuTimingHandle,
 };
-use super::instance_limits::{instance_flags_for_gpu_init, required_limits_for_adapter};
+
+use super::frame_cpu_gpu_timing::{make_gpu_done_callback, FrameCpuGpuTimingHandle};
+use super::instance_limits::required_limits_for_adapter;
 use super::limits::{GpuLimits, GpuLimitsError};
 use thiserror::Error;
 use winit::dpi::PhysicalSize;
@@ -23,7 +21,7 @@ use winit::window::Window;
 ///
 /// Per-format support is not uniform: e.g. [`wgpu::TextureFormat::Rgba8UnormSrgb`] may allow 4× but
 /// not 2× on some drivers; callers must use [`clamp_msaa_request_to_supported`] before creating textures.
-fn msaa_supported_sample_counts(
+pub(super) fn msaa_supported_sample_counts(
     adapter: &wgpu::Adapter,
     color: wgpu::TextureFormat,
     depth_stencil: wgpu::TextureFormat,
@@ -48,7 +46,7 @@ fn msaa_supported_sample_counts(
 /// and silently fall back to `sample_count = 1` via [`clamp_msaa_request_to_supported`]. Upstream
 /// per-format support for array multisampling currently tracks the same tiers as `MULTISAMPLE_RESOLVE`,
 /// so intersecting the regular `sample_count_supported` is sufficient when the device feature is on.
-fn msaa_supported_sample_counts_stereo(
+pub(super) fn msaa_supported_sample_counts_stereo(
     adapter: &wgpu::Adapter,
     color: wgpu::TextureFormat,
     depth_stencil: wgpu::TextureFormat,
@@ -87,7 +85,7 @@ fn clamp_msaa_request_to_supported(requested: u32, supported: &[u32]) -> u32 {
 /// queries around render-graph phases. Either feature being absent is gracefully tolerated:
 /// [`crate::profiling::GpuProfilerHandle::try_new`] disables timer queries when
 /// `TIMESTAMP_QUERY_INSIDE_ENCODERS` is missing.
-fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Features {
+pub(super) fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Features {
     let compression = wgpu::Features::TEXTURE_COMPRESSION_BC
         | wgpu::Features::TEXTURE_COMPRESSION_ETC2
         | wgpu::Features::TEXTURE_COMPRESSION_ASTC;
@@ -105,7 +103,7 @@ fn adapter_render_features_intersection(adapter: &wgpu::Adapter) -> wgpu::Featur
         | timestamp
 }
 
-async fn request_device_for_adapter(
+pub(super) async fn request_device_for_adapter(
     adapter: &wgpu::Adapter,
     required_features: wgpu::Features,
 ) -> Result<(Arc<wgpu::Device>, wgpu::Queue), GpuError> {
@@ -224,290 +222,6 @@ pub enum GpuError {
 }
 
 impl GpuContext {
-    /// Asynchronously builds GPU state for `window`.
-    ///
-    /// `gpu_validation_layers` selects whether to request backend validation before `WGPU_*` env
-    /// overrides; see [`crate::gpu::instance_flags_for_gpu_init`].
-    pub async fn new(
-        window: Arc<Window>,
-        vsync: bool,
-        gpu_validation_layers: bool,
-    ) -> Result<Self, GpuError> {
-        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
-        let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
-        instance_desc.flags = instance_flags;
-        let instance = wgpu::Instance::new(instance_desc);
-
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| GpuError::Surface(format!("{e:?}")))?;
-
-        let surface_safe: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface_safe),
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| GpuError::Adapter(format!("{e:?}")))?;
-
-        let required_features = adapter_render_features_intersection(&adapter);
-        let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
-
-        let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
-        let size = window.inner_size();
-        let mut config = surface_safe
-            .get_default_config(&adapter, size.width.max(1), size.height.max(1))
-            .ok_or(GpuError::SurfaceUnsupported)?;
-        config.present_mode = if vsync {
-            wgpu::PresentMode::AutoVsync
-        } else {
-            wgpu::PresentMode::AutoNoVsync
-        };
-        surface_safe.configure(&device, &config);
-
-        let adapter_info = adapter.get_info();
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(required_features);
-        let msaa_supported_sample_counts =
-            msaa_supported_sample_counts(&adapter, config.format, depth_stencil_format);
-        let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
-        let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
-            &adapter,
-            config.format,
-            depth_stencil_format,
-            required_features,
-        );
-        let msaa_max_stereo = msaa_supported_sample_counts_stereo
-            .last()
-            .copied()
-            .unwrap_or(1);
-        logger::info!(
-            "GPU: adapter={} backend={:?} present_mode={:?} instance_flags={:?} \
-             msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
-             msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
-            adapter_info.name,
-            adapter_info.backend,
-            config.present_mode,
-            instance_flags,
-            msaa_supported_sample_counts,
-            msaa_max,
-            msaa_supported_sample_counts_stereo,
-            msaa_max_stereo
-        );
-
-        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
-        if cfg!(feature = "tracy") && gpu_profiler.is_none() {
-            logger::warn!(
-                "GPU profiler unavailable: adapter lacks TIMESTAMP_QUERY_INSIDE_ENCODERS; \
-                 Tracy GPU timeline will be empty (CPU spans still work)"
-            );
-        }
-        let queue = Arc::new(queue);
-        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
-        Ok(Self {
-            driver_thread,
-            adapter_info,
-            msaa_supported_sample_counts,
-            msaa_supported_sample_counts_stereo,
-            swapchain_msaa_effective: 1,
-            swapchain_msaa_requested_stereo: 1,
-            swapchain_msaa_effective_stereo: 1,
-            limits,
-            device,
-            queue,
-            surface: Some(surface_safe),
-            config,
-            window: Some(window),
-            depth_attachment: None,
-            depth_extent_px: (0, 0),
-            primary_offscreen: None,
-            frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
-            gpu_profiler,
-        })
-    }
-
-    /// Builds a GPU stack with **no surface** for headless offscreen rendering (CI / golden tests).
-    ///
-    /// `--headless` means no window and no swapchain; adapter selection follows normal wgpu rules
-    /// (`Backends::all()`, no forced fallback). Developer machines typically use a discrete or
-    /// integrated GPU; CI runners with only Mesa lavapipe installed still pick the software Vulkan
-    /// ICD automatically.
-    ///
-    /// The synthesized [`wgpu::SurfaceConfiguration`] has `format = Rgba8UnormSrgb` and the
-    /// requested extent so the material system and render graph compile pipelines unchanged.
-    pub async fn new_headless(
-        width: u32,
-        height: u32,
-        gpu_validation_layers: bool,
-    ) -> Result<Self, GpuError> {
-        let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
-        let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
-        instance_desc.flags = instance_flags;
-        let instance = wgpu::Instance::new(instance_desc);
-
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: None,
-                force_fallback_adapter: false,
-            })
-            .await
-            .map_err(|e| {
-                GpuError::Adapter(format!(
-                    "no Vulkan adapter found ({e:?}). \
-                     Install drivers for your GPU, or for software rendering install \
-                     `mesa-vulkan-drivers` / `vulkan-swrast` (lavapipe) and verify a Vulkan ICD is present."
-                ))
-            })?;
-
-        let required_features = adapter_render_features_intersection(&adapter);
-        let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
-
-        let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
-
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            format,
-            width: width.max(1),
-            height: height.max(1),
-            present_mode: wgpu::PresentMode::AutoNoVsync,
-            desired_maximum_frame_latency: 1,
-            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-            view_formats: Vec::new(),
-        };
-        let adapter_info = adapter.get_info();
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(required_features);
-        let msaa_supported_sample_counts =
-            msaa_supported_sample_counts(&adapter, format, depth_stencil_format);
-        let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
-            &adapter,
-            format,
-            depth_stencil_format,
-            required_features,
-        );
-        logger::info!(
-            "GPU (headless): adapter={} backend={:?} extent={}x{} format={:?} instance_flags={:?}",
-            adapter_info.name,
-            adapter_info.backend,
-            config.width,
-            config.height,
-            config.format,
-            instance_flags,
-        );
-        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
-        let queue = Arc::new(queue);
-        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
-        Ok(Self {
-            driver_thread,
-            adapter_info,
-            msaa_supported_sample_counts,
-            msaa_supported_sample_counts_stereo,
-            swapchain_msaa_effective: 1,
-            swapchain_msaa_requested_stereo: 1,
-            swapchain_msaa_effective_stereo: 1,
-            limits,
-            device,
-            queue,
-            surface: None,
-            config,
-            window: None,
-            depth_attachment: None,
-            depth_extent_px: (0, 0),
-            primary_offscreen: None,
-            frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
-            gpu_profiler,
-        })
-    }
-
-    /// Builds GPU state using an existing wgpu instance/device from OpenXR bootstrap (mirror window).
-    pub fn new_from_openxr_bootstrap(
-        instance: &wgpu::Instance,
-        adapter: &wgpu::Adapter,
-        device: Arc<wgpu::Device>,
-        queue: Arc<wgpu::Queue>,
-        window: Arc<Window>,
-        vsync: bool,
-    ) -> Result<Self, GpuError> {
-        let surface = instance
-            .create_surface(window.clone())
-            .map_err(|e| GpuError::Surface(format!("{e:?}")))?;
-        let surface_safe: wgpu::Surface<'static> = unsafe { std::mem::transmute(surface) };
-        let size = window.inner_size();
-        let mut config = surface_safe
-            .get_default_config(adapter, size.width.max(1), size.height.max(1))
-            .ok_or(GpuError::SurfaceUnsupported)?;
-        config.present_mode = if vsync {
-            wgpu::PresentMode::AutoVsync
-        } else {
-            wgpu::PresentMode::AutoNoVsync
-        };
-        surface_safe.configure(&device, &config);
-        let adapter_info = adapter.get_info();
-        let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
-        let depth_stencil_format =
-            crate::render_graph::main_forward_depth_stencil_format(device.features());
-        let msaa_supported_sample_counts =
-            msaa_supported_sample_counts(adapter, config.format, depth_stencil_format);
-        let msaa_max = msaa_supported_sample_counts.last().copied().unwrap_or(1);
-        let msaa_supported_sample_counts_stereo = msaa_supported_sample_counts_stereo(
-            adapter,
-            config.format,
-            depth_stencil_format,
-            device.features(),
-        );
-        let msaa_max_stereo = msaa_supported_sample_counts_stereo
-            .last()
-            .copied()
-            .unwrap_or(1);
-        logger::info!(
-            "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?} \
-             msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
-             msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
-            adapter_info.name,
-            adapter_info.backend,
-            config.present_mode,
-            msaa_supported_sample_counts,
-            msaa_max,
-            msaa_supported_sample_counts_stereo,
-            msaa_max_stereo
-        );
-        let gpu_profiler = crate::profiling::GpuProfilerHandle::try_new(device.as_ref());
-        if cfg!(feature = "tracy") && gpu_profiler.is_none() {
-            logger::warn!(
-                "GPU profiler unavailable (OpenXR path): adapter lacks \
-                 TIMESTAMP_QUERY_INSIDE_ENCODERS; Tracy GPU timeline will be empty"
-            );
-        }
-        let driver_thread = super::driver_thread::DriverThread::new(Arc::clone(&queue));
-        Ok(Self {
-            driver_thread,
-            adapter_info,
-            msaa_supported_sample_counts,
-            msaa_supported_sample_counts_stereo,
-            swapchain_msaa_effective: 1,
-            swapchain_msaa_requested_stereo: 1,
-            swapchain_msaa_effective_stereo: 1,
-            limits,
-            device,
-            queue,
-            surface: Some(surface_safe),
-            config,
-            window: Some(window),
-            depth_attachment: None,
-            depth_extent_px: (0, 0),
-            primary_offscreen: None,
-            frame_timing: Arc::new(Mutex::new(FrameCpuGpuTiming::default())),
-            gpu_profiler,
-        })
-    }
-
     /// Updates vertical sync / present mode and reconfigures the surface (hot-reload from settings).
     pub fn set_vsync(&mut self, vsync: bool) {
         let mode = if vsync {
@@ -1141,3 +855,5 @@ mod msaa_stereo_feature_gate_tests {
         assert!(!stereo_feature_gate_passes(feats));
     }
 }
+
+mod init;

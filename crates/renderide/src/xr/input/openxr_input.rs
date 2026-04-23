@@ -116,9 +116,11 @@ pub struct OpenxrInput {
     right_profile_cache: AtomicU8,
     /// Kept alive for the OpenXR session; per-frame poses use the derived [`xr::Space`] handles.
     #[allow(dead_code)]
+    // lifetime-only field; dropped with the action set when the session ends.
     left_grip_pose: xr::Action<xr::Posef>,
     /// Kept alive for the OpenXR session; per-frame poses use the derived [`xr::Space`] handles.
     #[allow(dead_code)]
+    // lifetime-only field; dropped with the action set when the session ends.
     right_grip_pose: xr::Action<xr::Posef>,
     left_trigger: xr::Action<f32>,
     right_trigger: xr::Action<f32>,

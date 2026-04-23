@@ -9,7 +9,7 @@ use glam::{Mat4, Vec3, Vec4, Vec4Swizzles};
 
 use crate::shared::RenderBoundingBox;
 
-/// Epsilon for homogeneous clip half-space tests (aligned with legacy visibility checks).
+/// Epsilon for homogeneous clip half-space tests used by frustum culling.
 pub const HOMOGENEOUS_CLIP_EPS: f32 = 1e-5;
 
 /// Maximum absolute half-extent below which uploaded mesh bounds are treated as **untrusted** for culling.

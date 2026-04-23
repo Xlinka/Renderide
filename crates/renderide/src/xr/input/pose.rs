@@ -47,12 +47,11 @@ pub(super) fn index_pose_correction(
 /// `BodyNodeRotationOffset` on the hand device).
 ///
 /// The host does not hardcode these: `VR_Manager` forwards IPC `handPosition` / `handRotation` into
-/// `MappableTrackedObject.Initialize` at registration. Values here mirror the legacy Unity
-/// **SteamVR** driver (`SteamVRDriver.cs`): same Euler triples per controller class, plus
+/// `MappableTrackedObject.Initialize` at registration. Values here match the **SteamVR/OpenVR**
+/// grip-frame convention: same Euler triples per controller class, plus
 /// `handRotation *= Inverse(Euler(90°, 90°, 90°))` for Touch, Vive, and Generic (not for Index,
-/// WMR, HP Reverb, Pico). The old **Oculus** Unity driver used the OVR SDK (`OVRInput` local
-/// controller pose), not Unity's generic XR `InputDevice` API, so there is no single documented
-/// "Unity XR default" grip frame to copy—this stack matched SteamVR/OpenVR poses.
+/// WMR, HP Reverb, Pico). The old Oculus runtime exposed its controllers via the OVR SDK's local
+/// controller pose rather than a standard XR grip, so only the SteamVR/OpenVR pose is replicated.
 ///
 /// `generic_fix` is `unity_euler_deg(90.0, 90.0, 90.0).inverse()` (equivalent to `Rx(-90°)`),
 /// matching that SteamVR post-multiply.
@@ -145,7 +144,7 @@ pub(super) fn controller_pose_from_aim(position: Vec3, rotation: Quat) -> (Vec3,
 /// Converts an [`xr::SpaceLocation`] into host-tracking-space `(position, rotation)` using only
 /// [`openxr_pose_to_host_tracking`] (OpenXR RH → FrooxEngine/Unity LH). No extra grip-axis
 /// correction is applied here; controller pose must match what [`bound_hand_pose_defaults`] was
-/// authored against (legacy SteamVR `Generic.Pose`–style tracking after the same conversion).
+/// authored against (SteamVR `Generic.Pose`–style tracking after the same conversion).
 pub(super) fn pose_from_location(location: &xr::SpaceLocation) -> Option<(Vec3, Quat)> {
     let tracked = location
         .location_flags

@@ -25,11 +25,12 @@ pub(crate) struct Semaphore {
     inner: win::WinSemaphore,
 }
 
-/// Semaphore handles are process-global kernel objects; moving or sharing `&Semaphore` across
-/// threads cannot violate Rust aliasing rules because all operations delegate to the OS.
+// SAFETY: the inner handle is a process-global kernel object; all operations delegate to the OS,
+// which enforces its own thread-safety. No Rust-level aliasing invariants are at stake.
 unsafe impl Send for Semaphore {}
 
-/// Concurrent `post` / `wait` calls are defined by the underlying semaphore implementation.
+// SAFETY: concurrent `post` / `wait` calls are defined by the OS semaphore semantics; `&Semaphore`
+// never yields mutable Rust state.
 unsafe impl Sync for Semaphore {}
 
 impl Semaphore {

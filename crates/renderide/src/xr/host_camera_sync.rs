@@ -22,7 +22,7 @@ pub trait XrHostCameraSync {
     fn scene_root_scale_for_clip(&self) -> Option<Vec3>;
     /// Same rig alignment as [`crate::xr::tracking_space_to_world_matrix`].
     fn world_from_tracking(&self, center_pose_tracking: Option<(Vec3, Quat)>) -> Mat4;
-    /// Updates legacy head-output rig transform for overlay alignment and host IPC.
+    /// Updates the head-output rig transform used for overlay alignment and host IPC replies.
     fn set_head_output_transform(&mut self, transform: Mat4);
     /// Stores per-eye view–projection for stereo world mesh draws and clustering.
     fn set_stereo_view_proj(&mut self, vp: Option<(Mat4, Mat4)>);

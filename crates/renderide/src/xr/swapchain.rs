@@ -111,6 +111,9 @@ impl XrStereoSwapchain {
                 memory_flags: MemoryFlags::empty(),
                 view_formats: Vec::new(),
             };
+            // SAFETY: `vk_image` was returned by `xrEnumerateSwapchainImages` on a swapchain
+            // created from `session`, whose `VkDevice` equals `hal_device`'s per this function's
+            // safety contract. The descriptor matches the swapchain's create info.
             let hal_tex = unsafe {
                 hal_device.texture_from_raw(
                     vk_image,
@@ -132,6 +135,8 @@ impl XrStereoSwapchain {
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             };
+            // SAFETY: `hal_tex` was just produced from the same Vulkan device backing `device`
+            // (the function's safety contract); `wgpu_desc` matches `hal_desc`.
             let texture =
                 unsafe { device.create_texture_from_hal::<HalVulkan>(hal_tex, &wgpu_desc) };
             let view = texture.create_view(&wgpu::TextureViewDescriptor {

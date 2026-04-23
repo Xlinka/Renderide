@@ -51,7 +51,11 @@ public partial class RustEmitter
         }
 
         _w.BlankLine();
+        _w.Line($"// SAFETY: `{name}` is a `#[repr(...)]` value enum with only integer-representable");
+        _w.Line("// variants; every bit pattern that appears in the wire format is decoded back to a");
+        _w.Line("// valid variant by `EnumRepr::from_i32`, and the type has no padding.");
         _w.Line($"unsafe impl Pod for {name} {{}}");
+        _w.Line($"// SAFETY: all-zero is the bit pattern of the default variant (see `EnumRepr::from_i32`).");
         _w.Line($"unsafe impl Zeroable for {name} {{}}");
     }
 

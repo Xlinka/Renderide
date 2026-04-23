@@ -162,6 +162,9 @@ fn ensure_stereo_swapchain(bundle: &mut XrSessionBundle) -> bool {
     let session = handles.xr_session.xr_vulkan_session();
     let inst = handles.xr_session.xr_instance();
     let dev = handles.device.as_ref();
+    // SAFETY: `dev` is the wgpu device that was constructed in `xr::bootstrap` from the same
+    // `VkDevice` that owns `session`, so the `VkDevice` identity required by `XrStereoSwapchain`
+    // holds.
     let res = unsafe { XrStereoSwapchain::new(session, inst, sys_id, dev) };
     match res {
         Ok(sc) => {

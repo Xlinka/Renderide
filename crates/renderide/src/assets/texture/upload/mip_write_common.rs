@@ -5,6 +5,22 @@ use crate::shared::SetTexture2DData;
 use super::super::layout::{host_mip_payload_byte_offset, mip_byte_len};
 use super::error::TextureUploadError;
 
+/// Format-side context shared by every mip in one texture upload (2D, cubemap, 3D).
+///
+/// Bundled so the per-mip decode functions don't take the same four handles on every call.
+/// Fields are [`Copy`] so the context can be captured into a `rayon::spawn` closure by value.
+#[derive(Copy, Clone)]
+pub(super) struct MipUploadFormatCtx {
+    /// Host asset id for logging and diagnostics.
+    pub asset_id: i32,
+    /// Host-side texel format from the upload descriptor.
+    pub fmt_format: crate::shared::TextureFormat,
+    /// GPU-facing texel format the material system expects.
+    pub wgpu_format: wgpu::TextureFormat,
+    /// Whether host bytes must be decoded to RGBA8 before upload.
+    pub needs_rgba8_decode: bool,
+}
+
 /// Picks the descriptor offset bias that maximizes how many mips fit in the SHM payload.
 pub(super) fn choose_mip_start_bias(
     format: crate::shared::TextureFormat,

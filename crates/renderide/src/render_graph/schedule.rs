@@ -187,7 +187,6 @@ impl ScheduleHudSnapshot {
 }
 
 #[cfg(test)]
-#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 
@@ -275,7 +274,7 @@ mod tests {
                 step(PassPhase::PerView, 0, 0),
                 step(PassPhase::FrameGlobal, 1, 0),
             ],
-            waves: vec![0..2],
+            waves: core::iter::once(0..2).collect(),
         };
         let err = sched.validate().unwrap_err();
         assert!(matches!(
@@ -291,7 +290,7 @@ mod tests {
                 step(PassPhase::FrameGlobal, 0, 1),
                 step(PassPhase::PerView, 1, 0),
             ],
-            waves: vec![0..2],
+            waves: core::iter::once(0..2).collect(),
         };
         // Step 1 is PerView after a FrameGlobal — that part is fine — but wave_idx 0 < 1.
         let err = sched.validate().unwrap_err();

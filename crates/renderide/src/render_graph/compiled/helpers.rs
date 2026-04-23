@@ -20,18 +20,42 @@ use super::super::world_mesh_draw_prep::CameraTransformDrawFilter;
 
 use super::{CompiledPassInfo, RenderPassTemplate, ResolvedView};
 
+/// Per-view inputs for [`frame_render_params_from_shared`].
+///
+/// Groups the view-side data that would otherwise inflate the builder's parameter list: the
+/// resolved surface handles, host camera, per-view overrides, and the GPU / MSAA / Hi-Z resources
+/// scoped to this view.
+pub(super) struct FrameRenderParamsViewInputs<'a, 'r> {
+    /// Resolved surface targets, viewport, and view flags for this view.
+    pub resolved: &'r ResolvedView<'a>,
+    /// Scene color format used by the render graph.
+    pub scene_color_format: wgpu::TextureFormat,
+    /// Host camera inputs forwarded to per-pass logic.
+    pub host_camera: HostCameraFrame,
+    /// Optional per-camera draw-list filter applied before world-mesh recording.
+    pub transform_draw_filter: Option<CameraTransformDrawFilter>,
+    /// GPU capability limits, shared with passes that need to clamp against them.
+    pub gpu_limits: Option<Arc<GpuLimits>>,
+    /// MSAA depth resolve helpers when MSAA is active.
+    pub msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
+    /// Per-camera Hi-Z state slot.
+    pub hi_z_slot: Arc<parking_lot::Mutex<crate::render_graph::occlusion::HiZGpuState>>,
+}
+
 /// Builds [`FrameRenderParams`] from pre-split shared backend slices and per-view surface state.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn frame_render_params_from_shared<'a>(
     shared: FrameSystemsShared<'a>,
-    resolved: &ResolvedView<'a>,
-    scene_color_format: wgpu::TextureFormat,
-    host_camera: HostCameraFrame,
-    transform_draw_filter: Option<CameraTransformDrawFilter>,
-    gpu_limits: Option<Arc<GpuLimits>>,
-    msaa_depth_resolve: Option<Arc<MsaaDepthResolveResources>>,
-    hi_z_slot: Arc<parking_lot::Mutex<crate::render_graph::occlusion::HiZGpuState>>,
+    view_inputs: FrameRenderParamsViewInputs<'a, '_>,
 ) -> FrameRenderParams<'a> {
+    let FrameRenderParamsViewInputs {
+        resolved,
+        scene_color_format,
+        host_camera,
+        transform_draw_filter,
+        gpu_limits,
+        msaa_depth_resolve,
+        hi_z_slot,
+    } = view_inputs;
     let depth_sample_view = resolved
         .depth_texture
         .create_view(&wgpu::TextureViewDescriptor {
@@ -99,13 +123,15 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             skin_cache: None,
             debug_hud,
         },
-        resolved,
-        scene_color_format,
-        host_camera,
-        transform_draw_filter,
-        gpu_limits,
-        msaa_depth_resolve,
-        hi_z_slot,
+        FrameRenderParamsViewInputs {
+            resolved,
+            scene_color_format,
+            host_camera,
+            transform_draw_filter,
+            gpu_limits,
+            msaa_depth_resolve,
+            hi_z_slot,
+        },
     )
 }
 

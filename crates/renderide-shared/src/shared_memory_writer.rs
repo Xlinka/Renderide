@@ -143,6 +143,8 @@ mod platform {
                 })?;
             file.set_len(capacity_bytes as u64)
                 .map_err(SharedMemoryWriterError::Io)?;
+            // SAFETY: the writer holds exclusive ownership of the backing `.qu` file; cross-process
+            // readers synchronise via the IPC wire protocol.
             let mmap = unsafe { MmapMut::map_mut(&file) }
                 .map_err(|e| SharedMemoryWriterError::Map(e.to_string()))?;
             Ok(Self {
@@ -228,6 +230,8 @@ mod platform {
                 .chain(std::iter::once(0))
                 .collect();
             let size = capacity_bytes as usize;
+            // SAFETY: `name_wide` is a NUL-terminated wide string; `INVALID_HANDLE_VALUE` requests
+            // an anonymous pagefile-backed mapping.
             let handle = unsafe {
                 CreateFileMappingW(
                     INVALID_HANDLE_VALUE,
@@ -243,8 +247,10 @@ mod platform {
                     "CreateFileMappingW failed for {name}"
                 )));
             }
+            // SAFETY: `handle` was just returned valid.
             let view = unsafe { MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size) };
             if view.Value.is_null() {
+                // SAFETY: `handle` is live; closed once on this error path.
                 unsafe {
                     CloseHandle(handle);
                 }
@@ -264,6 +270,8 @@ mod platform {
             offset: usize,
             data: &[u8],
         ) -> Result<(), SharedMemoryWriterError> {
+            // SAFETY: caller-facing bounds are checked by `write` in the outer struct; `self.view`
+            // is the mapping base; `&mut self` ensures no other writer is active here.
             unsafe {
                 let dst = self.view.Value.add(offset) as *mut u8;
                 std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
@@ -275,6 +283,8 @@ mod platform {
             if len == 0 {
                 return;
             }
+            // SAFETY: `offset + len <= self.len` is the caller's contract (the outer `flush_range`
+            // bounds-checks); `self.view.Value` is the non-null live mapping base.
             unsafe {
                 let base = self.view.Value.add(offset) as *const std::ffi::c_void;
                 let _ = FlushViewOfFile(base, len);
@@ -289,11 +299,13 @@ mod platform {
     impl Drop for PlatformWriter {
         fn drop(&mut self) {
             if !self.view.Value.is_null() {
+                // SAFETY: `self.view` was mapped in `new`; unmapped exactly once on drop.
                 unsafe {
                     UnmapViewOfFile(self.view);
                 }
             }
             if !self.handle.is_null() && self.handle != INVALID_HANDLE_VALUE {
+                // SAFETY: `self.handle` was opened in `new`; closed exactly once on drop.
                 unsafe {
                     CloseHandle(self.handle);
                 }

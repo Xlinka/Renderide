@@ -13,6 +13,7 @@ use super::super::layout::{
 use super::error::TextureUploadError;
 use super::mip_write_common::{
     choose_mip_start_bias, is_rgba8_family, uncompressed_row_bytes, write_one_mip,
+    MipUploadFormatCtx,
 };
 use super::subregion::{hint_region_is_empty, try_write_texture2d_subregion};
 
@@ -25,18 +26,20 @@ struct MipChainWalkState<'a> {
 }
 
 /// Converts host mip bytes into a buffer suitable for [`write_one_mip`] (decode, optional row flip).
-#[allow(clippy::too_many_arguments)]
 fn mip_src_to_upload_pixels(
-    asset_id: i32,
-    fmt_format: crate::shared::TextureFormat,
-    wgpu_format: wgpu::TextureFormat,
-    needs_rgba8_decode: bool,
+    ctx: MipUploadFormatCtx,
     gw: u32,
     gh: u32,
     flip: bool,
     mip_src: &[u8],
     mip_index: usize,
 ) -> Result<Vec<u8>, TextureUploadError> {
+    let MipUploadFormatCtx {
+        asset_id,
+        fmt_format,
+        wgpu_format,
+        needs_rgba8_decode,
+    } = ctx;
     if is_rgba8_family(wgpu_format) {
         if needs_rgba8_decode || host_format_is_compressed(fmt_format) {
             decode_mip_to_rgba8(fmt_format, gw, gh, flip, mip_src).ok_or_else(|| {
@@ -572,19 +575,15 @@ impl TextureMipChainUploader {
         let payload_arc = Arc::clone(payload);
         let asset_id = upload.asset_id;
 
+        let ctx = MipUploadFormatCtx {
+            asset_id,
+            fmt_format,
+            wgpu_format,
+            needs_rgba8_decode,
+        };
         rayon::spawn(move || {
             let mip_src = &payload_arc[mip_src_range];
-            let res = mip_src_to_upload_pixels(
-                asset_id,
-                fmt_format,
-                wgpu_format,
-                needs_rgba8_decode,
-                gw,
-                gh,
-                flip,
-                mip_src,
-                mip_index,
-            );
+            let res = mip_src_to_upload_pixels(ctx, gw, gh, flip, mip_src, mip_index);
             let _ = tx.send(res);
         });
 

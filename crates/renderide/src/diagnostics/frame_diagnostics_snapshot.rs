@@ -265,7 +265,7 @@ impl FrameDiagnosticsSnapshot {
         }
     }
 
-    /// FPS from wall-clock interval between redraws (matches legacy HUD semantics).
+    /// FPS computed from the wall-clock interval between consecutive redraw events.
     pub fn fps_from_wall(&self) -> f64 {
         if self.wall_frame_time_ms <= f64::EPSILON {
             0.0
