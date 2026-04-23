@@ -6,7 +6,10 @@ use crate::render_graph::{
     hi_z_pyramid_dimensions, mip_dimensions, mip_levels_for_extent, OutputDepthMode,
 };
 
-use super::hi_z_gpu::{pending_none_array, HiZGpuScratch, HiZGpuState, HIZ_MAX_MIPS};
+use super::hi_z_gpu::{
+    pending_none_array, pending_submit_default, HiZGpuScratch, HiZGpuState, HIZ_MAX_MIPS,
+    HIZ_STAGING_RING,
+};
 use super::hi_z_pipelines::HiZPipelines;
 
 #[repr(C)]
@@ -78,6 +81,7 @@ fn reset_and_prepare_hi_z_scratch(
         state.stereo_right_stash = pending_none_array();
         state.write_idx = 0;
         state.hi_z_encoded_slot = None;
+        state.pending_submit = pending_submit_default();
         if stereo {
             state.right_pending = Some(pending_none_array());
         } else {
@@ -100,8 +104,17 @@ fn reset_and_prepare_hi_z_scratch(
 
 /// Records Hi-Z build + copy-to-staging into [`HiZGpuState::write_idx`].
 ///
-/// Call [`HiZGpuState::on_frame_submitted`] after [`wgpu::Queue::submit`]. Call
-/// [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain completed maps.
+/// Claims the staging slot (advances [`HiZGpuState::write_idx`] and marks
+/// [`HiZGpuState::pending_submit`]) at encode time so two consecutive frames can never aim the
+/// same buffer even if the prior frame's `on_submitted_work_done` callback has not yet fired.
+///
+/// The claimed slot is stashed on [`HiZGpuState::hi_z_encoded_slot`] as a transient handoff for
+/// the main-thread submit path to bake into a [`wgpu::Queue::on_submitted_work_done`] closure
+/// via [`HiZGpuState::hi_z_encoded_slot`]`.take()` — so the slot travels with the closure by
+/// value, and a late-firing callback cannot consume a newer frame's slot.
+///
+/// Call [`HiZGpuState::begin_frame_readback`] at the **start** of the next frame to drain
+/// completed maps.
 pub fn encode_hi_z_build(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -183,6 +196,8 @@ pub fn encode_hi_z_build(
         }
     }
 
+    state.pending_submit[ws] = true;
+    state.write_idx = (ws + 1) % HIZ_STAGING_RING;
     state.hi_z_encoded_slot = Some(ws);
 }
 

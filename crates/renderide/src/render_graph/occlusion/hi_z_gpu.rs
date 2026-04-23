@@ -23,6 +23,10 @@ pub(crate) const fn pending_none_array<T>() -> [Option<T>; HIZ_STAGING_RING] {
     [None, None, None]
 }
 
+pub(crate) const fn pending_submit_default() -> [bool; HIZ_STAGING_RING] {
+    [false; HIZ_STAGING_RING]
+}
+
 /// GPU + CPU Hi-Z state owned by [`crate::backend::OcclusionSystem`].
 pub struct HiZGpuState {
     /// Last successfully read desktop pyramid (previous frame).
@@ -36,8 +40,15 @@ pub struct HiZGpuState {
     last_mode: OutputDepthMode,
     /// Next ring index for Hi-Z encode copy targets (0..[`HIZ_STAGING_RING`]).
     pub(crate) write_idx: usize,
-    /// Staging slot written in the current encode (consumed by [`Self::on_frame_submitted`]).
+    /// Transient handoff set by [`crate::render_graph::occlusion::encode_hi_z_build`] naming the
+    /// slot to be mapped by the subsequent [`wgpu::Queue::on_submitted_work_done`] callback.
+    /// Consumed (taken) on the main thread when the callback closure is constructed so the slot
+    /// travels with the closure, not through shared state.
     pub(crate) hi_z_encoded_slot: Option<usize>,
+    /// Slots whose copy-to-staging command has been recorded but whose
+    /// [`wgpu::Queue::on_submitted_work_done`] callback has not yet fired. Guards
+    /// [`Self::can_encode_hi_z`] from picking a slot that the driver thread is about to consume.
+    pub(crate) pending_submit: [bool; HIZ_STAGING_RING],
     /// Pending `map_async` callbacks per desktop / left-eye staging buffer.
     pub(crate) desktop_pending: [Option<MapRecv>; HIZ_STAGING_RING],
     /// Pending `map_async` per right-eye buffer when stereo; `None` when desktop-only.
@@ -58,6 +69,7 @@ impl Default for HiZGpuState {
             last_mode: OutputDepthMode::DesktopSingle,
             write_idx: 0,
             hi_z_encoded_slot: None,
+            pending_submit: pending_submit_default(),
             desktop_pending: pending_none_array(),
             right_pending: None,
             stereo_left_stash: pending_none_array(),
@@ -76,6 +88,7 @@ impl HiZGpuState {
             self.scratch = None;
             self.write_idx = 0;
             self.hi_z_encoded_slot = None;
+            self.pending_submit = pending_submit_default();
             self.desktop_pending = pending_none_array();
             self.right_pending = None;
             self.stereo_left_stash = pending_none_array();
@@ -89,6 +102,7 @@ impl HiZGpuState {
     pub fn clear_pending(&mut self) {
         self.write_idx = 0;
         self.hi_z_encoded_slot = None;
+        self.pending_submit = pending_submit_default();
         self.desktop_pending = pending_none_array();
         self.right_pending = None;
         self.stereo_left_stash = pending_none_array();
@@ -104,7 +118,7 @@ impl HiZGpuState {
     ///
     /// [`crate::backend::OcclusionSystem::hi_z_begin_frame_readback`] now drains its
     /// `on_submitted_work_done` callbacks with [`wgpu::Device::poll`] **before** locking this
-    /// state, so the `Self::on_frame_submitted_callback` callback does not re-enter the mutex.
+    /// state, so the [`Self::do_hi_z_map_async`] callback does not re-enter the mutex.
     /// The poll here remains as a safety net for direct callers of this method (mainly tests).
     pub fn begin_frame_readback(&mut self, device: &wgpu::Device) {
         let _ = device.poll(wgpu::PollType::Poll);
@@ -199,22 +213,20 @@ impl HiZGpuState {
         }
     }
 
-    /// Starts `map_async` on the staging buffer(s) written this frame. Call **after**
-    /// [`wgpu::Queue::submit`] for the command buffer that contains the Hi-Z copies.
-    pub fn on_frame_submitted(&mut self, _device: &wgpu::Device) {
-        self.on_frame_submitted_callback();
-    }
-
-    /// Same as [`Self::on_frame_submitted`] but without the unused device argument so it can
-    /// be invoked cleanly from a [`wgpu::Queue::on_submitted_work_done`] callback.
-    pub fn on_frame_submitted_callback(&mut self) {
-        let Some(ws) = self.hi_z_encoded_slot.take() else {
-            return;
-        };
+    /// Issues `map_async` against the staging buffer(s) for `ws` once the driver has reported
+    /// the submit complete. The slot is supplied explicitly (captured when the callback closure
+    /// was built on the main thread) rather than read from [`Self::hi_z_encoded_slot`], so a
+    /// late-firing callback cannot pick up a newer frame's slot.
+    ///
+    /// Call from a [`wgpu::Queue::on_submitted_work_done`] callback on whichever thread runs
+    /// [`wgpu::Device::poll`].
+    pub fn do_hi_z_map_async(&mut self, ws: usize) {
         debug_assert!(ws < HIZ_STAGING_RING);
         let Some(scratch) = self.scratch.as_ref() else {
+            self.pending_submit[ws] = false;
             return;
         };
+        self.pending_submit[ws] = false;
         debug_assert!(self.desktop_pending[ws].is_none());
 
         let slice = scratch.staging_desktop[ws].slice(..);
@@ -238,13 +250,11 @@ impl HiZGpuState {
                 rp[ws] = Some(rx_r);
             }
         }
-
-        self.write_idx = (self.write_idx + 1) % HIZ_STAGING_RING;
     }
 
     pub(crate) fn can_encode_hi_z(&self, scratch: &HiZGpuScratch) -> bool {
         let idx = self.write_idx;
-        if self.desktop_pending[idx].is_some() {
+        if self.pending_submit[idx] || self.desktop_pending[idx].is_some() {
             return false;
         }
         if scratch.staging_r.is_some() {

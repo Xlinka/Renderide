@@ -576,17 +576,21 @@ impl CompiledRenderGraph {
         let _ = queue_ref; // retained above for the HUD encoder; submit path now uses the driver
 
         // Collect per-view Hi-Z `map_async` work as `on_submitted_work_done` callbacks so the
-        // staging buffers are mapped only after the driver has actually issued the submit. This
-        // replaces the former post-submit `flush_driver` stall.
+        // staging buffers are mapped only after the driver has actually issued the submit. The
+        // encoded slot is taken out of the per-view state here (main thread, under the Hi-Z
+        // state lock) and baked into the closure by value — a late-firing callback cannot
+        // consume a newer frame's slot, which would let two submits alias the same staging
+        // buffer and trip the "buffer is still mapped" wgpu validation.
         let hi_z_callbacks: Vec<Box<dyn FnOnce() + Send + 'static>> = per_view_occlusion_info
             .iter()
-            .map(|(occlusion_view, _hc)| {
+            .filter_map(|(occlusion_view, _hc)| {
                 let state = mv_ctx.backend.occlusion.ensure_hi_z_state(*occlusion_view);
+                let ws = state.lock().hi_z_encoded_slot.take()?;
                 let cb: Box<dyn FnOnce() + Send + 'static> = Box::new(move || {
                     profiling::scope!("hi_z::on_submitted_callback");
-                    state.lock().on_frame_submitted_callback();
+                    state.lock().do_hi_z_map_async(ws);
                 });
-                cb
+                Some(cb)
             })
             .collect();
 
