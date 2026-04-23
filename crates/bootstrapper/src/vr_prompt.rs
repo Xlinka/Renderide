@@ -54,11 +54,12 @@ const DESKTOP_BUTTON_LABEL: &str = "Desktop";
 
 /// Desktop vs VR choice: **VR** → `-Device SteamVR`, **Desktop** → `-Screen`.
 ///
-/// Returns [`None`] when the dialog is dismissed without a choice.
+/// Returns [`None`] when the user cancels by closing the dialog window or
+/// pressing Escape; callers treat this as a request to abort the launch.
 pub fn prompt_desktop_or_vr() -> Option<bool> {
     let res = rfd::MessageDialog::new()
         .set_title("Renderide")
-        .set_description("Launch Resonite in VR or desktop mode?")
+        .set_description("Launch Resonite in VR or desktop mode? Close this window to cancel.")
         .set_buttons(rfd::MessageButtons::OkCancelCustom(
             VR_BUTTON_LABEL.into(),
             DESKTOP_BUTTON_LABEL.into(),
