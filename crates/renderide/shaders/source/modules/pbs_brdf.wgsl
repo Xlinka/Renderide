@@ -47,7 +47,7 @@ fn distance_attenuation(dist: f32, range: f32) -> f32 {
     let t = dist / range;
     let window_inner = clamp(1.0 - t * t * t * t, 0.0, 1.0);
     let window = window_inner * window_inner;
-    let range_boost = 4.0 * 3.14159265 * range * range;
+    let range_boost = range * range;
     return inv_d2 * window * range_boost;
 }
 
