@@ -651,4 +651,28 @@ mod tests {
             Some("nosamplers_default")
         );
     }
+
+    #[test]
+    fn resolves_pbsstencil_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSStencil").as_deref(),
+            Some("pbsstencil_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsstencilspecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSStencilSpecular").as_deref(),
+            Some("pbsstencilspecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_cadshader_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("CADShader").as_deref(),
+            Some("cadshader_default")
+        );
+    }
 }
