@@ -675,4 +675,44 @@ mod tests {
             Some("cadshader_default")
         );
     }
+
+    #[test]
+    fn resolves_pbsdisplace_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplace").as_deref(),
+            Some("pbsdisplace_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacespecular_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceSpecular").as_deref(),
+            Some("pbsdisplacespecular_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacetransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceTransparent").as_deref(),
+            Some("pbsdisplacetransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplacespeculartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceSpecularTransparent").as_deref(),
+            Some("pbsdisplacespeculartransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplaceshadow_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplaceShadow").as_deref(),
+            Some("pbsdisplaceshadow_default")
+        );
+    }
 }
