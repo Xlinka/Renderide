@@ -10,13 +10,16 @@ use crate::materials::pipeline_build_error::PipelineBuildError;
 use crate::materials::MaterialRenderState;
 use crate::materials::{
     reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
-    reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2, MaterialPipelineDesc,
+    reflect_vertex_shader_needs_uv0_stream, validate_layout_against_limits,
+    validate_per_draw_group2, validate_vertex_layout_against_limits, MaterialPipelineDesc,
 };
 
 /// Compiled shader module and [`MaterialPipelineDesc`] from the material cache before adding a pipeline label.
 pub(crate) struct ShaderModuleBuildRefs<'a> {
     /// GPU device used to create pipelines.
     pub device: &'a wgpu::Device,
+    /// Effective device caps used to validate reflected layouts before pipeline creation.
+    pub limits: &'a crate::gpu::GpuLimits,
     /// Compiled WGSL module.
     pub module: &'a wgpu::ShaderModule,
     /// Surface and attachment formats for the material.
@@ -30,6 +33,7 @@ impl<'a> ShaderModuleBuildRefs<'a> {
     pub(crate) fn with_label(self, label: &'static str) -> ReflectiveRasterShaderContext<'a> {
         ReflectiveRasterShaderContext {
             device: self.device,
+            limits: self.limits,
             module: self.module,
             desc: self.desc,
             wgsl_source: self.wgsl_source,
@@ -42,6 +46,8 @@ impl<'a> ShaderModuleBuildRefs<'a> {
 pub(crate) struct ReflectiveRasterShaderContext<'a> {
     /// GPU device used to create pipelines.
     pub device: &'a wgpu::Device,
+    /// Effective device caps used to validate reflected layouts before pipeline creation.
+    pub limits: &'a crate::gpu::GpuLimits,
     /// Compiled WGSL module.
     pub module: &'a wgpu::ShaderModule,
     /// Surface and attachment formats for the material.
@@ -170,6 +176,7 @@ fn mesh_forward_vertex_buffer_layouts() -> [wgpu::VertexBufferLayout<'static>; 8
 
 fn pipeline_layout_and_vertex_buffers(
     device: &wgpu::Device,
+    limits: &crate::gpu::GpuLimits,
     wgsl_source: &str,
     label: &'static str,
     include_uv_vertex_buffer: bool,
@@ -177,6 +184,7 @@ fn pipeline_layout_and_vertex_buffers(
 ) -> Result<(wgpu::PipelineLayout, Vec<wgpu::VertexBufferLayout<'static>>), PipelineBuildError> {
     let reflected = reflect_raster_material_wgsl(wgsl_source)?;
     validate_per_draw_group2(&reflected.per_draw_entries)?;
+    validate_layout_against_limits(&reflected, limits)?;
 
     let frame_bgl = FrameGpuResources::bind_group_layout(device);
     let material_bgl = if reflected.material_entries.is_empty() {
@@ -213,6 +221,7 @@ fn pipeline_layout_and_vertex_buffers(
     } else {
         layouts[..2].to_vec()
     };
+    validate_vertex_layout_against_limits(&vertex_buffers, limits)?;
 
     Ok((layout, vertex_buffers))
 }
@@ -284,6 +293,7 @@ pub(crate) fn build_pipeline_from_pass(
 /// Builds a default single-pass forward mesh pipeline from reflected WGSL (`@group(0..=2)`).
 pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
     device: &wgpu::Device,
+    limits: &crate::gpu::GpuLimits,
     module: &wgpu::ShaderModule,
     desc: &MaterialPipelineDesc,
     wgsl_source: &str,
@@ -293,6 +303,7 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipeline(
     let pass = default_pass(raster.use_alpha_blending, raster.depth_write_enabled);
     let (layout, vertex_buffers) = pipeline_layout_and_vertex_buffers(
         device,
+        limits,
         wgsl_source,
         label,
         raster.include_uv_vertex_buffer,
@@ -327,6 +338,7 @@ pub(crate) fn create_reflective_raster_mesh_forward_pipelines(
     }
     let (layout, vertex_buffers) = pipeline_layout_and_vertex_buffers(
         shader.device,
+        shader.limits,
         shader.wgsl_source,
         shader.label,
         streams.include_uv_vertex_buffer,

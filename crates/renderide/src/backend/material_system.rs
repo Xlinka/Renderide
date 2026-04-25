@@ -60,13 +60,14 @@ impl MaterialSystem {
         &mut self,
         device: Arc<wgpu::Device>,
         queue: &Arc<wgpu::Queue>,
+        limits: Arc<crate::gpu::GpuLimits>,
     ) -> Result<(), EmbeddedMaterialBindError> {
         let embedded = EmbeddedMaterialBindResources::new(
             device.clone(),
             Arc::clone(&self.property_id_registry),
         )?;
         self.material_registry = Some(crate::materials::MaterialRegistry::with_default_families(
-            device,
+            device, limits,
         ));
         if let Some(reg) = self.material_registry.as_mut() {
             for (asset_id, (pipeline, display_name)) in self.pending_shader_routes.drain() {

@@ -75,11 +75,14 @@ impl MaterialRegistry {
     }
 
     /// Builds a registry whose router falls back to [`RasterPipelineKind::Null`] for unknown shader assets.
-    pub fn with_default_families(device: Arc<wgpu::Device>) -> Self {
+    pub fn with_default_families(
+        device: Arc<wgpu::Device>,
+        limits: Arc<crate::gpu::GpuLimits>,
+    ) -> Self {
         Self {
             device: device.clone(),
             router: MaterialRouter::new(RasterPipelineKind::Null),
-            cache: MaterialPipelineCache::new(device),
+            cache: MaterialPipelineCache::new(device, limits),
         }
     }
 
@@ -215,6 +218,18 @@ mod wgpu_cache_tests {
         matches!(std::env::var("CI").as_deref(), Ok("true" | "1"))
     }
 
+    fn synthetic_limits_from_device(device: &wgpu::Device) -> Arc<crate::gpu::GpuLimits> {
+        Arc::new(crate::gpu::GpuLimits {
+            wgpu: device.limits(),
+            supports_base_instance: true,
+            supports_multiview: false,
+            supports_float32_filterable: false,
+            texture_compression_features: wgpu::Features::empty(),
+            max_per_draw_slab_slots: (device.limits().max_storage_buffer_binding_size / 256)
+                as usize,
+        })
+    }
+
     /// Headless wgpu smoke: cache returns the same pipeline pointer for identical keys.
     ///
     /// On CI (`CI=true` / `CI=1`), missing adapters **fail** the test so runners without Vulkan
@@ -229,7 +244,8 @@ mod wgpu_cache_tests {
             logger::warn!("skipping null_pipeline_cache_hits: no wgpu adapter");
             return;
         };
-        let reg = MaterialRegistry::with_default_families(device);
+        let limits = synthetic_limits_from_device(&device);
+        let reg = MaterialRegistry::with_default_families(device, limits);
         let desc = MaterialPipelineDesc {
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             depth_stencil_format: None,
@@ -270,7 +286,8 @@ mod wgpu_cache_tests {
             logger::warn!("skipping permutation_bit_changes_pipeline: no wgpu adapter");
             return;
         };
-        let reg = MaterialRegistry::with_default_families(device);
+        let limits = synthetic_limits_from_device(&device);
+        let reg = MaterialRegistry::with_default_families(device, limits);
         let desc = MaterialPipelineDesc {
             surface_format: wgpu::TextureFormat::Bgra8UnormSrgb,
             depth_stencil_format: None,

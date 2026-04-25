@@ -145,6 +145,14 @@ fn readback_and_write_png_atomically(
     let bytes_per_row_padded = bytes_per_row_tight.div_ceil(alignment) * alignment;
     let buffer_size = (bytes_per_row_padded as u64) * (height as u64);
 
+    let limits = gpu.limits();
+    if !limits.buffer_size_fits(buffer_size) {
+        return Err(HeadlessReadbackError::BufferSizeExceedsLimit {
+            size: buffer_size,
+            max: limits.max_buffer_size(),
+        });
+    }
+
     let readback = gpu.device().create_buffer(&wgpu::BufferDescriptor {
         label: Some("renderide-headless-readback"),
         size: buffer_size,
@@ -268,6 +276,14 @@ enum HeadlessReadbackError {
     /// Filesystem operation (mkdir, rename) failed.
     #[error("io: {0}")]
     Io(#[source] std::io::Error),
+    /// The readback buffer size would exceed [`wgpu::Limits::max_buffer_size`].
+    #[error("readback buffer {size} bytes exceeds device max_buffer_size={max}")]
+    BufferSizeExceedsLimit {
+        /// Requested readback buffer size.
+        size: u64,
+        /// Device cap.
+        max: u64,
+    },
 }
 
 #[cfg(test)]

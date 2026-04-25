@@ -22,6 +22,30 @@ pub enum TransientPoolError {
         /// Pool index.
         pool_id: usize,
     },
+    /// Requested texture dimensions exceed device limits.
+    #[error("transient texture {label} {width}x{height}x{layers} mips={mip_levels} exceeds device limits")]
+    TextureExceedsLimits {
+        /// Texture label.
+        label: &'static str,
+        /// Width in pixels.
+        width: u32,
+        /// Height in pixels.
+        height: u32,
+        /// Array layer count (or depth for 3D).
+        layers: u32,
+        /// Mip level count.
+        mip_levels: u32,
+    },
+    /// Requested buffer size exceeds device limits.
+    #[error("transient buffer {label} size={size} exceeds device limits (max_buffer_size={max})")]
+    BufferExceedsLimits {
+        /// Buffer label.
+        label: &'static str,
+        /// Requested size in bytes.
+        size: u64,
+        /// Device cap (`max_buffer_size`).
+        max: u64,
+    },
 }
 
 /// Concrete texture allocation key.
@@ -160,10 +184,12 @@ impl TransientPool {
     pub fn acquire_texture_resource(
         &mut self,
         device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
         key: TextureKey,
         label: &'static str,
         usage: wgpu::TextureUsages,
     ) -> Result<PooledTextureLease, TransientPoolError> {
+        validate_texture_key(limits, key, label)?;
         if let Some(list) = self.free_textures.get_mut(&key) {
             if let Some(id) = list.pop() {
                 self.metrics.texture_hits += 1;
@@ -220,11 +246,19 @@ impl TransientPool {
     pub fn acquire_buffer_resource(
         &mut self,
         device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
         key: BufferKey,
         label: &'static str,
         usage: wgpu::BufferUsages,
         size: u64,
     ) -> Result<PooledBufferLease, TransientPoolError> {
+        if !limits.buffer_size_fits(size) {
+            return Err(TransientPoolError::BufferExceedsLimits {
+                label,
+                size,
+                max: limits.max_buffer_size(),
+            });
+        }
         if let Some(list) = self.free_buffers.get_mut(&key) {
             if let Some(id) = list.pop() {
                 self.metrics.buffer_hits += 1;
@@ -365,13 +399,12 @@ fn buffer_lease_from_entry(
     })
 }
 
-fn create_texture_and_view(
-    device: &wgpu::Device,
-    key: TextureKey,
-    label: &'static str,
-    usage: wgpu::TextureUsages,
-) -> (wgpu::Texture, wgpu::TextureView) {
-    let (width, height, layers) = match key.extent {
+/// Resolves the (width, height, layers) triple for `key.extent`. Backbuffer-relative extents
+/// resolve to `(1, 1, array_layers)` because their real size comes from the per-view viewport
+/// pre-clamp in `clamp_viewport_for_transient_alloc`; this helper is only used for limit
+/// validation of the parts of the key that are not viewport-derived.
+fn texture_key_dims(key: TextureKey) -> (u32, u32, u32) {
+    match key.extent {
         TransientExtent::Backbuffer | TransientExtent::BackbufferScaledMip { .. } => {
             (1, 1, key.array_layers)
         }
@@ -381,7 +414,40 @@ fn create_texture_and_view(
             height,
             layers,
         } => (width, height, layers),
+    }
+}
+
+/// Returns [`TransientPoolError::TextureExceedsLimits`] when `key` would exceed device limits.
+fn validate_texture_key(
+    limits: &crate::gpu::GpuLimits,
+    key: TextureKey,
+    label: &'static str,
+) -> Result<(), TransientPoolError> {
+    let (width, height, layers) = texture_key_dims(key);
+    let dims_fit = match key.dimension {
+        wgpu::TextureDimension::D3 => limits.texture_3d_fits(width, height, layers),
+        _ => limits.texture_2d_fits(width, height) && limits.array_layers_fit(layers),
     };
+    let mips_fit = key.mip_levels <= 16;
+    if !dims_fit || !mips_fit {
+        return Err(TransientPoolError::TextureExceedsLimits {
+            label,
+            width,
+            height,
+            layers,
+            mip_levels: key.mip_levels,
+        });
+    }
+    Ok(())
+}
+
+fn create_texture_and_view(
+    device: &wgpu::Device,
+    key: TextureKey,
+    label: &'static str,
+    usage: wgpu::TextureUsages,
+) -> (wgpu::Texture, wgpu::TextureView) {
+    let (width, height, layers) = texture_key_dims(key);
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d {

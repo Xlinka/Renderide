@@ -65,12 +65,14 @@ pub(crate) fn build_null_wgsl(
 /// Construct the wgpu render pipeline for the null material from a precompiled shader module.
 pub(crate) fn create_null_render_pipeline(
     device: &wgpu::Device,
+    limits: &crate::gpu::GpuLimits,
     module: &wgpu::ShaderModule,
     desc: &MaterialPipelineDesc,
     wgsl_source: &str,
 ) -> Result<wgpu::RenderPipeline, PipelineBuildError> {
     create_reflective_raster_mesh_forward_pipeline(
         device,
+        limits,
         module,
         desc,
         wgsl_source,

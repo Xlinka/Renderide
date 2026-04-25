@@ -494,13 +494,33 @@ fn make_staging_ring(
 }
 
 impl HiZGpuScratch {
-    pub(crate) fn new(device: &wgpu::Device, extent: (u32, u32), stereo: bool) -> Option<Self> {
+    pub(crate) fn new(
+        device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
+        extent: (u32, u32),
+        stereo: bool,
+    ) -> Option<Self> {
         let (bw, bh) = extent;
         if bw == 0 || bh == 0 {
             return None;
         }
+        if !limits.texture_2d_fits(bw, bh) {
+            logger::warn!(
+                "hi_z scratch: pyramid extent {bw}x{bh} exceeds max_texture_dimension_2d={}; skipping",
+                limits.max_texture_dimension_2d()
+            );
+            return None;
+        }
         let mip_levels = mip_levels_for_extent(bw, bh, HIZ_MAX_MIPS);
         if mip_levels == 0 {
+            return None;
+        }
+        let staging_size = staging_size_pyramid(bw, bh, mip_levels);
+        if !limits.buffer_size_fits(staging_size) {
+            logger::warn!(
+                "hi_z scratch: staging size {staging_size} exceeds max_buffer_size={}; skipping",
+                limits.max_buffer_size()
+            );
             return None;
         }
 
@@ -540,7 +560,6 @@ impl HiZGpuScratch {
         };
 
         let (pyramid, views) = make_pyramid();
-        let staging_size = staging_size_pyramid(bw, bh, mip_levels);
         let staging_desktop = make_staging_ring(device, staging_size, "hi_z_staging_desktop");
 
         let (pyramid_r, staging_r) = if stereo {

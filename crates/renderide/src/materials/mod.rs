@@ -58,7 +58,8 @@ pub use render_state::{
 pub use wgsl_reflect::{
     reflect_raster_material_requires_grab_pass, reflect_raster_material_requires_intersection_pass,
     reflect_raster_material_wgsl, reflect_vertex_shader_needs_color_stream,
-    reflect_vertex_shader_needs_uv0_stream, validate_per_draw_group2, ReflectError,
+    reflect_vertex_shader_needs_uv0_stream, validate_layout_against_limits,
+    validate_per_draw_group2, validate_vertex_layout_against_limits, ReflectError,
     ReflectedMaterialUniformBlock, ReflectedRasterLayout, ReflectedUniformField,
     ReflectedUniformScalarKind,
 };

@@ -224,6 +224,7 @@ impl CompiledRenderGraph {
                 let scene_color_format = mv_ctx.backend.scene_color_format_wgpu();
                 self.resolve_transient_textures(
                     mv_ctx.device,
+                    mv_ctx.gpu_limits,
                     mv_ctx.backend.transient_pool_mut(),
                     TransientTextureResolveSurfaceParams {
                         viewport_px: alloc_viewport,
@@ -237,6 +238,7 @@ impl CompiledRenderGraph {
                 )?;
                 self.resolve_transient_buffers(
                     mv_ctx.device,
+                    mv_ctx.gpu_limits,
                     mv_ctx.backend.transient_pool_mut(),
                     alloc_viewport,
                     &mut resources,

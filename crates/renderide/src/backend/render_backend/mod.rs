@@ -474,7 +474,8 @@ impl RenderBackend {
         }
         let max_buffer_size = gpu_limits.max_buffer_size();
         self.mesh_deform_scratch = Some(MeshDeformScratch::new(device.as_ref(), max_buffer_size));
-        self.frame_resources.attach(device.as_ref(), gpu_limits)?;
+        self.frame_resources
+            .attach(device.as_ref(), Arc::clone(&gpu_limits))?;
         self.skin_cache = Some(GpuSkinCache::new(device.as_ref(), max_buffer_size));
         self.debug_hud.attach(
             device.as_ref(),
@@ -491,7 +492,8 @@ impl RenderBackend {
                 self.mesh_preprocess = None;
             }
         }
-        self.materials.try_attach_gpu(device.clone(), &queue)?;
+        self.materials
+            .try_attach_gpu(device.clone(), &queue, Arc::clone(&gpu_limits))?;
         asset_uploads::attach_flush_pending_asset_uploads(&mut self.asset_transfers, &device, shm);
 
         self.msaa_depth_resolve = MsaaDepthResolveResources::try_new(device.as_ref()).map(Arc::new);

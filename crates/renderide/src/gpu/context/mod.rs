@@ -340,8 +340,16 @@ impl GpuContext {
             return None;
         }
         if self.primary_offscreen.is_none() {
-            let width = self.config.width.max(1);
-            let height = self.config.height.max(1);
+            let max_dim = self.limits.max_texture_dimension_2d();
+            let req_w = self.config.width.max(1);
+            let req_h = self.config.height.max(1);
+            let width = req_w.min(max_dim);
+            let height = req_h.min(max_dim);
+            if (width, height) != (req_w, req_h) {
+                logger::warn!(
+                    "headless primary offscreen: {req_w}x{req_h} exceeds max_texture_dimension_2d={max_dim}; clamped to {width}x{height}",
+                );
+            }
             let color_format = self.config.format;
             let color_texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("renderide-headless-primary-color"),

@@ -57,7 +57,16 @@ mod wgpu_pipeline_tests {
             label: Some("null_pipeline_smoke"),
             source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(w0.as_str())),
         });
-        let _pipe =
-            create_null_render_pipeline(&device, &sm0, &desc, &w0).expect("render pipeline");
+        let limits = crate::gpu::GpuLimits {
+            wgpu: device.limits(),
+            supports_base_instance: true,
+            supports_multiview: false,
+            supports_float32_filterable: false,
+            texture_compression_features: wgpu::Features::empty(),
+            max_per_draw_slab_slots: (device.limits().max_storage_buffer_binding_size / 256)
+                as usize,
+        };
+        let _pipe = create_null_render_pipeline(&device, &limits, &sm0, &desc, &w0)
+            .expect("render pipeline");
     }
 }

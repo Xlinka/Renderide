@@ -333,6 +333,7 @@ impl CompiledRenderGraph {
                 let scene_color_format = backend.scene_color_format_wgpu();
                 self.resolve_transient_textures(
                     device,
+                    gpu_limits,
                     backend.transient_pool_mut(),
                     TransientTextureResolveSurfaceParams {
                         viewport_px: alloc_viewport,
@@ -346,6 +347,7 @@ impl CompiledRenderGraph {
                 )?;
                 self.resolve_transient_buffers(
                     device,
+                    gpu_limits,
                     backend.transient_pool_mut(),
                     alloc_viewport,
                     &mut resources,

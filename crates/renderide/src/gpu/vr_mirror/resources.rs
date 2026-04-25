@@ -38,12 +38,25 @@ impl VrMirrorBlitResources {
         }
     }
 
-    fn ensure_staging(&mut self, device: &wgpu::Device, extent: (u32, u32)) {
+    fn ensure_staging(
+        &mut self,
+        device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
+        extent: (u32, u32),
+    ) {
         if self.staging_extent == extent && self.staging_texture.is_some() {
             return;
         }
-        let w = extent.0.max(1);
-        let h = extent.1.max(1);
+        let req_w = extent.0.max(1);
+        let req_h = extent.1.max(1);
+        let max_dim = limits.max_texture_dimension_2d();
+        let w = req_w.min(max_dim);
+        let h = req_h.min(max_dim);
+        if (w, h) != (req_w, req_h) {
+            logger::warn!(
+                "vr_mirror staging: {req_w}x{req_h} exceeds max_texture_dimension_2d={max_dim}; clamped to {w}x{h}",
+            );
+        }
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("vr_mirror_staging"),
             size: wgpu::Extent3d {
@@ -59,7 +72,7 @@ impl VrMirrorBlitResources {
             view_formats: &[],
         });
         self.staging_texture = Some(tex);
-        self.staging_extent = extent;
+        self.staging_extent = (w, h);
     }
 
     fn ensure_surface_uniform(&mut self, device: &wgpu::Device) {
@@ -99,7 +112,8 @@ impl VrMirrorBlitResources {
         source_layer_view: &wgpu::TextureView,
     ) {
         let device = gpu.device().as_ref();
-        self.ensure_staging(device, eye_extent);
+        let limits = gpu.limits().clone();
+        self.ensure_staging(device, &limits, eye_extent);
         self.ensure_surface_uniform(device);
 
         let Some(staging_tex) = self.staging_texture.as_ref() else {

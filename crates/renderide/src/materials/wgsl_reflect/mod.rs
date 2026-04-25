@@ -138,6 +138,120 @@ pub fn reflect_raster_material_requires_grab_pass(wgsl_source: &str) -> bool {
         .is_some_and(|r| r.requires_grab_pass)
 }
 
+/// Validates a reflected raster layout against device caps from [`crate::gpu::GpuLimits`].
+///
+/// Checks per-group entry count vs `max_bindings_per_bind_group`, per-stage sampler / sampled
+/// texture counts, and uniform / storage `min_binding_size` against the matching device cap. Used
+/// at pipeline build time so a material that exceeds an effective device cap fails with a clear
+/// [`ReflectError`] instead of triggering a downstream wgpu validation panic.
+pub fn validate_layout_against_limits(
+    layout: &ReflectedRasterLayout,
+    limits: &crate::gpu::GpuLimits,
+) -> Result<(), ReflectError> {
+    validate_group_against_limits(1, &layout.material_entries, limits)?;
+    validate_group_against_limits(2, &layout.per_draw_entries, limits)?;
+    let max_samplers = limits.max_samplers_per_shader_stage();
+    let max_textures = limits.max_sampled_textures_per_shader_stage();
+    let mut samplers = 0u32;
+    let mut textures = 0u32;
+    for e in layout
+        .material_entries
+        .iter()
+        .chain(layout.per_draw_entries.iter())
+    {
+        match e.ty {
+            wgpu::BindingType::Sampler(_) => samplers = samplers.saturating_add(1),
+            wgpu::BindingType::Texture { .. } => textures = textures.saturating_add(1),
+            _ => {}
+        }
+    }
+    if samplers > max_samplers {
+        return Err(ReflectError::ExceedsSamplersPerStage {
+            count: samplers,
+            max: max_samplers,
+        });
+    }
+    if textures > max_textures {
+        return Err(ReflectError::ExceedsSampledTexturesPerStage {
+            count: textures,
+            max: max_textures,
+        });
+    }
+    Ok(())
+}
+
+fn validate_group_against_limits(
+    group: u32,
+    entries: &[wgpu::BindGroupLayoutEntry],
+    limits: &crate::gpu::GpuLimits,
+) -> Result<(), ReflectError> {
+    let count = entries.len() as u32;
+    let max_bindings = limits.max_bindings_per_bind_group();
+    if count > max_bindings {
+        return Err(ReflectError::ExceedsBindingsPerGroup {
+            group,
+            count,
+            max: max_bindings,
+        });
+    }
+    for e in entries {
+        if let wgpu::BindingType::Buffer {
+            ty,
+            min_binding_size: Some(min_size),
+            ..
+        } = e.ty
+        {
+            let n = min_size.get();
+            match ty {
+                wgpu::BufferBindingType::Uniform => {
+                    if !limits.uniform_binding_fits(n) {
+                        return Err(ReflectError::UniformBindingExceedsLimit {
+                            group,
+                            binding: e.binding,
+                            size: n,
+                            max: limits.max_uniform_buffer_binding_size(),
+                        });
+                    }
+                }
+                wgpu::BufferBindingType::Storage { .. } => {
+                    if !limits.storage_binding_fits(n) {
+                        return Err(ReflectError::StorageBindingExceedsLimit {
+                            group,
+                            binding: e.binding,
+                            size: n,
+                            max: limits.max_storage_buffer_binding_size(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Validates a built vertex layout against device caps. Counts every attribute across all buffers.
+pub fn validate_vertex_layout_against_limits(
+    buffers: &[wgpu::VertexBufferLayout<'_>],
+    limits: &crate::gpu::GpuLimits,
+) -> Result<(), ReflectError> {
+    let buffer_count = buffers.len() as u32;
+    let attribute_count: u32 = buffers
+        .iter()
+        .map(|b| b.attributes.len() as u32)
+        .sum::<u32>();
+    let max_buffers = limits.max_vertex_buffers();
+    let max_attributes = limits.max_vertex_attributes();
+    if buffer_count > max_buffers || attribute_count > max_attributes {
+        return Err(ReflectError::VertexLayoutExceedsLimit {
+            buffers: buffer_count,
+            attributes: attribute_count,
+            max_buffers,
+            max_attributes,
+        });
+    }
+    Ok(())
+}
+
 /// Validates that `@group(2)` matches the per-draw storage slab (single binding, 256-byte element stride).
 pub fn validate_per_draw_group2(
     entries: &[wgpu::BindGroupLayoutEntry],

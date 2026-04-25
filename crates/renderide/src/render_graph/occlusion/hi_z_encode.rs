@@ -75,6 +75,7 @@ struct HiZMip0EncodeContext<'a> {
 /// Returns `false` when encoding must abort (zero extent, missing scratch, or GPU not ready).
 fn reset_and_prepare_hi_z_scratch(
     device: &wgpu::Device,
+    limits: &crate::gpu::GpuLimits,
     extent: (u32, u32),
     mode: OutputDepthMode,
     state: &mut HiZGpuState,
@@ -97,7 +98,7 @@ fn reset_and_prepare_hi_z_scratch(
     if state.scratch.as_ref().map(|s| (s.extent, s.mip_levels)) != Some(((bw, bh), mip_levels))
         || state.scratch.as_ref().map(|s| s.pyramid_r.is_some()) != Some(stereo)
     {
-        state.scratch = HiZGpuScratch::new(device, (bw, bh), stereo);
+        state.scratch = HiZGpuScratch::new(device, limits, (bw, bh), stereo);
         state.desktop_pending = pending_none_array();
         state.stereo_left_stash = pending_none_array();
         state.stereo_right_stash = pending_none_array();
@@ -124,10 +125,12 @@ fn reset_and_prepare_hi_z_scratch(
     state.can_encode_hi_z(scratch_ref)
 }
 
-/// GPU handles recorded into for one [`encode_hi_z_build`] call (device + queue + encoder).
+/// GPU handles recorded into for one [`encode_hi_z_build`] call (device + limits + queue + encoder).
 pub struct HiZBuildRecord<'a> {
     /// Device for pipeline cache and bind group creation.
     pub device: &'a wgpu::Device,
+    /// Effective device caps used to validate scratch allocations and dispatches.
+    pub limits: &'a crate::gpu::GpuLimits,
     /// Queue for uniform writes (`layer_uniform`, `downsample_uniform`).
     pub queue: &'a wgpu::Queue,
     /// Command encoder receiving the mip0, downsample, and staging copy commands.
@@ -157,10 +160,11 @@ pub fn encode_hi_z_build(
 ) {
     let HiZBuildRecord {
         device,
+        limits,
         queue,
         encoder,
     } = record;
-    if !reset_and_prepare_hi_z_scratch(device, extent, mode, state) {
+    if !reset_and_prepare_hi_z_scratch(device, limits, extent, mode, state) {
         return;
     }
 

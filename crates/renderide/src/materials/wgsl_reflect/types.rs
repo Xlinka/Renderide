@@ -111,4 +111,68 @@ pub enum ReflectError {
     /// Composed embedded shader stem has no WGSL payload (build/embed mismatch).
     #[error("embedded composed WGSL missing for material stem `{0}`")]
     EmbeddedTargetMissing(&'static str),
+    /// A bind group layout has more entries than the device allows.
+    #[error("group {group} has {count} bindings (device max_bindings_per_bind_group={max})")]
+    ExceedsBindingsPerGroup {
+        /// Bind group index.
+        group: u32,
+        /// Reflected entry count.
+        count: u32,
+        /// Device cap.
+        max: u32,
+    },
+    /// A shader stage has more samplers than the device allows.
+    #[error("stage has {count} samplers (device max_samplers_per_shader_stage={max})")]
+    ExceedsSamplersPerStage {
+        /// Reflected sampler count for the stage.
+        count: u32,
+        /// Device cap.
+        max: u32,
+    },
+    /// A shader stage has more sampled textures than the device allows.
+    #[error(
+        "stage has {count} sampled textures (device max_sampled_textures_per_shader_stage={max})"
+    )]
+    ExceedsSampledTexturesPerStage {
+        /// Reflected sampled texture count for the stage.
+        count: u32,
+        /// Device cap.
+        max: u32,
+    },
+    /// A uniform buffer entry's `min_binding_size` exceeds device caps.
+    #[error("uniform binding at group {group} binding {binding} requires {size} bytes (device max_uniform_buffer_binding_size={max})")]
+    UniformBindingExceedsLimit {
+        /// Group index.
+        group: u32,
+        /// Binding index.
+        binding: u32,
+        /// Required min binding size in bytes.
+        size: u64,
+        /// Device cap.
+        max: u64,
+    },
+    /// A storage buffer entry's `min_binding_size` exceeds device caps.
+    #[error("storage binding at group {group} binding {binding} requires {size} bytes (device max_storage_buffer_binding_size={max})")]
+    StorageBindingExceedsLimit {
+        /// Group index.
+        group: u32,
+        /// Binding index.
+        binding: u32,
+        /// Required min binding size in bytes.
+        size: u64,
+        /// Device cap.
+        max: u64,
+    },
+    /// Vertex layout has more buffers or attributes than the device allows.
+    #[error("vertex layout has {buffers} buffers / {attributes} attributes (device caps: max_vertex_buffers={max_buffers}, max_vertex_attributes={max_attributes})")]
+    VertexLayoutExceedsLimit {
+        /// Number of vertex buffers.
+        buffers: u32,
+        /// Number of vertex attributes (across all buffers).
+        attributes: u32,
+        /// Device cap.
+        max_buffers: u32,
+        /// Device cap.
+        max_attributes: u32,
+    },
 }

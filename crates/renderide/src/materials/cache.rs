@@ -65,14 +65,16 @@ pub type MaterialPipelineSet = Arc<[wgpu::RenderPipeline]>;
 #[derive(Debug)]
 pub struct MaterialPipelineCache {
     device: Arc<wgpu::Device>,
+    limits: Arc<crate::gpu::GpuLimits>,
     pipelines: Mutex<LruCache<MaterialPipelineCacheKey, MaterialPipelineSet>>,
 }
 
 impl MaterialPipelineCache {
-    /// Creates an empty cache for `device`.
-    pub fn new(device: Arc<wgpu::Device>) -> Self {
+    /// Creates an empty cache for `device` with the device's effective [`crate::gpu::GpuLimits`].
+    pub fn new(device: Arc<wgpu::Device>, limits: Arc<crate::gpu::GpuLimits>) -> Self {
         Self {
             device,
+            limits,
             pipelines: Mutex::new(LruCache::new(MAX_CACHED_PIPELINES_NZ)),
         }
     }
@@ -80,6 +82,11 @@ impl MaterialPipelineCache {
     /// Device used for `create_shader_module` / `create_render_pipeline`.
     pub fn device(&self) -> &Arc<wgpu::Device> {
         &self.device
+    }
+
+    /// Effective device limits used to validate reflected material layouts.
+    pub fn limits(&self) -> &Arc<crate::gpu::GpuLimits> {
+        &self.limits
     }
 
     /// Returns or builds the pipeline set for `kind`, `desc`, and `permutation`.
@@ -127,13 +134,20 @@ impl MaterialPipelineCache {
                 },
                 ShaderModuleBuildRefs {
                     device: &device,
+                    limits: &self.limits,
                     module: &module,
                     desc,
                     wgsl_source: &wgsl,
                 },
             )?,
             RasterPipelineKind::Null => {
-                vec![create_null_render_pipeline(&device, &module, desc, &wgsl)?]
+                vec![create_null_render_pipeline(
+                    &device,
+                    &self.limits,
+                    &module,
+                    desc,
+                    &wgsl,
+                )?]
             }
         };
         let set: MaterialPipelineSet = Arc::from(pipelines.into_boxed_slice());

@@ -25,6 +25,7 @@ impl CompiledRenderGraph {
     pub(super) fn resolve_transient_textures(
         &self,
         device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
         pool: &mut TransientPool,
         surface: TransientTextureResolveSurfaceParams,
         resources: &mut GraphResolvedResources,
@@ -58,6 +59,7 @@ impl CompiledRenderGraph {
                 };
                 let lease = pool.acquire_texture_resource(
                     device,
+                    limits,
                     key,
                     compiled.desc.label,
                     compiled.usage,
@@ -83,6 +85,7 @@ impl CompiledRenderGraph {
     pub(super) fn resolve_transient_buffers(
         &self,
         device: &wgpu::Device,
+        limits: &crate::gpu::GpuLimits,
         pool: &mut TransientPool,
         viewport_px: (u32, u32),
         resources: &mut GraphResolvedResources,
@@ -103,6 +106,7 @@ impl CompiledRenderGraph {
                 let size = helpers::resolve_buffer_size(compiled.desc.size_policy, viewport_px);
                 let lease = pool.acquire_buffer_resource(
                     device,
+                    limits,
                     key,
                     compiled.desc.label,
                     compiled.usage,

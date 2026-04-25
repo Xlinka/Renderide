@@ -120,9 +120,7 @@ impl OcclusionSystem {
     )]
     pub(crate) fn encode_hi_z_build_pass(
         &self,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        encoder: &mut wgpu::CommandEncoder,
+        record: HiZBuildRecord<'_>,
         state_slot: &Mutex<HiZGpuState>,
         input: HiZBuildInput<'_>,
         profiler: Option<&crate::profiling::GpuProfilerHandle>,
@@ -130,11 +128,7 @@ impl OcclusionSystem {
         profiling::scope!("hi_z::build");
         let mut state = state_slot.lock();
         encode_hi_z_build(
-            HiZBuildRecord {
-                device,
-                queue,
-                encoder,
-            },
+            record,
             input.depth_view,
             input.extent,
             input.mode,

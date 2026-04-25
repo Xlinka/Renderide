@@ -189,12 +189,30 @@ impl XrStereoSwapchain {
 }
 
 /// Two-layer depth target for multiview (`D2Array`, [`XR_VIEW_COUNT`] layers).
+///
+/// Returns [`None`] when `limits` cannot accommodate the requested extent or
+/// [`XR_VIEW_COUNT`] array layers; callers fall back to skipping stereo depth allocation.
 pub fn create_stereo_depth_texture(
     device: &wgpu::Device,
+    limits: &crate::gpu::GpuLimits,
     extent: (u32, u32),
-) -> (wgpu::Texture, wgpu::TextureView) {
+) -> Option<(wgpu::Texture, wgpu::TextureView)> {
     let w = extent.0.max(1);
     let h = extent.1.max(1);
+    if !limits.texture_2d_fits(w, h) {
+        logger::warn!(
+            "xr stereo depth: extent {w}x{h} exceeds max_texture_dimension_2d={}; skipping",
+            limits.max_texture_dimension_2d()
+        );
+        return None;
+    }
+    if !limits.array_layers_fit(XR_VIEW_COUNT) {
+        logger::warn!(
+            "xr stereo depth: requires {XR_VIEW_COUNT} array layers but max_texture_array_layers={}; skipping",
+            limits.max_texture_array_layers()
+        );
+        return None;
+    }
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("xr_stereo_depth"),
         size: wgpu::Extent3d {
@@ -217,5 +235,5 @@ pub fn create_stereo_depth_texture(
         array_layer_count: Some(XR_VIEW_COUNT),
         ..Default::default()
     });
-    (tex, view)
+    Some((tex, view))
 }

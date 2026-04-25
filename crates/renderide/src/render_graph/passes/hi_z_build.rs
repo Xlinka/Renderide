@@ -69,9 +69,12 @@ impl ComputePass for HiZBuildPass {
         };
         let mode = frame.output_depth_mode();
         frame.shared.occlusion.encode_hi_z_build_pass(
-            ctx.device,
-            ctx.queue.as_ref(),
-            ctx.encoder,
+            crate::render_graph::occlusion::HiZBuildRecord {
+                device: ctx.device,
+                limits: ctx.gpu_limits,
+                queue: ctx.queue.as_ref(),
+                encoder: ctx.encoder,
+            },
             frame.view.hi_z_slot.as_ref(),
             HiZBuildInput {
                 depth_view: depth_sample_view,

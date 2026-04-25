@@ -226,8 +226,8 @@ fn ensure_stereo_depth_texture(
         })
         .unwrap_or(true);
     if need_new_depth {
-        let (dt, dv) = create_stereo_depth_texture(gpu.device().as_ref(), extent);
-        bundle.stereo_depth = Some((dt, dv));
+        let limits = gpu.limits().clone();
+        bundle.stereo_depth = create_stereo_depth_texture(gpu.device().as_ref(), &limits, extent);
     }
     bundle.stereo_depth.is_some()
 }
