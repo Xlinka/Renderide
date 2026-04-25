@@ -221,6 +221,11 @@ pub enum MaterialPassState {
     Static,
     /// Unity ForwardBase: `Blend [_SrcBlend] [_DstBlend]`, `ZWrite [_ZWrite]`.
     UnityForwardBase,
+    /// Like [`Self::UnityForwardBase`] but never re-derives `depth_write` from the blend factors.
+    /// Used by passes that hardcode `ZWrite Off` in their Unity SubShader (e.g. volumetric fog
+    /// boxes) so transparent geometry stays non-writing even when the host leaves the blend
+    /// factors at the opaque defaults.
+    UnityForwardBaseTransparent,
     /// Unity ForwardAdd: `Blend [_SrcBlend] One`, `ZWrite Off`.
     UnityForwardAdd,
 }
@@ -235,6 +240,8 @@ pub enum MaterialPassState {
 pub enum PassKind {
     /// Opaque forward pass with no material-driven blend override; `Cull Back`, `ZWrite On`.
     Static,
+    /// Alpha-blended transparent pass with `Cull Off`, `ZWrite Off` by default.
+    AlphaBlend,
     /// Unity ForwardBase: opaque/transparent forward pass whose blend is driven by `_SrcBlend`/`_DstBlend`.
     ForwardBase,
     /// Unity ForwardAdd: additive per-light pass. `ZWrite Off`; runtime `_SrcBlend` drives src, dst is `One`.
@@ -249,6 +256,11 @@ pub enum PassKind {
     OverlayFront,
     /// Overlay rendered behind already-drawn geometry: reverse-Z `depth=Less` inverts the usual test.
     OverlayBehind,
+    /// Volumetric fog box: `Cull Front`, `ZWrite Off`, `ZTest Always`. The fragment shader computes
+    /// the segment length of the view ray inside an axis-aligned unit cube and accumulates fog,
+    /// occluding against the scene depth snapshot. Blend factors come from `_SrcBlend`/`_DstBlend`
+    /// without re-deriving `depth_write`, since the Unity SubShader hardcodes it off.
+    VolumeFog,
 }
 
 /// Returns the canonical [`MaterialPassDesc`] for a given [`PassKind`] and fragment entry point.
@@ -274,6 +286,13 @@ pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> Mat
     };
     match kind {
         PassKind::Static => base,
+        PassKind::AlphaBlend => MaterialPassDesc {
+            depth_write: false,
+            cull_mode: None,
+            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+            ..base
+        },
         PassKind::ForwardBase => MaterialPassDesc {
             material_state: MaterialPassState::UnityForwardBase,
             ..base
@@ -309,6 +328,14 @@ pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> Mat
             write_mask: wgpu::ColorWrites::ALL,
             ..base
         },
+        PassKind::VolumeFog => MaterialPassDesc {
+            depth_compare: wgpu::CompareFunction::Always,
+            depth_write: false,
+            cull_mode: Some(wgpu::Face::Front),
+            write_mask: wgpu::ColorWrites::ALL,
+            material_state: MaterialPassState::UnityForwardBaseTransparent,
+            ..base
+        },
     }
 }
 
@@ -316,6 +343,7 @@ pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> Mat
 const fn pass_kind_label(kind: PassKind) -> &'static str {
     match kind {
         PassKind::Static => "static",
+        PassKind::AlphaBlend => "alpha_blend",
         PassKind::ForwardBase => "forward_base",
         PassKind::ForwardAdd => "forward_add",
         PassKind::Outline => "outline",
@@ -323,6 +351,7 @@ const fn pass_kind_label(kind: PassKind) -> &'static str {
         PassKind::DepthPrepass => "depth_prepass",
         PassKind::OverlayFront => "overlay_front",
         PassKind::OverlayBehind => "overlay_behind",
+        PassKind::VolumeFog => "volume_fog",
     }
 }
 
@@ -425,6 +454,17 @@ pub fn materialized_pass_for_blend_mode(
                     wgpu::ColorWrites::COLOR
                 },
                 depth_write: src == 1 && dst == 0,
+                ..*pass
+            }
+        }
+        MaterialPassState::UnityForwardBaseTransparent => {
+            let Some((src, dst)) = blend_mode.unity_blend_factors() else {
+                return *pass;
+            };
+            let blend = unity_blend_state(src, dst);
+            MaterialPassDesc {
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
                 ..*pass
             }
         }

@@ -65,6 +65,7 @@ pub(super) fn default_vec4_for_field(field_name: &str) -> [f32; 4] {
         "_FOV" => [std::f32::consts::TAU, std::f32::consts::PI, 0.0, 0.0],
         "_SecondTexOffset" => [0.0, 0.0, 0.0, 0.0],
         "_OffsetMagnitude" => [0.1, 0.1, 0.0, 0.0],
+        "_PositionOffsetMagnitude" => [1.0, 1.0, 0.0, 0.0],
         "_PointSize" => [0.1, 0.1, 0.0, 0.0],
         "_PerspectiveFOV" => [
             std::f32::consts::FRAC_PI_4,
@@ -81,7 +82,12 @@ pub(super) fn default_vec4_for_field(field_name: &str) -> [f32; 4] {
         | "_OutsideColor"
         | "_OcclusionColor"
         | "_SSColor" => [0.0, 0.0, 0.0, 0.0],
+        "_FillColor" | "_InnerFillColor" | "_FillFarColor" | "_InnerFillFarColor" => {
+            [1.0, 1.0, 1.0, 0.0]
+        }
         "_OutlineColor" => [0.0, 0.0, 0.0, 1.0],
+        "_LineColor" | "_InnerLineColor" => [1.0, 1.0, 1.0, 1.0],
+        "_LineFarColor" | "_InnerLineFarColor" => [1.0, 1.0, 1.0, 0.0],
         "_RimColor" | "_ShadowRim" | "_MatcapTint" => [1.0, 1.0, 1.0, 1.0],
         "_BehindFarColor" | "_FrontFarColor" | "_FarColor" | "_FarColor0" => [0.0, 0.0, 0.0, 1.0],
         "_FarColor1" => [0.2, 0.2, 0.2, 1.0],

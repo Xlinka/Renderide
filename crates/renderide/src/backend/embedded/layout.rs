@@ -47,6 +47,9 @@ pub(crate) struct EmbeddedSharedKeywordIds {
     pub(crate) occlusion: i32,
     pub(crate) occlusion1: i32,
     pub(crate) occlusion_map: i32,
+    pub(crate) vertex_offset_map: i32,
+    pub(crate) uv_offset_map: i32,
+    pub(crate) position_offset_map: i32,
 }
 
 impl EmbeddedSharedKeywordIds {
@@ -75,6 +78,9 @@ impl EmbeddedSharedKeywordIds {
             occlusion: registry.intern("_Occlusion"),
             occlusion1: registry.intern("_Occlusion1"),
             occlusion_map: registry.intern("_OcclusionMap"),
+            vertex_offset_map: registry.intern("_VertexOffsetMap"),
+            uv_offset_map: registry.intern("_UVOffsetMap"),
+            position_offset_map: registry.intern("_PositionOffsetMap"),
         }
     }
 }

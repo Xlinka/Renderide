@@ -228,6 +228,38 @@ mod tests {
     }
 
     #[test]
+    fn resolves_pbstriplanartransparent_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSTriplanarTransparent").as_deref(),
+            Some("pbstriplanartransparent_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbstriplanar_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSTriplanar").as_deref(),
+            Some("pbstriplanar_default")
+        );
+    }
+
+    #[test]
+    fn resolves_pbsdisplace_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PBSDisplace").as_deref(),
+            Some("pbsdisplace_default")
+        );
+    }
+
+    #[test]
+    fn resolves_wireframedoublesided_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("WireframeDoubleSided").as_deref(),
+            Some("wireframedoublesided_default")
+        );
+    }
+
+    #[test]
     fn resolves_pbslerp_from_unity_name() {
         assert_eq!(
             embedded_default_stem_for_unity_name("PBSLerp").as_deref(),

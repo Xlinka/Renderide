@@ -1,4 +1,4 @@
-//! GPU-resident mesh buffers; an optional CPU vertex copy is kept only until lazy extended streams build.
+//! GPU-resident mesh buffers; compact CPU copies are kept only for lazy derived stream expansion.
 
 mod update;
 
@@ -6,12 +6,14 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::shared::{
-    MeshUploadData, RenderBoundingBox, VertexAttributeDescriptor, VertexAttributeType,
+    MeshUploadData, RenderBoundingBox, SubmeshTopology, VertexAttributeDescriptor,
+    VertexAttributeType,
 };
 use glam::Mat4;
+use wgpu::util::DeviceExt;
 
 use super::layout::{
-    color_float4_stream_bytes, extract_bind_poses, extract_blendshape_offsets,
+    color_float4_stream_bytes, compute_vertex_stride, extract_bind_poses, extract_blendshape_offsets,
     extract_float3_position_normal_as_vec4_streams, split_bone_weights_tail_for_gpu,
     synthetic_bone_data_for_blendshape_only, uv0_float2_stream_bytes, vertex_float2_stream_bytes,
     vertex_float4_stream_bytes, MeshBufferLayout,
@@ -44,7 +46,45 @@ impl fmt::Debug for ExtendedVertexStreamSource {
     }
 }
 
-/// Resident mesh on GPU: no CPU geometry retained.
+#[derive(Clone)]
+pub(super) struct WireframeMeshSource {
+    positions_bytes: Arc<[u8]>,
+    normals_bytes: Arc<[u8]>,
+    uv0_bytes: Arc<[u8]>,
+    index_bytes: Arc<[u8]>,
+    submesh_topologies: Arc<[SubmeshTopology]>,
+}
+
+impl fmt::Debug for WireframeMeshSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WireframeMeshSource")
+            .field("positions_bytes_len", &self.positions_bytes.len())
+            .field("normals_bytes_len", &self.normals_bytes.len())
+            .field("uv0_bytes_len", &self.uv0_bytes.len())
+            .field("index_bytes_len", &self.index_bytes.len())
+            .field("submesh_topologies_len", &self.submesh_topologies.len())
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct WireframeExpandedMesh {
+    pub positions_buffer: Arc<wgpu::Buffer>,
+    pub normals_buffer: Arc<wgpu::Buffer>,
+    pub uv0_buffer: Arc<wgpu::Buffer>,
+    pub barycentric_buffer: Arc<wgpu::Buffer>,
+    pub edge_distance_buffer: Arc<wgpu::Buffer>,
+    pub uv1_buffer: Arc<wgpu::Buffer>,
+    pub uv2_buffer: Arc<wgpu::Buffer>,
+    pub uv3_buffer: Arc<wgpu::Buffer>,
+    pub index_buffer: Arc<wgpu::Buffer>,
+    pub index_format: wgpu::IndexFormat,
+    pub index_count: u32,
+    pub submeshes: Vec<(u32, u32)>,
+    pub resident_bytes: u64,
+}
+
+/// Resident mesh on GPU with compact CPU source retained only for lazy derived stream expansion.
 ///
 /// **Vertex groups** in Renderite are expressed through per-vertex bone influence streams
 /// (`bone_counts` + bone weight tail) when the host provides skeleton data.
@@ -103,6 +143,10 @@ pub struct GpuMesh {
     pub uv3_buffer: Option<Arc<wgpu::Buffer>>,
     /// CPU vertex source kept only until lazy extended streams are created.
     extended_vertex_stream_source: Option<ExtendedVertexStreamSource>,
+    /// Compact CPU source kept until a wireframe-expanded mesh cache is built.
+    wireframe_mesh_source: Option<WireframeMeshSource>,
+    /// Triangle-expanded mesh buffers for `WireframeDoubleSided`.
+    pub wireframe_expanded_mesh: Option<WireframeExpandedMesh>,
     /// True when the host uploaded a real skeleton (`bone_count > 0`).
     pub has_skeleton: bool,
     /// Unity [`Mesh.bindposes`](https://docs.unity3d.com/ScriptReference/Mesh-bindposes.html):
@@ -272,6 +316,280 @@ pub(super) fn extended_vertex_stream_source_from_raw(
     Some(ExtendedVertexStreamSource {
         vertex_bytes: Arc::from(vertex_bytes),
         vertex_attributes: Arc::from(data.vertex_attributes.clone()),
+    })
+}
+
+fn validated_submesh_topologies(data: &MeshUploadData, index_count_u32: u32) -> Vec<SubmeshTopology> {
+    if data.submeshes.is_empty() {
+        return if index_count_u32 > 0 {
+            vec![SubmeshTopology::Triangles]
+        } else {
+            Vec::new()
+        };
+    }
+
+    let valid: Vec<SubmeshTopology> = data
+        .submeshes
+        .iter()
+        .filter(|s| {
+            s.index_count > 0
+                && (s.index_start as i64 + s.index_count as i64) <= index_count_u32 as i64
+        })
+        .map(|s| s.topology)
+        .collect();
+
+    if valid.is_empty() && index_count_u32 > 0 {
+        vec![SubmeshTopology::Triangles]
+    } else {
+        valid
+    }
+}
+
+pub(super) fn wireframe_mesh_source_from_raw(
+    raw: &[u8],
+    data: &MeshUploadData,
+    layout: &MeshBufferLayout,
+    index_count_u32: u32,
+) -> Option<WireframeMeshSource> {
+    let vertex_bytes = raw.get(..layout.vertex_size)?;
+    let (positions_bytes, normals_bytes) = extract_float3_position_normal_as_vec4_streams(
+        vertex_bytes,
+        data.vertex_count.max(0) as usize,
+        compute_vertex_stride(&data.vertex_attributes).max(1) as usize,
+        &data.vertex_attributes,
+    )?;
+    let uv0_bytes = uv0_float2_stream_bytes(
+        vertex_bytes,
+        data.vertex_count.max(0) as usize,
+        compute_vertex_stride(&data.vertex_attributes).max(1) as usize,
+        &data.vertex_attributes,
+    )?;
+    let index_bytes = raw
+        .get(layout.index_buffer_start..layout.index_buffer_start + layout.index_buffer_length)?
+        .to_vec();
+    Some(WireframeMeshSource {
+        positions_bytes: Arc::from(positions_bytes),
+        normals_bytes: Arc::from(normals_bytes),
+        uv0_bytes: Arc::from(uv0_bytes),
+        index_bytes: Arc::from(index_bytes),
+        submesh_topologies: Arc::from(validated_submesh_topologies(data, index_count_u32)),
+    })
+}
+
+fn decode_index(source: &WireframeMeshSource, format: wgpu::IndexFormat, index: u32) -> Option<u32> {
+    match format {
+        wgpu::IndexFormat::Uint16 => {
+            let start = index as usize * 2;
+            let bytes = source.index_bytes.get(start..start + 2)?;
+            Some(u16::from_le_bytes(bytes.try_into().ok()?) as u32)
+        }
+        wgpu::IndexFormat::Uint32 => {
+            let start = index as usize * 4;
+            let bytes = source.index_bytes.get(start..start + 4)?;
+            Some(u32::from_le_bytes(bytes.try_into().ok()?))
+        }
+    }
+}
+
+fn vec3_from_vec4_bytes(bytes: &[u8], index: u32) -> Option<[u8; 12]> {
+    let start = index as usize * 16;
+    let slice = bytes.get(start..start + 12)?;
+    slice.try_into().ok()
+}
+
+fn vec2_from_bytes(bytes: &[u8], index: u32) -> Option<[u8; 8]> {
+    let start = index as usize * 8;
+    let slice = bytes.get(start..start + 8)?;
+    slice.try_into().ok()
+}
+
+fn read_pos3(bytes: &[u8], index: u32) -> Option<[f32; 3]> {
+    let raw = vec3_from_vec4_bytes(bytes, index)?;
+    Some([
+        f32::from_le_bytes(raw[0..4].try_into().ok()?),
+        f32::from_le_bytes(raw[4..8].try_into().ok()?),
+        f32::from_le_bytes(raw[8..12].try_into().ok()?),
+    ])
+}
+
+fn triangle_altitudes_local(a: [f32; 3], b: [f32; 3], c: [f32; 3]) -> [f32; 3] {
+    let ax = glam::Vec3::from_array(a);
+    let bx = glam::Vec3::from_array(b);
+    let cx = glam::Vec3::from_array(c);
+    let area2 = (bx - ax).cross(cx - ax).length();
+    let ab = (bx - ax).length();
+    let bc = (cx - bx).length();
+    let ca = (ax - cx).length();
+    let safe_alt = |edge_len: f32| {
+        if edge_len <= 1.0e-6 {
+            0.0
+        } else {
+            area2 / edge_len
+        }
+    };
+    [safe_alt(bc), safe_alt(ca), safe_alt(ab)]
+}
+
+fn push_vec4(out: &mut Vec<u8>, values: [f32; 4]) {
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+}
+
+fn push_index_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn default_zero_uv_stream(vertex_count: usize) -> Vec<u8> {
+    vec![0u8; vertex_count * 8]
+}
+
+pub(super) fn wireframe_expanded_mesh_bytes(mesh: &GpuMesh) -> u64 {
+    mesh.wireframe_expanded_mesh
+        .as_ref()
+        .map(|wf| wf.resident_bytes)
+        .unwrap_or(0)
+}
+
+fn build_wireframe_expanded_mesh(
+    device: &wgpu::Device,
+    asset_id: i32,
+    index_format: wgpu::IndexFormat,
+    submeshes: &[(u32, u32)],
+    source: &WireframeMeshSource,
+) -> Option<WireframeExpandedMesh> {
+    if submeshes.len() != source.submesh_topologies.len() {
+        return None;
+    }
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut uv0 = Vec::new();
+    let mut barycentric = Vec::new();
+    let mut edge_distance = Vec::new();
+    let mut indices = Vec::new();
+    let mut expanded_submeshes = Vec::with_capacity(submeshes.len());
+
+    let bary = [
+        [1.0, 0.0, 0.0, 1.0],
+        [0.0, 1.0, 0.0, 1.0],
+        [0.0, 0.0, 1.0, 1.0],
+    ];
+
+    for ((first, count), topology) in submeshes.iter().copied().zip(source.submesh_topologies.iter().copied()) {
+        let expanded_start = (indices.len() / 4) as u32;
+        if topology != SubmeshTopology::Triangles {
+            expanded_submeshes.push((expanded_start, 0));
+            continue;
+        }
+
+        let tri_count = count / 3;
+        for tri in 0..tri_count {
+            let base = first + tri * 3;
+            let ia = decode_index(source, index_format, base)?;
+            let ib = decode_index(source, index_format, base + 1)?;
+            let ic = decode_index(source, index_format, base + 2)?;
+
+            let pa = vec3_from_vec4_bytes(&source.positions_bytes, ia)?;
+            let pb = vec3_from_vec4_bytes(&source.positions_bytes, ib)?;
+            let pc = vec3_from_vec4_bytes(&source.positions_bytes, ic)?;
+            let na = vec3_from_vec4_bytes(&source.normals_bytes, ia)?;
+            let nb = vec3_from_vec4_bytes(&source.normals_bytes, ib)?;
+            let nc = vec3_from_vec4_bytes(&source.normals_bytes, ic)?;
+            let uva = vec2_from_bytes(&source.uv0_bytes, ia)?;
+            let uvb = vec2_from_bytes(&source.uv0_bytes, ib)?;
+            let uvc = vec2_from_bytes(&source.uv0_bytes, ic)?;
+
+            let altitudes = triangle_altitudes_local(
+                read_pos3(&source.positions_bytes, ia)?,
+                read_pos3(&source.positions_bytes, ib)?,
+                read_pos3(&source.positions_bytes, ic)?,
+            );
+            let edge_vectors = [
+                [altitudes[0], 0.0, 0.0, 1.0],
+                [0.0, altitudes[1], 0.0, 1.0],
+                [0.0, 0.0, altitudes[2], 1.0],
+            ];
+
+            for (pos, nrm, uv, bary_v, edge_v) in [
+                (pa, na, uva, bary[0], edge_vectors[0]),
+                (pb, nb, uvb, bary[1], edge_vectors[1]),
+                (pc, nc, uvc, bary[2], edge_vectors[2]),
+            ] {
+                positions.extend_from_slice(&pos);
+                positions.extend_from_slice(&1.0f32.to_le_bytes());
+                normals.extend_from_slice(&nrm);
+                normals.extend_from_slice(&0.0f32.to_le_bytes());
+                uv0.extend_from_slice(&uv);
+                push_vec4(&mut barycentric, bary_v);
+                push_vec4(&mut edge_distance, edge_v);
+                let next_index = (indices.len() / 4) as u32;
+                push_index_u32(&mut indices, next_index);
+            }
+        }
+        expanded_submeshes.push((expanded_start, (indices.len() / 4) as u32 - expanded_start));
+    }
+
+    if indices.is_empty() {
+        return None;
+    }
+
+    let vertex_count = positions.len() / 16;
+    let zero_uv = default_zero_uv_stream(vertex_count);
+    let make_vertex_buffer = |label: &str, bytes: &[u8]| {
+        Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("mesh {asset_id} wireframe_{label}")),
+            contents: bytes,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        }))
+    };
+
+    let positions_buffer = Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("mesh {asset_id} wireframe_positions")),
+        contents: &positions,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+    }));
+    let normals_buffer = Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("mesh {asset_id} wireframe_normals")),
+        contents: &normals,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+    }));
+    let uv0_buffer = make_vertex_buffer("uv0", &uv0);
+    let barycentric_buffer = make_vertex_buffer("barycentric", &barycentric);
+    let edge_distance_buffer = make_vertex_buffer("edge_distance", &edge_distance);
+    let uv1_buffer = make_vertex_buffer("uv1", &zero_uv);
+    let uv2_buffer = make_vertex_buffer("uv2", &zero_uv);
+    let uv3_buffer = make_vertex_buffer("uv3", &zero_uv);
+    let index_buffer = Arc::new(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some(&format!("mesh {asset_id} wireframe_indices")),
+        contents: &indices,
+        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_DST,
+    }));
+
+    let resident_bytes = positions_buffer.size()
+        + normals_buffer.size()
+        + uv0_buffer.size()
+        + barycentric_buffer.size()
+        + edge_distance_buffer.size()
+        + uv1_buffer.size()
+        + uv2_buffer.size()
+        + uv3_buffer.size()
+        + index_buffer.size();
+
+    Some(WireframeExpandedMesh {
+        positions_buffer,
+        normals_buffer,
+        uv0_buffer,
+        barycentric_buffer,
+        edge_distance_buffer,
+        uv1_buffer,
+        uv2_buffer,
+        uv3_buffer,
+        index_buffer,
+        index_format: wgpu::IndexFormat::Uint32,
+        index_count: (indices.len() / 4) as u32,
+        submeshes: expanded_submeshes,
+        resident_bytes,
     })
 }
 
@@ -515,6 +833,8 @@ impl GpuMesh {
         let derived = extract_derived_vertex_streams(device, raw, data, layout, &core);
         let extended_vertex_stream_source =
             extended_vertex_stream_source_from_raw(raw, data, layout);
+        let wireframe_mesh_source =
+            wireframe_mesh_source_from_raw(raw, data, layout, core.index_count_u32);
 
         let bone_skin =
             upload_bone_and_skin_buffers(device, raw, data, layout, use_blendshapes, vc_usize)?;
@@ -568,6 +888,8 @@ impl GpuMesh {
             uv2_buffer: derived.uv2_buffer,
             uv3_buffer: derived.uv3_buffer,
             extended_vertex_stream_source,
+            wireframe_mesh_source,
+            wireframe_expanded_mesh: None,
             has_skeleton: data.bone_count > 0,
             skinning_bind_matrices: bone_skin.skinning_bind_matrices,
             resident_bytes,

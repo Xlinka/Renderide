@@ -267,4 +267,35 @@ mod text_uniform_packing_tests {
             Some(1.0)
         );
     }
+
+    #[test]
+    fn displacement_keywords_infer_from_bound_offset_textures() {
+        let mut store = MaterialPropertyStore::new();
+        let reg = PropertyIdRegistry::new();
+        let ids = StemEmbeddedPropertyIds::minimal_for_tests(&reg);
+        let vertex_offset_map = reg.intern("_VertexOffsetMap");
+        let uv_offset_map = reg.intern("_UVOffsetMap");
+        let position_offset_map = reg.intern("_PositionOffsetMap");
+
+        store.set_material(9, vertex_offset_map, MaterialPropertyValue::Texture(123));
+        store.set_material(9, uv_offset_map, MaterialPropertyValue::Texture(124));
+        store.set_material(9, position_offset_map, MaterialPropertyValue::Texture(125));
+
+        assert_eq!(
+            inferred_keyword_float_f32("VERTEX_OFFSET", &store, lookup(9), &ids),
+            Some(1.0)
+        );
+        assert_eq!(
+            inferred_keyword_float_f32("UV_OFFSET", &store, lookup(9), &ids),
+            Some(1.0)
+        );
+        assert_eq!(
+            inferred_keyword_float_f32("OBJECT_POS_OFFSET", &store, lookup(9), &ids),
+            Some(1.0)
+        );
+        assert_eq!(
+            inferred_keyword_float_f32("VERTEX_POS_OFFSET", &store, lookup(9), &ids),
+            Some(0.0)
+        );
+    }
 }

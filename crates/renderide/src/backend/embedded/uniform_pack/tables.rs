@@ -82,6 +82,14 @@ pub(super) fn inferred_keyword_float_f32(
             lookup,
             &[kw.occlusion, kw.occlusion1, kw.occlusion_map],
         ),
+        "VERTEX_OFFSET" => {
+            texture_property_present_pids(store, lookup, &[kw.vertex_offset_map])
+        }
+        "UV_OFFSET" => texture_property_present_pids(store, lookup, &[kw.uv_offset_map]),
+        "OBJECT_POS_OFFSET" => {
+            texture_property_present_pids(store, lookup, &[kw.position_offset_map])
+        }
+        "VERTEX_POS_OFFSET" => false,
         _ if is_keyword_like_field(field_name) => false,
         _ => return None,
     };

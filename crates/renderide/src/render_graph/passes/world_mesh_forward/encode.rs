@@ -10,6 +10,14 @@ use crate::render_graph::world_mesh_draw_prep::for_each_instance_batch;
 use crate::render_graph::WorldMeshDrawItem;
 use crate::resources::MeshPool;
 
+fn is_wireframe_double_sided_draw(item: &WorldMeshDrawItem) -> bool {
+    matches!(
+        &item.batch_key.pipeline,
+        crate::materials::RasterPipelineKind::EmbeddedStem(stem)
+            if stem.as_ref() == "wireframedoublesided_default"
+    )
+}
+
 /// Embedded material vertex stream requirements for one draw (matches pipeline reflection flags).
 pub(crate) struct EmbeddedVertexStreamFlags {
     /// UV0 stream at `@location(2)`.
@@ -348,6 +356,10 @@ pub(crate) fn draw_mesh_submesh_instanced(
     if item.mesh_asset_id < 0 || item.node_id < 0 || item.index_count == 0 {
         return;
     }
+    if is_wireframe_double_sided_draw(item) {
+        draw_wireframe_expanded_mesh_instanced(rpass, item, gpu.mesh_pool, instances, last_mesh);
+        return;
+    }
     let EmbeddedVertexStreamFlags {
         embedded_uv,
         embedded_color,
@@ -517,6 +529,99 @@ pub(crate) fn draw_mesh_submesh_instanced(
     let first = item.first_index;
     let end = first.saturating_add(item.index_count);
     rpass.draw_indexed(first..end, 0, instances);
+}
+
+fn draw_wireframe_expanded_mesh_instanced(
+    rpass: &mut wgpu::RenderPass<'_>,
+    item: &WorldMeshDrawItem,
+    mesh_pool: &MeshPool,
+    instances: std::ops::Range<u32>,
+    last_mesh: &mut LastMeshBindState,
+) {
+    let Some(mesh) = mesh_pool.get_mesh(item.mesh_asset_id) else {
+        return;
+    };
+    let Some(expanded) = mesh.wireframe_expanded_mesh.as_ref() else {
+        logger::trace!(
+            "WorldMeshForward: wireframe-expanded mesh missing for mesh_asset_id {}; draw skipped until pre-warm catches up",
+            item.mesh_asset_id
+        );
+        return;
+    };
+    let Some(&(first, count)) = expanded.submeshes.get(item.slot_index) else {
+        return;
+    };
+    if count == 0 {
+        return;
+    }
+
+    bind_vertex_if_changed!(
+        rpass,
+        0,
+        expanded.positions_buffer.slice(..),
+        BufferBindId::full(expanded.positions_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        1,
+        expanded.normals_buffer.slice(..),
+        BufferBindId::full(expanded.normals_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        2,
+        expanded.uv0_buffer.slice(..),
+        BufferBindId::full(expanded.uv0_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        3,
+        expanded.barycentric_buffer.slice(..),
+        BufferBindId::full(expanded.barycentric_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        4,
+        expanded.edge_distance_buffer.slice(..),
+        BufferBindId::full(expanded.edge_distance_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        5,
+        expanded.uv1_buffer.slice(..),
+        BufferBindId::full(expanded.uv1_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        6,
+        expanded.uv2_buffer.slice(..),
+        BufferBindId::full(expanded.uv2_buffer.as_ref()),
+        last_mesh.vertex
+    );
+    bind_vertex_if_changed!(
+        rpass,
+        7,
+        expanded.uv3_buffer.slice(..),
+        BufferBindId::full(expanded.uv3_buffer.as_ref()),
+        last_mesh.vertex
+    );
+
+    let index_key = (
+        expanded.index_buffer.as_ref() as *const wgpu::Buffer as usize,
+        expanded.index_format,
+    );
+    if last_mesh.index != Some(index_key) {
+        rpass.set_index_buffer(expanded.index_buffer.slice(..), expanded.index_format);
+        last_mesh.index = Some(index_key);
+    }
+
+    rpass.draw_indexed(first..first.saturating_add(count), 0, instances);
 }
 
 #[cfg(test)]

@@ -17,6 +17,10 @@ use crate::materials::{
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::world_mesh_draw_prep::FramePreparedRenderables;
 
+fn embedded_stem_needs_wireframe_expanded_mesh(stem: &str) -> bool {
+    stem == "wireframedoublesided_default"
+}
+
 /// Pending cache warm-up request fanned out to the rayon pool by
 /// [`CompiledRenderGraph::pre_warm_pipeline_cache_for_views`].
 struct PipelineCompileRequest {
@@ -107,6 +111,7 @@ impl CompiledRenderGraph {
     ) -> Result<(), GraphExecuteError> {
         profiling::scope!("graph::pre_warm_per_view");
         let mut mesh_ids_needing_extended_streams = std::collections::HashSet::new();
+        let mut mesh_ids_needing_wireframe_expansion = std::collections::HashSet::new();
         let mut any_view_missing_prefetch = false;
         for view in views {
             let occlusion_view = view.occlusion_view_id();
@@ -134,6 +139,15 @@ impl CompiledRenderGraph {
                     {
                         mesh_ids_needing_extended_streams.insert(item.mesh_asset_id);
                     }
+                    if item.mesh_asset_id >= 0
+                        && matches!(
+                            &item.batch_key.pipeline,
+                            RasterPipelineKind::EmbeddedStem(stem)
+                                if embedded_stem_needs_wireframe_expanded_mesh(stem.as_ref())
+                        )
+                    {
+                        mesh_ids_needing_wireframe_expansion.insert(item.mesh_asset_id);
+                    }
                 }
             } else {
                 any_view_missing_prefetch = true;
@@ -152,6 +166,7 @@ impl CompiledRenderGraph {
             collect_fallback_extended_stream_mesh_ids(
                 mv_ctx,
                 &mut mesh_ids_needing_extended_streams,
+                &mut mesh_ids_needing_wireframe_expansion,
             );
         }
         for mesh_asset_id in mesh_ids_needing_extended_streams {
@@ -160,6 +175,13 @@ impl CompiledRenderGraph {
                 .asset_transfers
                 .mesh_pool
                 .ensure_extended_vertex_streams(mv_ctx.device, mesh_asset_id);
+        }
+        for mesh_asset_id in mesh_ids_needing_wireframe_expansion {
+            let _ = mv_ctx
+                .backend
+                .asset_transfers
+                .mesh_pool
+                .ensure_wireframe_expanded_mesh(mv_ctx.device, mesh_asset_id);
         }
         Ok(())
     }
@@ -325,6 +347,7 @@ fn collect_unique_pipeline_requests(
 fn collect_fallback_extended_stream_mesh_ids(
     mv_ctx: &MultiViewExecutionContext<'_>,
     out: &mut std::collections::HashSet<i32>,
+    wireframe_out: &mut std::collections::HashSet<i32>,
 ) {
     profiling::scope!("graph::pre_warm_per_view_fallback_scene_walk");
     let Some(reg) = mv_ctx.backend.materials.material_registry() else {
@@ -349,6 +372,9 @@ fn collect_fallback_extended_stream_mesh_ids(
             .unwrap_or(-1);
         let needs = match resolve_raster_pipeline(shader_asset_id, router) {
             RasterPipelineKind::EmbeddedStem(stem) => {
+                if embedded_stem_needs_wireframe_expanded_mesh(stem.as_ref()) {
+                    wireframe_out.insert(mesh_asset_id);
+                }
                 embedded_stem_needs_extended_vertex_streams(stem.as_ref(), ShaderPermutation(0))
             }
             RasterPipelineKind::DebugWorldNormals => false,

@@ -119,6 +119,7 @@ struct BuildPassDirective {
 fn pass_kind_variant(value: &str, file: &str, line: usize) -> Result<&'static str, BuildError> {
     match value.trim().to_ascii_lowercase().as_str() {
         "static" => Ok("Static"),
+        "alpha_blend" | "alphablend" | "transparent" => Ok("AlphaBlend"),
         "forward_base" | "forwardbase" | "base" | "unity_forward_base" => Ok("ForwardBase"),
         "forward_add" | "forwardadd" | "add" | "delta" | "unity_forward_add" => Ok("ForwardAdd"),
         "outline" => Ok("Outline"),
@@ -126,6 +127,7 @@ fn pass_kind_variant(value: &str, file: &str, line: usize) -> Result<&'static st
         "depth_prepass" | "depthprepass" | "prepass" => Ok("DepthPrepass"),
         "overlay_front" | "overlayfront" | "front" => Ok("OverlayFront"),
         "overlay_behind" | "overlaybehind" | "behind" => Ok("OverlayBehind"),
+        "volume_fog" | "volumefog" | "fog_box" | "fogbox" => Ok("VolumeFog"),
         _ => Err(BuildError::Message(format!(
             "{file}:{line}: unknown `//#material` kind `{value}`"
         ))),

@@ -20,7 +20,8 @@ use super::super::upload_impl::{
 use super::{
     blendshape_and_deform_buffers_match_for_in_place, compatible_for_in_place_real_skeleton,
     compatible_for_in_place_synthetic_blendshape_skeleton, extended_vertex_stream_bytes,
-    extended_vertex_stream_source_from_raw, write_in_place_blendshape_buffer,
+    extended_vertex_stream_source_from_raw, wireframe_expanded_mesh_bytes,
+    wireframe_mesh_source_from_raw, write_in_place_blendshape_buffer,
     write_in_place_bone_buffers, write_in_place_index_buffer,
     write_in_place_vertex_and_derived_streams, GpuMesh, MeshInPlaceWriteContext,
 };
@@ -90,6 +91,35 @@ impl GpuMesh {
             .saturating_sub(old_bytes)
             .saturating_add(new_bytes);
         self.extended_vertex_stream_source = None;
+        true
+    }
+
+    /// Creates the triangle-expanded buffers used by `WireframeDoubleSided`.
+    pub(crate) fn ensure_wireframe_expanded_mesh(&mut self, device: &wgpu::Device) -> bool {
+        if self.wireframe_expanded_mesh.is_some() {
+            return true;
+        }
+        let Some(source) = self.wireframe_mesh_source.as_ref() else {
+            return false;
+        };
+        let Some(expanded) = super::build_wireframe_expanded_mesh(
+            device,
+            self.asset_id,
+            self.index_format,
+            &self.submeshes,
+            source,
+        ) else {
+            return false;
+        };
+
+        let old_bytes = wireframe_expanded_mesh_bytes(self);
+        self.wireframe_expanded_mesh = Some(expanded);
+        self.wireframe_mesh_source = None;
+        let new_bytes = wireframe_expanded_mesh_bytes(self);
+        self.resident_bytes = self
+            .resident_bytes
+            .saturating_sub(old_bytes)
+            .saturating_add(new_bytes);
         true
     }
 
@@ -292,6 +322,22 @@ impl GpuMesh {
         } else {
             self.extended_vertex_stream_source.clone()
         };
+        let wireframe_mesh_source = if write_vertex || write_ib {
+            wireframe_mesh_source_from_raw(raw, data, layout, self.index_count)
+        } else {
+            self.wireframe_mesh_source.clone()
+        };
+        let wireframe_expanded_mesh = if write_vertex || write_ib {
+            None
+        } else {
+            self.wireframe_expanded_mesh.clone()
+        };
+        let resident_bytes = if write_vertex || write_ib {
+            self.resident_bytes
+                .saturating_sub(wireframe_expanded_mesh_bytes(self))
+        } else {
+            self.resident_bytes
+        };
 
         Some(Self {
             asset_id: self.asset_id,
@@ -320,9 +366,11 @@ impl GpuMesh {
             uv2_buffer: self.uv2_buffer.clone(),
             uv3_buffer: self.uv3_buffer.clone(),
             extended_vertex_stream_source,
+            wireframe_mesh_source,
+            wireframe_expanded_mesh,
             has_skeleton: self.has_skeleton,
             skinning_bind_matrices: skinning,
-            resident_bytes: self.resident_bytes,
+            resident_bytes,
         })
     }
 }
