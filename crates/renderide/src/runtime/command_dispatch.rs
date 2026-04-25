@@ -87,7 +87,7 @@ pub(super) fn dispatch_running_command(runtime: &mut RendererRuntime, cmd: Rende
             );
         }
         RendererCommand::RenderDecouplingConfig(cfg) => {
-            apply_render_decoupling_config(runtime, cfg)
+            apply_render_decoupling_config(runtime, cfg);
         }
         ref cmd => {
             let tag = renderer_command_variant_tag(cmd);

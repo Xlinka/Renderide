@@ -35,9 +35,7 @@
 //! Phase 2 has room to complete. Crashes on worker threads still use libstd's small altstack
 //! and may lose Phase 2 silently; Phase 1 (hex IPs) remains durable on every thread.
 
-use core::ffi::c_void;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
