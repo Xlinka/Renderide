@@ -38,6 +38,11 @@
 use std::path::Path;
 use std::sync::OnceLock;
 
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+use core::ffi::c_void;
+#[cfg(any(target_os = "linux", target_os = "android", windows))]
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use crash_handler::{CrashContext, CrashEventResult, CrashHandler};
 
 /// Upper bound on captured stack frames per fatal crash.
