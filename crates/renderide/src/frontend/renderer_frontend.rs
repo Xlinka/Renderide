@@ -47,6 +47,11 @@ pub struct RendererFrontend {
     smoothed_fps: Option<f32>,
     /// Host-driven decoupling state (activation threshold, recouple counter, last submit timing).
     decoupling: DecouplingState,
+    /// Renderer-tick count since the previous outgoing [`FrameStartData`] send. Captured into
+    /// [`crate::shared::PerformanceState::rendered_frames_since_last`] on each send (then reset
+    /// to start a fresh window) and incremented once per completed tick by
+    /// [`Self::note_render_tick_complete`]. Mirrors Renderite.Unity `Stats.RenderedFramesSinceLast`.
+    rendered_frames_since_last: i32,
 }
 
 impl RendererFrontend {
@@ -78,6 +83,7 @@ impl RendererFrontend {
             perf_last_render_time_seconds: super::frame_start_performance::RENDER_TIME_UNAVAILABLE,
             smoothed_fps: None,
             decoupling: DecouplingState::default(),
+            rendered_frames_since_last: 0,
         }
     }
 
@@ -293,10 +299,12 @@ impl RendererFrontend {
         }
 
         let bootstrap = self.last_frame_index < 0 && !self.sent_bootstrap_frame_start;
+        let rendered_frames_since_last = std::mem::replace(&mut self.rendered_frames_since_last, 0);
         let performance = super::frame_start_performance::step_frame_performance(
             self.wall_interval_us_for_perf,
             self.perf_last_render_time_seconds,
             &mut self.smoothed_fps,
+            rendered_frames_since_last,
         );
         let frame_start = FrameStartData {
             last_frame_index: self.last_frame_index,
@@ -361,20 +369,33 @@ impl RendererFrontend {
     }
 
     /// Replaces the renderer-side decoupling thresholds with the host's
-    /// [`RenderDecouplingConfig`]. Active state and recouple progress are preserved across
-    /// updates so a `ForceDecouple` toggle does not bounce the flag mid-tick.
+    /// [`RenderDecouplingConfig`]. Non-`ForceDecouple` configs reset `active` and
+    /// `recouple_progress` so a new threshold takes effect immediately rather than draining the
+    /// recouple counter; see [`DecouplingState::apply_config`].
     pub fn set_decoupling_config(&mut self, cfg: RenderDecouplingConfig) {
         self.decoupling.apply_config(&cfg);
     }
 
     /// Per-tick activation check. Forwards `now` and the current
     /// [`Self::last_frame_data_processed`] inversion (i.e. "are we waiting on a host submit?") to
-    /// the decoupling state machine. Call once per winit tick before
-    /// [`crate::runtime::RendererRuntime::run_asset_integration`].
+    /// the decoupling state machine. Call once per winit tick **after** IPC poll so a
+    /// `FrameSubmitData` already drained this tick clears the awaiting flag (preventing a
+    /// stale-wait spurious activation), and **before**
+    /// [`crate::runtime::RendererRuntime::run_asset_integration`] so the decoupled-mode asset
+    /// budget reflects the latest state. Do not call after [`Self::pre_frame`]: a fresh
+    /// `FrameStartData` send zeros the elapsed wait window.
     pub fn update_decoupling_activation(&mut self, now: Instant) {
         let awaiting_submit = !self.last_frame_data_processed;
         self.decoupling
             .update_activation_for_tick(now, awaiting_submit);
+    }
+
+    /// Increments the renderer-tick counter that feeds
+    /// [`crate::shared::PerformanceState::rendered_frames_since_last`]. Call once at the end of
+    /// every renderer tick (the natural pair to [`Self::pre_frame`] capturing+resetting the
+    /// counter on the next send).
+    pub fn note_render_tick_complete(&mut self) {
+        self.rendered_frames_since_last = self.rendered_frames_since_last.saturating_add(1);
     }
 
     /// Updates lock-step state after the host submits a frame.

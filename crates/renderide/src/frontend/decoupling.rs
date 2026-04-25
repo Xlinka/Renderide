@@ -70,13 +70,28 @@ impl Default for DecouplingState {
 
 impl DecouplingState {
     /// Replaces the threshold/ceiling/recouple-count with the host's [`RenderDecouplingConfig`].
-    /// Active state and recouple progress are preserved across config updates so a
-    /// forced-decouple → restored cycle does not bounce the flag mid-tick.
+    ///
+    /// On every non-`ForceDecouple` config, `active` and `recouple_progress` are reset so the
+    /// new threshold takes effect immediately. Otherwise a transient activation under the
+    /// boot-time defaults would persist across a host-driven config change (the recouple
+    /// counter would drain only on incoming `FrameSubmitData` round-trips, leaving the renderer
+    /// stuck-decoupled when the user has just dialed the threshold up).
+    ///
+    /// `ForceDecouple` is encoded by FrooxEngine as
+    /// `decouple_activate_interval == 0.0 && recouple_frame_count == i32::MAX`. For that exact
+    /// pair the existing `active` is preserved and activation will trigger immediately on the
+    /// next tick (since any elapsed wait satisfies `>= 0.0`).
     pub fn apply_config(&mut self, cfg: &RenderDecouplingConfig) {
-        self.activate_interval_seconds = cfg.decouple_activate_interval.max(0.0);
+        let new_interval = cfg.decouple_activate_interval.max(0.0);
+        let is_force_decouple = new_interval == 0.0 && cfg.recouple_frame_count == i32::MAX;
+        self.activate_interval_seconds = new_interval;
         self.decoupled_max_asset_processing_seconds =
             cfg.decoupled_max_asset_processing_time.max(0.0);
         self.recouple_frame_count = cfg.recouple_frame_count;
+        if !is_force_decouple {
+            self.active = false;
+            self.recouple_progress = 0;
+        }
     }
 
     /// Whether the renderer is currently running decoupled from host lock-step.
@@ -318,6 +333,53 @@ mod tests {
         assert!(
             s.is_active(),
             "force-decouple must persist across many submits"
+        );
+    }
+
+    #[test]
+    fn apply_config_resets_active_on_normal_config() {
+        let mut s = DecouplingState::default();
+        s.apply_config(&cfg(0.05, 0.004, 5));
+        let t0 = Instant::now();
+        s.record_frame_start_sent(t0);
+        s.update_activation_for_tick(t0 + Duration::from_secs_f32(0.06), true);
+        assert!(s.is_active(), "precondition: activated");
+
+        s.apply_config(&cfg(1.0, 0.004, 60));
+        assert!(
+            !s.is_active(),
+            "non-ForceDecouple config must clear active so the new threshold takes effect"
+        );
+        assert_eq!(s.recouple_progress, 0);
+    }
+
+    #[test]
+    fn apply_config_preserves_active_for_force_decouple_encoding() {
+        let mut s = DecouplingState::default();
+        s.apply_config(&cfg(0.05, 0.004, 5));
+        let t0 = Instant::now();
+        s.record_frame_start_sent(t0);
+        s.update_activation_for_tick(t0 + Duration::from_secs_f32(0.06), true);
+        assert!(s.is_active(), "precondition: activated");
+
+        s.apply_config(&cfg(0.0, 0.004, i32::MAX));
+        assert!(
+            s.is_active(),
+            "ForceDecouple-encoded config must preserve active"
+        );
+    }
+
+    #[test]
+    fn infinity_threshold_never_activates() {
+        let mut s = DecouplingState::default();
+        s.apply_config(&cfg(f32::INFINITY, 0.004, 60));
+        assert_eq!(s.activate_interval_seconds(), f32::INFINITY);
+        let t0 = Instant::now();
+        s.record_frame_start_sent(t0);
+        s.update_activation_for_tick(t0 + Duration::from_secs(3600), true);
+        assert!(
+            !s.is_active(),
+            "infinite threshold (FrooxEngine ActivationFramerate=0) must never activate"
         );
     }
 

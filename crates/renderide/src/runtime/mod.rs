@@ -181,7 +181,23 @@ impl RendererRuntime {
         self.frontend.reset_ipc_outbound_drop_tick_flags();
         self.backend.reset_light_prep_for_tick();
         self.frontend.on_tick_frame_wall_clock(now);
+    }
+
+    /// Per-tick decoupling activation check. Call **after** [`Self::poll_ipc`] (so a
+    /// `FrameSubmitData` already drained this tick clears the awaiting flag and prevents a
+    /// stale-wait spurious activation) and **before** [`Self::run_asset_integration`] (so the
+    /// decoupled-mode asset budget reflects the latest state). Do not call after
+    /// [`Self::pre_frame`]: a fresh BeginFrame send would zero the elapsed wait and the check
+    /// would never fire.
+    pub fn update_decoupling_activation(&mut self, now: Instant) {
         self.frontend.update_decoupling_activation(now);
+    }
+
+    /// Increments the renderer-tick counter feeding
+    /// [`crate::shared::PerformanceState::rendered_frames_since_last`]. Call once per completed
+    /// tick from [`crate::app::RenderideApp::tick_frame`]'s epilogue.
+    pub fn note_render_tick_complete(&mut self) {
+        self.frontend.note_render_tick_complete();
     }
 
     /// Forwards the most recently completed GPU submit→idle interval to the frontend so the next

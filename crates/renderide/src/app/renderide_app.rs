@@ -582,6 +582,7 @@ impl RenderideApp {
             .and_then(|g| g.last_completed_gpu_render_time_seconds());
         self.runtime
             .tick_frame_render_time_end(gpu_render_time_seconds);
+        self.runtime.note_render_tick_complete();
         self.previous_tick_end = Some(Instant::now());
     }
 
@@ -611,6 +612,7 @@ impl RenderideApp {
             crate::profiling::emit_frame_mark();
             return;
         }
+        self.runtime.update_decoupling_activation(Instant::now());
         {
             profiling::scope!("tick::asset_integration");
             self.runtime.run_asset_integration();

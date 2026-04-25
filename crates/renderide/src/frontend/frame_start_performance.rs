@@ -9,6 +9,10 @@
 //!   ([`crate::gpu::GpuContext::last_completed_gpu_render_time_seconds`]); excludes the post-submit
 //!   present/vsync block. Reports `-1.0` when no GPU completion callback has fired yet, mirroring the
 //!   Renderite.Unity `XRStats.TryGetGPUTimeLastFrame` sentinel.
+//! - `rendered_frames_since_last` — number of completed renderer ticks since the previous
+//!   `FrameStartData` send. `1` in lockstep, `> 1` when the renderer ticked multiple times per
+//!   host submit (i.e. host is slow and the renderer kept rendering). Drives
+//!   `FrooxEngine.PerformanceStats.RenderedFramesSinceLastTick`.
 //!
 //! A new [`PerformanceState`] is built on every tick where `wall_interval_us > 0` (i.e. starting
 //! from the second tick); the host treats a non-null `FrameStartData.performance` as the latest
@@ -43,10 +47,14 @@ pub(crate) fn next_smoothed_fps(prev: Option<f32>, instant_fps: f32, alpha: f32)
 /// `last_frame_render_time_seconds` should be the value returned by
 /// [`crate::gpu::GpuContext::last_completed_gpu_render_time_seconds`] mapped through
 /// `unwrap_or(`[`RENDER_TIME_UNAVAILABLE`]`)`.
+///
+/// `rendered_frames_since_last` is the renderer-tick count since the previous `FrameStartData`
+/// send (the caller should snapshot then reset its counter for the new send window).
 pub(crate) fn step_frame_performance(
     wall_interval_us: u64,
     last_frame_render_time_seconds: f32,
     smoothed_fps: &mut Option<f32>,
+    rendered_frames_since_last: i32,
 ) -> Option<PerformanceState> {
     if wall_interval_us == 0 {
         return None;
@@ -58,6 +66,7 @@ pub(crate) fn step_frame_performance(
         fps: next_smoothed,
         immediate_fps: instant_fps,
         render_time: last_frame_render_time_seconds,
+        rendered_frames_since_last,
         ..PerformanceState::default()
     })
 }
@@ -80,7 +89,7 @@ mod tests {
     #[test]
     fn step_frame_performance_first_tick_with_zero_interval_returns_none() {
         let mut smoothed = None;
-        let p = step_frame_performance(0, 0.005, &mut smoothed);
+        let p = step_frame_performance(0, 0.005, &mut smoothed, 0);
         assert!(p.is_none());
         assert!(smoothed.is_none());
     }
@@ -88,7 +97,7 @@ mod tests {
     #[test]
     fn step_frame_performance_emits_immediate_smoothed_and_render_time() {
         let mut smoothed = None;
-        let p = step_frame_performance(16_666, 0.005, &mut smoothed)
+        let p = step_frame_performance(16_666, 0.005, &mut smoothed, 1)
             .expect("payload built when wall_interval_us > 0");
         assert!((p.immediate_fps - 60.0).abs() < 1.0);
         assert!((p.fps - p.immediate_fps).abs() < f32::EPSILON);
@@ -99,8 +108,8 @@ mod tests {
     #[test]
     fn step_frame_performance_emits_every_consecutive_call() {
         let mut smoothed = None;
-        let a = step_frame_performance(16_666, 0.005, &mut smoothed);
-        let b = step_frame_performance(16_666, 0.005, &mut smoothed);
+        let a = step_frame_performance(16_666, 0.005, &mut smoothed, 1);
+        let b = step_frame_performance(16_666, 0.005, &mut smoothed, 1);
         assert!(a.is_some(), "first non-zero interval must emit");
         assert!(b.is_some(), "subsequent ticks must emit (no throttle)");
     }
@@ -108,8 +117,19 @@ mod tests {
     #[test]
     fn step_frame_performance_propagates_render_time_unavailable_sentinel() {
         let mut smoothed = None;
-        let p = step_frame_performance(16_666, RENDER_TIME_UNAVAILABLE, &mut smoothed)
+        let p = step_frame_performance(16_666, RENDER_TIME_UNAVAILABLE, &mut smoothed, 0)
             .expect("payload built");
         assert_eq!(p.render_time, RENDER_TIME_UNAVAILABLE);
+    }
+
+    #[test]
+    fn step_frame_performance_propagates_rendered_frames_since_last() {
+        let mut smoothed = None;
+        let lockstep = step_frame_performance(16_666, 0.005, &mut smoothed, 1)
+            .expect("lockstep payload built");
+        assert_eq!(lockstep.rendered_frames_since_last, 1);
+        let decoupled = step_frame_performance(16_666, 0.005, &mut smoothed, 7)
+            .expect("decoupled payload built");
+        assert_eq!(decoupled.rendered_frames_since_last, 7);
     }
 }
