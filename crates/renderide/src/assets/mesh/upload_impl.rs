@@ -59,12 +59,16 @@ pub(super) struct DerivedStreams {
     pub uv3_buffer: Option<Arc<wgpu::Buffer>>,
 }
 
-/// Validates raw length and device max buffer size; returns `None` when upload must abort.
+/// Validates raw length and device buffer-size limits, including per-derived-stream sizes
+/// that would otherwise reach `device.create_buffer_init` and trigger a fatal panic in
+/// `wgpu`'s `get_mapped_range` when the underlying buffer creation fails validation.
+///
+/// Returns `false` when the upload must abort.
 pub(super) fn validate_mesh_upload_layout(
     raw: &[u8],
     data: &MeshUploadData,
     layout: &MeshBufferLayout,
-    max_buf: u64,
+    gpu_limits: &GpuLimits,
 ) -> bool {
     if raw.len() < layout.total_buffer_length {
         logger::error!(
@@ -76,17 +80,52 @@ pub(super) fn validate_mesh_upload_layout(
         return false;
     }
 
-    if layout.vertex_size as u64 > max_buf
-        || layout.index_buffer_length as u64 > max_buf
-        || layout.total_buffer_length as u64 > max_buf
-    {
-        logger::warn!(
-            "mesh {}: buffer layout exceeds max_buffer_size ({})",
-            data.asset_id,
-            max_buf
-        );
-        return false;
+    let max_buf = gpu_limits.max_buffer_size();
+    let max_storage = gpu_limits.max_storage_buffer_binding_size();
+    let vc = data.vertex_count.max(0) as u64;
+
+    // (label, size in bytes, requires storage-binding limit)
+    //
+    // Derived per-vertex storage streams (positions, normals, bone_indices, bone_weights_vec4)
+    // are all `vc * 16` and bound to STORAGE bindings, so a single entry covers all of them.
+    // Likewise the largest VERTEX-only derived stream (color, tangent) is `vc * 16`.
+    let checks: [(&str, u64, bool); 7] = [
+        ("interleaved vertices", layout.vertex_size as u64, false),
+        ("indices", layout.index_buffer_length as u64, false),
+        (
+            "total mesh layout",
+            layout.total_buffer_length as u64,
+            false,
+        ),
+        ("derived per-vertex storage stream", vc * 16, true),
+        ("derived per-vertex vertex stream", vc * 16, false),
+        ("bone_counts", layout.bone_counts_length as u64, true),
+        ("bind_poses", layout.bind_poses_length as u64, true),
+    ];
+
+    for (label, size, is_storage) in checks {
+        if size > max_buf {
+            logger::warn!(
+                "mesh {}: {} buffer ({} B) exceeds max_buffer_size ({} B)",
+                data.asset_id,
+                label,
+                size,
+                max_buf
+            );
+            return false;
+        }
+        if is_storage && size > max_storage {
+            logger::warn!(
+                "mesh {}: {} buffer ({} B) exceeds max_storage_buffer_binding_size ({} B)",
+                data.asset_id,
+                label,
+                size,
+                max_storage
+            );
+            return false;
+        }
     }
+
     true
 }
 

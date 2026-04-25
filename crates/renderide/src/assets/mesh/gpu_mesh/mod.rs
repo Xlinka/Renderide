@@ -502,7 +502,7 @@ impl GpuMesh {
         layout: &MeshBufferLayout,
     ) -> Option<Self> {
         let max_buf = gpu_limits.max_buffer_size();
-        if !validate_mesh_upload_layout(raw, data, layout, max_buf) {
+        if !validate_mesh_upload_layout(raw, data, layout, gpu_limits) {
             return None;
         }
 
