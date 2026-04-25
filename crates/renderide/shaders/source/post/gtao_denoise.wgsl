@@ -15,8 +15,13 @@
 //!   only nudges the AO term toward its neighbourhood mean; multiple iterations compound to a
 //!   wider effective kernel without overshooting.
 //! * `fs_denoise_final` — used for the last (or only) denoise pass. Centre-pixel weight is the
-//!   full `denoise_blur_beta`, and the result is scaled by `XE_GTAO_OCCLUSION_TERM_SCALE = 1.5`
-//!   to compress XeGTAO's empirical raw-AO range into `[0, 1]` before the apply pass reads it.
+//!   full `denoise_blur_beta` (no extra blur compounding into a follow-up pass).
+//!
+//! Note: XeGTAO additionally multiplies the final-pass output by `OCCLUSION_TERM_SCALE = 1.5`
+//! to repack its [0, 0.667]-range raw AO into the upper part of a U8 storage texture (the
+//! consuming apply step then divides back out). This port stores the AO term in `R16Float`,
+//! which has plenty of headroom, so we skip that scaling — applying it here and then `saturate`-
+//! ing would clamp every brighter-than-0.667 pixel to 1.0 and effectively disable AO.
 //!
 //! The build script composes this into `gtao_denoise_default` and `gtao_denoise_multiview`. The
 //! multiview variant uses `@builtin(view_index)` to address the AO and edges array layers per
@@ -73,14 +78,10 @@ fn load_edges_packed(pix: vec2<i32>, view_layer: u32) -> f32 {
     return textureLoad(edges_in, pix, i32(view_layer), 0).r;
 }
 
-/// XeGTAO `OCCLUSION_TERM_SCALE`: empirical compression applied on the final denoise pass so the
-/// raw GTAO term (which can overshoot 1.0 by a small amount due to the analytic integral)
-/// settles into `[0, 1]` before the apply pass.
-const OCCLUSION_TERM_SCALE: f32 = 1.5;
-
-/// Inner core of the bilateral kernel. `is_final_pass` switches the centre-pixel weight and the
-/// post-scale; the rest of the math (edge unpacking, symmetry enforcement, edginess leak,
-/// weighted accumulation) is shared between the two entry points.
+/// Inner core of the bilateral kernel. `is_final_pass` switches the centre-pixel weight (the
+/// only meaningful difference between intermediate and final iterations once XeGTAO's U8-storage
+/// scaling is dropped); the rest of the math (edge unpacking, symmetry enforcement, edginess
+/// leak, weighted accumulation) is shared between the two entry points.
 fn denoise_at(pix: vec2<i32>, view_layer: u32, is_final_pass: bool) -> f32 {
     let edges_c = gp::unpack_edges(load_edges_packed(pix, view_layer));
     let edges_l = gp::unpack_edges(load_edges_packed(pix + vec2<i32>(-1, 0), view_layer));
@@ -141,9 +142,7 @@ fn denoise_at(pix: vec2<i32>, view_layer: u32, is_final_pass: bool) -> f32 {
     sum = sum + ao_br * w_br;
     sum_w = sum_w + w_br;
 
-    let result = sum / max(sum_w, 1e-6);
-    let scaled = select(result, result * OCCLUSION_TERM_SCALE, is_final_pass);
-    return saturate(scaled);
+    return sum / max(sum_w, 1e-6);
 }
 
 #ifdef MULTIVIEW
