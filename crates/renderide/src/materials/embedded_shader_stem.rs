@@ -531,4 +531,92 @@ mod tests {
             Some("pbsdistancelerpspeculartransparent_default")
         );
     }
+
+    #[test]
+    fn resolves_circle_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Circle").as_deref(),
+            Some("circle_default")
+        );
+    }
+
+    #[test]
+    fn resolves_polargrid_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("PolarGrid").as_deref(),
+            Some("polargrid_default")
+        );
+    }
+
+    #[test]
+    fn resolves_invisible_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Invisible").as_deref(),
+            Some("invisible_default")
+        );
+    }
+
+    #[test]
+    fn resolves_null_from_unity_name() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Null").as_deref(),
+            Some("null_default")
+        );
+    }
+
+    #[test]
+    fn resolves_testshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TestShader").as_deref(),
+            Some("testshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_newunlitshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("NewUnlitShader").as_deref(),
+            Some("newunlitshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_overlay_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("Overlay").as_deref(),
+            Some("overlay_default")
+        );
+    }
+
+    #[test]
+    fn resolves_texturedebug_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TextureDebug").as_deref(),
+            Some("texturedebug_default")
+        );
+    }
+
+    #[test]
+    fn resolves_unlitpolarmapping_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("UnlitPolarMapping").as_deref(),
+            Some("unlitpolarmapping_default")
+        );
+    }
+
+    #[test]
+    fn resolves_faceexplodeshader_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("FaceExplodeShader").as_deref(),
+            Some("faceexplodeshader_default")
+        );
+    }
+
+    #[test]
+    fn resolves_testblend_from_asset_filename() {
+        assert_eq!(
+            embedded_default_stem_for_unity_name("TestBlend").as_deref(),
+            Some("testblend_default")
+        );
+    }
 }
