@@ -809,11 +809,13 @@ fn frame_has_local_lights(frame: &FrameRenderParams<'_>) -> bool {
 /// Records the opaque draw subset into a render pass already opened by the graph.
 pub(super) fn record_world_mesh_forward_opaque_graph_raster(
     rpass: &mut wgpu::RenderPass<'_>,
-    _device: &wgpu::Device,
+    device: &wgpu::Device,
     _queue: &wgpu::Queue,
     frame: &mut FrameRenderParams<'_>,
     prepared: &PreparedWorldMeshForwardFrame,
 ) -> bool {
+    super::skybox::record_procedural_skybox(rpass, device, frame, prepared);
+
     if prepared.regular_indices.is_empty() {
         return true;
     }

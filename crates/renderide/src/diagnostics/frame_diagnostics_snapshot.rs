@@ -7,6 +7,7 @@ use crate::backend::RenderBackend;
 use crate::gpu::GpuContext;
 use crate::materials::RasterPipelineKind;
 use crate::render_graph::{WorldMeshDrawStateRow, WorldMeshDrawStats};
+use crate::assets::util::normalize_unity_shader_lookup_key;
 
 /// One row in the **Shader routes** tab: identifies the host shader, its backing pipeline, and
 /// whether the renderer has a real embedded shader for it or falls back to `debug_world_normals`.
@@ -211,12 +212,20 @@ impl FrameDiagnosticsSnapshot {
                 reg.shader_routes_for_hud()
                     .into_iter()
                     .map(|(id, pipeline, name)| {
-                        let implemented =
-                            !matches!(pipeline, RasterPipelineKind::DebugWorldNormals);
-                        let pipeline_label = match &pipeline {
-                            RasterPipelineKind::EmbeddedStem(stem) => stem.to_string(),
-                            RasterPipelineKind::DebugWorldNormals => {
-                                "debug_world_normals".to_string()
+                        let handled_by_skybox_path = name
+                            .as_deref()
+                            .map(is_procedural_sky_route_name)
+                            .unwrap_or(false);
+                        let implemented = handled_by_skybox_path
+                            || !matches!(pipeline, RasterPipelineKind::DebugWorldNormals);
+                        let pipeline_label = if handled_by_skybox_path {
+                            "procedural_skybox".to_string()
+                        } else {
+                            match &pipeline {
+                                RasterPipelineKind::EmbeddedStem(stem) => stem.to_string(),
+                                RasterPipelineKind::DebugWorldNormals => {
+                                    "debug_world_normals".to_string()
+                                }
                             }
                         };
                         ShaderRouteRow {
@@ -275,9 +284,16 @@ impl FrameDiagnosticsSnapshot {
     }
 }
 
+fn is_procedural_sky_route_name(name: &str) -> bool {
+    matches!(
+        normalize_unity_shader_lookup_key(name).as_str(),
+        "proceduralsky" | "proceduralskybox"
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::FrameDiagnosticsSnapshot;
+    use super::{is_procedural_sky_route_name, FrameDiagnosticsSnapshot};
 
     #[test]
     fn fps_from_wall_matches_inverse_ms() {
@@ -339,5 +355,12 @@ mod tests {
             unhandled_ipc_command_event_total: 0,
         };
         assert_eq!(s.fps_from_wall(), 0.0);
+    }
+
+    #[test]
+    fn procedural_sky_route_name_recognizes_resonite_variant() {
+        assert!(is_procedural_sky_route_name("ProceduralSky"));
+        assert!(is_procedural_sky_route_name("ProceduralSkyBox"));
+        assert!(!is_procedural_sky_route_name("Unlit"));
     }
 }

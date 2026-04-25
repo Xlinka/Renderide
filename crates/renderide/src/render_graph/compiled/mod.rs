@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::backend::RenderBackend;
 use crate::gpu::{GpuContext, GpuLimits};
+use crate::scene::RenderSpaceId;
 use crate::scene::SceneCoordinator;
 
 use super::error::GraphExecuteError;
@@ -61,6 +62,8 @@ pub enum FrameViewTarget<'a> {
 pub struct FrameView<'a> {
     /// Clip planes, FOV, and matrix overrides for this view.
     pub host_camera: HostCameraFrame,
+    /// Render space driving this view's skybox and view basis, when one is known.
+    pub render_space_id: Option<RenderSpaceId>,
     /// Color/depth destination.
     pub target: FrameViewTarget<'a>,
     /// Optional transform filter for secondary cameras.
@@ -159,6 +162,7 @@ impl<'a> FrameView<'a> {
     ) -> Self {
         Self {
             host_camera,
+            render_space_id: None,
             target: FrameViewTarget::Swapchain,
             draw_filter: None,
             prefetched_world_mesh_draws,
@@ -169,6 +173,7 @@ impl<'a> FrameView<'a> {
     pub fn for_hmd(host_camera: HostCameraFrame, external: ExternalFrameTargets<'a>) -> Self {
         Self {
             host_camera,
+            render_space_id: None,
             target: FrameViewTarget::ExternalMultiview(external),
             draw_filter: None,
             prefetched_world_mesh_draws: None,
@@ -184,6 +189,7 @@ impl<'a> FrameView<'a> {
     ) -> Self {
         Self {
             host_camera,
+            render_space_id: None,
             target: FrameViewTarget::OffscreenRt(external),
             draw_filter,
             prefetched_world_mesh_draws,

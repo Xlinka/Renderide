@@ -24,7 +24,7 @@ use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
 use crate::materials::{MaterialPassDesc, MaterialPipelineDesc, MaterialPipelineSet};
 use crate::pipelines::ShaderPermutation;
 use crate::render_graph::occlusion::HiZGpuState;
-use crate::scene::SceneCoordinator;
+use crate::scene::{RenderSpaceId, SceneCoordinator};
 use crate::shared::HeadOutputDevice;
 
 use super::blackboard::BlackboardSlot;
@@ -376,6 +376,8 @@ pub struct FrameRenderParamsView<'a> {
     pub viewport_px: (u32, u32),
     /// Clip planes, FOV, and ortho task hint from the last host frame submission.
     pub host_camera: HostCameraFrame,
+    /// Render space driving this view's skybox material selection, when one is known.
+    pub render_space_id: Option<RenderSpaceId>,
     /// When `true`, the forward pass targets 2-layer array attachments and may use multiview.
     pub multiview_stereo: bool,
     /// Optional transform filter for secondary cameras (selective / exclude lists).

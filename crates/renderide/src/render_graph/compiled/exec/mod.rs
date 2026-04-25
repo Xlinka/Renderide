@@ -21,6 +21,7 @@ use hashbrown::HashMap;
 
 use crate::backend::RenderBackend;
 use crate::gpu::GpuContext;
+use crate::scene::RenderSpaceId;
 use crate::scene::SceneCoordinator;
 
 use super::super::context::{GraphResolvedResources, PostSubmitContext};
@@ -107,6 +108,8 @@ pub(super) struct PerViewWorkItem {
     pub(super) view_idx: usize,
     /// Host camera snapshot for the view.
     pub(super) host_camera: HostCameraFrame,
+    /// Render space driving this view's skybox material selection.
+    pub(super) render_space_id: Option<RenderSpaceId>,
     /// Stable occlusion slot used by post-submit hooks.
     pub(super) occlusion_view: OcclusionViewId,
     /// Optional secondary-camera transform filter.
@@ -704,6 +707,7 @@ impl CompiledRenderGraph {
             work_items.push(PerViewWorkItem {
                 view_idx,
                 host_camera,
+                render_space_id: view.render_space_id,
                 occlusion_view,
                 draw_filter: view.draw_filter.clone(),
                 prefetched_world_mesh_draws: view.prefetched_world_mesh_draws.take(),

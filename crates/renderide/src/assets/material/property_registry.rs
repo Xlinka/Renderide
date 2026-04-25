@@ -63,6 +63,18 @@ impl PropertyIdRegistry {
         id
     }
 
+    /// Returns the existing stable id for `name` without allocating a new one.
+    pub fn lookup(&self, name: &str) -> Option<i32> {
+        if name.is_empty() {
+            return Some(0);
+        }
+        let g = match self.inner.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        g.names.get(name).copied()
+    }
+
     /// Interns then runs semantic hooks (use from `MaterialPropertyIdRequest` handling).
     pub fn intern_for_host_request(&self, name: &str) -> i32 {
         let id = self.intern(name);
@@ -112,6 +124,14 @@ mod tests {
         let first = reg.intern("_Color");
         let second = reg.intern("_Color");
         assert_eq!(first, second);
+    }
+
+    #[test]
+    fn lookup_returns_existing_id_without_allocating() {
+        let reg = PropertyIdRegistry::new();
+        assert_eq!(reg.lookup("_Missing"), None);
+        let id = reg.intern("_Color");
+        assert_eq!(reg.lookup("_Color"), Some(id));
     }
 
     #[test]

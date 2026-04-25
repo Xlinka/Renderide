@@ -40,6 +40,8 @@ pub struct RenderSpaceState {
     pub override_view_position: bool,
     /// `RenderSpaceUpdate.view_position_is_external`
     pub view_position_is_external: bool,
+    /// `RenderSpaceUpdate.skybox_material_asset_id`
+    pub skybox_material_asset_id: i32,
     /// Space root TRS from host.
     pub root_transform: RenderTransform,
     /// Resolved eye / root TRS for view (`override_view_position` selects overridden view).
@@ -70,6 +72,7 @@ impl RenderSpaceState {
         self.is_private = update.is_private;
         self.view_position_is_external = update.view_position_is_external;
         self.override_view_position = update.override_view_position;
+        self.skybox_material_asset_id = update.skybox_material_asset_id;
         self.root_transform = update.root_transform;
         self.view_transform = if update.override_view_position {
             update.overriden_view_transform
@@ -88,6 +91,7 @@ impl Default for RenderSpaceState {
             is_private: false,
             override_view_position: false,
             view_position_is_external: false,
+            skybox_material_asset_id: -1,
             root_transform: RenderTransform::default(),
             view_transform: RenderTransform::default(),
             nodes: Vec::new(),

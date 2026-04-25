@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::backend::RenderBackend;
 use crate::gpu::{GpuLimits, MsaaDepthResolveResources};
-use crate::scene::SceneCoordinator;
+use crate::scene::{RenderSpaceId, SceneCoordinator};
 
 use super::super::context::{GraphResolvedResources, RasterPassCtx, ResolvedGraphTexture};
 use super::super::error::GraphExecuteError;
@@ -32,6 +32,8 @@ pub(super) struct FrameRenderParamsViewInputs<'a, 'r> {
     pub scene_color_format: wgpu::TextureFormat,
     /// Host camera inputs forwarded to per-pass logic.
     pub host_camera: HostCameraFrame,
+    /// Render space driving this view's skybox material selection.
+    pub render_space_id: Option<RenderSpaceId>,
     /// Optional per-camera draw-list filter applied before world-mesh recording.
     pub transform_draw_filter: Option<CameraTransformDrawFilter>,
     /// GPU capability limits, shared with passes that need to clamp against them.
@@ -51,6 +53,7 @@ pub(super) fn frame_render_params_from_shared<'a>(
         resolved,
         scene_color_format,
         host_camera,
+        render_space_id,
         transform_draw_filter,
         gpu_limits,
         msaa_depth_resolve,
@@ -73,6 +76,7 @@ pub(super) fn frame_render_params_from_shared<'a>(
             scene_color_format,
             viewport_px: resolved.viewport_px,
             host_camera,
+            render_space_id,
             multiview_stereo: resolved.multiview_stereo,
             transform_draw_filter,
             offscreen_write_render_texture_asset_id: resolved
@@ -131,6 +135,7 @@ pub(super) fn frame_render_params_from_resolved<'a>(
             resolved,
             scene_color_format,
             host_camera,
+            render_space_id: None,
             transform_draw_filter,
             gpu_limits,
             msaa_depth_resolve,

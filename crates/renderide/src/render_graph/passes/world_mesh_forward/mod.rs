@@ -28,6 +28,7 @@
 mod current_view_textures;
 mod encode;
 mod execute_helpers;
+mod skybox;
 mod vp;
 
 use std::num::NonZeroU32;

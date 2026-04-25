@@ -36,6 +36,7 @@ impl CompiledRenderGraph {
         let PerViewWorkItem {
             view_idx,
             host_camera,
+            render_space_id,
             draw_filter,
             prefetched_world_mesh_draws,
             resolved,
@@ -72,7 +73,13 @@ impl CompiledRenderGraph {
         let graph_resources: &GraphResolvedResources = &resolved_resources;
 
         let mut frame_params =
-            Self::build_per_view_frame_params(shared, &resolved, &host_camera, draw_filter);
+            Self::build_per_view_frame_params(
+                shared,
+                &resolved,
+                &host_camera,
+                render_space_id,
+                draw_filter,
+            );
         let mut view_blackboard = self.build_per_view_blackboard(
             &frame_params,
             graph_resources,
@@ -138,6 +145,7 @@ impl CompiledRenderGraph {
         shared: &'a PerViewRecordShared<'a>,
         resolved: &'a ResolvedView<'a>,
         host_camera: &super::super::super::frame_params::HostCameraFrame,
+        render_space_id: Option<crate::scene::RenderSpaceId>,
         draw_filter: Option<crate::render_graph::world_mesh_draw_prep::CameraTransformDrawFilter>,
     ) -> crate::render_graph::frame_params::FrameRenderParams<'a> {
         profiling::scope!("graph::per_view::build_frame_params");
@@ -159,6 +167,7 @@ impl CompiledRenderGraph {
                 resolved,
                 scene_color_format: shared.scene_color_format,
                 host_camera: *host_camera,
+                render_space_id,
                 transform_draw_filter: draw_filter,
                 gpu_limits: shared.gpu_limits_arc.clone(),
                 msaa_depth_resolve: shared.msaa_depth_resolve.clone(),

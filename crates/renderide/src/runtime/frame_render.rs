@@ -144,6 +144,8 @@ enum PreparedViewKind<'a> {
 struct PreparedView<'a> {
     /// Per-view camera parameters (clip planes, matrices, stereo, overrides).
     host_camera: HostCameraFrame,
+    /// Render space driving this view's skybox material selection.
+    render_space_id: Option<crate::scene::RenderSpaceId>,
     /// Optional selective/exclude filter; present for secondary cameras only.
     draw_filter: Option<CameraTransformDrawFilter>,
     /// Hi-Z / occlusion slot identity for this view.
@@ -445,6 +447,7 @@ impl RendererRuntime {
             .zip(view_draws)
             .map(|(prep, draws)| FrameView {
                 host_camera: prep.host_camera,
+                render_space_id: prep.render_space_id,
                 target: prep.target(),
                 draw_filter: prep.draw_filter.clone(),
                 prefetched_world_mesh_draws: draws,
@@ -507,6 +510,7 @@ impl RendererRuntime {
             let extent_px = ext.extent_px;
             views.push(PreparedView {
                 host_camera: self.host_camera,
+                render_space_id: self.scene.active_main_space().map(|space| space.id),
                 draw_filter: None,
                 occlusion_view_id: OcclusionViewId::Main,
                 viewport_px: extent_px,
@@ -602,6 +606,7 @@ impl RendererRuntime {
             }
             views.push(PreparedView {
                 host_camera: hc,
+                render_space_id: Some(sid),
                 draw_filter: Some(filter),
                 occlusion_view_id: OcclusionViewId::OffscreenRenderTexture(rt_id),
                 viewport_px: viewport,
@@ -628,6 +633,7 @@ impl RendererRuntime {
     fn build_main_swapchain_view<'a>(&self, swapchain_extent_px: (u32, u32)) -> PreparedView<'a> {
         PreparedView {
             host_camera: self.host_camera,
+            render_space_id: self.scene.active_main_space().map(|space| space.id),
             draw_filter: None,
             occlusion_view_id: OcclusionViewId::Main,
             viewport_px: swapchain_extent_px,
@@ -667,6 +673,7 @@ mod tests {
             runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries, TEST_EXTENT);
         assert_eq!(views.len(), 1);
         assert!(matches!(views[0].kind, PreparedViewKind::MainSwapchain));
+        assert_eq!(views[0].render_space_id, None);
         assert_eq!(views[0].occlusion_view_id, OcclusionViewId::Main);
         assert_eq!(views[0].prefetch, DrawPrefetch::Prefetched);
         assert!(views[0].draw_filter.is_none());
@@ -719,5 +726,22 @@ mod tests {
         assert_eq!(view.view_origin_world(), glam::Vec3::new(1.0, 2.0, 3.0));
         view.host_camera.explicit_camera_world_position = Some(glam::Vec3::new(7.0, 8.0, 9.0));
         assert_eq!(view.view_origin_world(), glam::Vec3::new(7.0, 8.0, 9.0));
+    }
+
+    #[test]
+    fn main_view_tracks_active_render_space_id_for_skybox_resolution() {
+        let mut runtime = build_runtime();
+        runtime.scene.test_seed_space_identity_worlds(
+            crate::scene::RenderSpaceId(7),
+            vec![crate::shared::RenderTransform::default()],
+            vec![-1],
+        );
+        let views =
+            runtime.collect_prepared_views(FrameRenderMode::DesktopPlusSecondaries, TEST_EXTENT);
+        let main = views
+            .iter()
+            .find(|v| matches!(v.kind, PreparedViewKind::MainSwapchain))
+            .expect("DesktopPlusSecondaries yields a MainSwapchain view");
+        assert_eq!(main.render_space_id, Some(crate::scene::RenderSpaceId(7)));
     }
 }

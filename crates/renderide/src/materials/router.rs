@@ -129,6 +129,13 @@ impl MaterialRouter {
             .map(|e| e.pipeline.clone())
     }
 
+    /// Debug / tooling display name recorded for `shader_asset_id`, when known.
+    pub fn display_name_for_shader_asset(&self, shader_asset_id: i32) -> Option<&str> {
+        self.routes
+            .get(&shader_asset_id)
+            .and_then(|e| e.display_name.as_deref())
+    }
+
     /// Host shader asset ids, pipeline kinds, and optional display names, sorted by id (for debug HUD).
     pub fn routes_sorted_for_hud(&self) -> Vec<(i32, RasterPipelineKind, Option<String>)> {
         let mut v: Vec<_> = self
