@@ -32,7 +32,23 @@ pub struct WorldMeshDrawStats {
     /// Draws removed by Hi-Z occlusion when enabled.
     pub draws_hi_z_culled: usize,
     /// GPU instance batches after merge (one indexed draw each); at most `draws_total`.
+    ///
+    /// Counts batches across **both** subpasses the forward pass actually issues
+    /// (regular + intersection), matching what `draw_subset` submits per frame rather
+    /// than the optimistic single-pass count.
     pub instance_batch_total: usize,
+    /// Subset of [`Self::instance_batch_total`] in the intersection-pass subpass
+    /// (materials whose embedded shader needs `_IntersectColor` / depth snapshot).
+    ///
+    /// Surfaced so the HUD shows how much of the batch count comes from the partition
+    /// that the regular opaque subpass cannot merge across.
+    pub intersect_pass_batches: usize,
+    /// Sum of `instance_count` across all emitted batches.
+    ///
+    /// Equals [`Self::draws_total`] today (every sorted draw is emitted exactly once);
+    /// the per-batch instance count reveals how much the merge actually compressed the
+    /// submission stream. Compression ratio = `gpu_instances_emitted / instance_batch_total`.
+    pub gpu_instances_emitted: usize,
     /// Actual pipeline-pass draw submissions after multi-pass materials expand each instance batch.
     pub submitted_pipeline_pass_total: usize,
 }
@@ -135,12 +151,23 @@ pub fn world_mesh_draw_stats_from_sorted(
 
     let (draws_pre_cull, draws_culled, draws_hi_z_culled) = cull.unwrap_or((0, 0, 0));
 
-    let draw_indices: Vec<usize> = (0..draws.len()).collect();
-    let instance_batches = build_instance_batches(draws, &draw_indices, supports_base_instance);
-    let instance_batch_total = instance_batches.len();
-    //perf xlinka: this is the real submit count when a material has multiple passes.
-    let submitted_pipeline_pass_total = instance_batches
+    // Mirror the regular/intersection split that `draw_subset` actually issues, so the HUD
+    // counts reflect submitted batches rather than an optimistic single-pass merge.
+    let (regular_indices, intersect_indices) = partition_intersection_draw_indices(draws);
+    let regular_batches = build_instance_batches(draws, &regular_indices, supports_base_instance);
+    let intersect_batches =
+        build_instance_batches(draws, &intersect_indices, supports_base_instance);
+    let intersect_pass_batches = intersect_batches.len();
+    let instance_batch_total = regular_batches.len() + intersect_pass_batches;
+    let gpu_instances_emitted: usize = regular_batches
         .iter()
+        .chain(intersect_batches.iter())
+        .map(|b| b.instance_count as usize)
+        .sum();
+    //perf xlinka: this is the real submit count when a material has multiple passes.
+    let submitted_pipeline_pass_total = regular_batches
+        .iter()
+        .chain(intersect_batches.iter())
         .map(|batch| {
             let item = &draws[batch.first_draw_index];
             match &item.batch_key.pipeline {
@@ -165,8 +192,29 @@ pub fn world_mesh_draw_stats_from_sorted(
         draws_culled,
         draws_hi_z_culled,
         instance_batch_total,
+        intersect_pass_batches,
+        gpu_instances_emitted,
         submitted_pipeline_pass_total,
     }
+}
+
+/// Splits draw indices into the main forward pass vs embedded intersection-shader subpass.
+///
+/// Mirrors `crate::render_graph::passes::world_mesh_forward::execute_helpers::partition_intersection_draw_indices`
+/// so [`world_mesh_draw_stats_from_sorted`] reports counts against the same partition the
+/// real pass uses. The two implementations are kept in sync until the partition collapses
+/// into a single `InstancePlan` walk.
+fn partition_intersection_draw_indices(draws: &[WorldMeshDrawItem]) -> (Vec<usize>, Vec<usize>) {
+    let mut regular = Vec::with_capacity(draws.len());
+    let mut intersect = Vec::new();
+    for (idx, item) in draws.iter().enumerate() {
+        if item.batch_key.embedded_requires_intersection_pass {
+            intersect.push(idx);
+        } else {
+            regular.push(idx);
+        }
+    }
+    (regular, intersect)
 }
 
 /// Captures draw-state diagnostics from the sorted draw list submitted by the forward pass.
@@ -229,6 +277,8 @@ mod tests {
         assert_eq!(s.batch_total, 0);
         assert_eq!(s.draws_total, 0);
         assert_eq!(s.instance_batch_total, 0);
+        assert_eq!(s.intersect_pass_batches, 0);
+        assert_eq!(s.gpu_instances_emitted, 0);
         assert_eq!(s.submitted_pipeline_pass_total, 0);
     }
 
@@ -267,6 +317,8 @@ mod tests {
         assert_eq!(s.draws_total, 2);
         assert_eq!(s.rigid_draws, 2);
         assert_eq!(s.instance_batch_total, 1);
+        assert_eq!(s.intersect_pass_batches, 0);
+        assert_eq!(s.gpu_instances_emitted, 2);
         assert_eq!(s.submitted_pipeline_pass_total, 1);
     }
 

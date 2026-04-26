@@ -132,6 +132,9 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
         supports_base_instance,
     } = batch;
 
+    let subpass_input_draws = draw_indices.len();
+    let mut subpass_batch_count: usize = 0;
+
     let mut last_mesh = LastMeshBindState::new();
     let mut last_per_draw_dyn_offset: Option<u32> = None;
     let mut last_stencil_ref: Option<u32> = None;
@@ -147,6 +150,7 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
     rpass.set_bind_group(0, frame_bg, &[]);
 
     for_each_instance_batch(draws, draw_indices, supports_base_instance, |inst_batch| {
+        subpass_batch_count += 1;
         let first_idx = inst_batch.first_draw_index;
 
         // Advance the cursor to the precomputed batch that covers `first_idx`.
@@ -205,6 +209,8 @@ pub(crate) fn draw_subset(batch: ForwardDrawBatch<'_, '_, '_, '_>) {
             &mut last_pipeline,
         );
     });
+
+    crate::profiling::plot_world_mesh_subpass(subpass_batch_count, subpass_input_draws);
 }
 
 /// Updates @group(2) dynamic offset and rebinds the per-draw slab when the row offset changes.

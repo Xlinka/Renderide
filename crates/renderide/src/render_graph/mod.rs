@@ -90,8 +90,8 @@ mod world_mesh_cull_eval;
 mod world_mesh_draw_prep;
 mod world_mesh_draw_stats;
 
-#[cfg(test)]
-pub(crate) mod test_fixtures;
+#[doc(hidden)]
+pub mod test_fixtures;
 
 pub mod passes;
 
