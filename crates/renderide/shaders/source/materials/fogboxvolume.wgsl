@@ -274,6 +274,7 @@ fn accumulation_color(start: vec3<f32>, end: vec3<f32>, world_to_object: mat4x4<
     return mat._AccumulationColor;
 }
 
+//#material volume_fog
 @fragment
 fn fs_main(
     @builtin(position) frag_pos: vec4<f32>,
@@ -357,5 +358,3 @@ fn fs_main(
 
     return rg::retain_globals_additive(result);
 }
-
-//#material volume_fog
