@@ -448,6 +448,7 @@ fn add_main_graph_passes_and_edges(
     mut builder: GraphBuilder,
     h: MainGraphHandles,
     post_processing: &crate::config::PostProcessingSettings,
+    msaa_sample_count: u8,
 ) -> Result<CompiledRenderGraph, GraphBuildError> {
     let deform = builder.add_compute_pass(Box::new(passes::MeshDeformPass::new()));
     let clustered = builder.add_compute_pass(Box::new(passes::ClusteredLightPass::new(
@@ -485,6 +486,17 @@ fn add_main_graph_passes_and_edges(
     let depth_resolve = builder.add_compute_pass(Box::new(
         passes::WorldMeshForwardDepthResolvePass::new(forward_resources),
     ));
+    // Color resolve replaces the wgpu automatic linear `resolve_target`. Only added when MSAA is
+    // active; in 1× mode the intersect pass writes `scene_color_hdr` directly via
+    // `frame_sampled_color`'s single-sample target and no resolve work is needed.
+    let color_resolve = (msaa_sample_count > 1).then(|| {
+        builder.add_raster_pass(Box::new(passes::WorldMeshForwardColorResolvePass::new(
+            passes::WorldMeshForwardColorResolveGraphResources {
+                scene_color_hdr_msaa: h.scene_color_hdr_msaa,
+                scene_color_hdr: h.scene_color_hdr,
+            },
+        )))
+    });
     let hiz = builder.add_compute_pass(Box::new(passes::HiZBuildPass::new(
         passes::HiZBuildGraphResources {
             depth: h.depth,
@@ -510,6 +522,16 @@ fn add_main_graph_passes_and_edges(
     builder.add_edge(depth_snapshot, forward_intersect);
     builder.add_edge(forward_intersect, depth_resolve);
     builder.add_edge(depth_resolve, hiz);
+    // Sequence the color resolve after intersect (which produced the multisampled scene color)
+    // and before the post-processing chain (which reads the resolved single-sample HDR).
+    if let Some(color_resolve) = color_resolve {
+        builder.add_edge(forward_intersect, color_resolve);
+        if let Some((first_post, _last_post)) = chain_output.pass_range() {
+            builder.add_edge(color_resolve, first_post);
+        } else {
+            builder.add_edge(color_resolve, compose);
+        }
+    }
     if let Some((first_post, last_post)) = chain_output.pass_range() {
         builder.add_edge(hiz, first_post);
         builder.add_edge(last_post, compose);
@@ -576,7 +598,8 @@ pub fn build_main_graph(
         handles.forward_msaa_depth,
         handles.forward_msaa_depth_r32,
     ];
-    let mut graph = add_main_graph_passes_and_edges(builder, handles, post_processing)?;
+    let mut graph =
+        add_main_graph_passes_and_edges(builder, handles, post_processing, key.msaa_sample_count)?;
     graph.main_graph_msaa_transient_handles = Some(msaa_handles);
     Ok(graph)
 }
