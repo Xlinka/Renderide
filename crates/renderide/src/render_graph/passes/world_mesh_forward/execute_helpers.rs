@@ -56,10 +56,6 @@ use super::vp::compute_per_draw_vp_triple;
 const PER_DRAW_VP_PARALLEL_MIN_DRAWS: usize = 256;
 
 /// Resolves multiview use, [`MaterialPipelineDesc`], and [`ShaderPermutation`].
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
-)]
 pub(super) fn resolve_pass_config(
     hc: HostCameraFrame,
     multiview_stereo: bool,
@@ -140,10 +136,6 @@ pub(super) fn take_or_collect_world_mesh_draws<'a>(
 }
 
 /// Copies Hi-Z temporal state for the next frame when culling is active.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
-)]
 pub(super) fn capture_hi_z_temporal_after_collect(
     frame: &mut FrameRenderParams<'_>,
     culling: Option<&WorldMeshCullInput<'_>>,
@@ -200,10 +192,6 @@ pub(super) fn maybe_set_world_mesh_draw_stats(
 }
 
 /// Main render-space context, perspective projection for world draws, and optional ortho for overlays.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
-)]
 pub(super) fn compute_view_projections(
     scene: &SceneCoordinator,
     hc: HostCameraFrame,
@@ -321,10 +309,6 @@ pub(super) fn pack_and_upload_per_draw_slab(
 /// Switches to rayon when `draws.len() >= PER_DRAW_VP_PARALLEL_MIN_DRAWS`; otherwise stays on the
 /// caller thread. Each slot is written as either a single-VP or stereo-VP variant depending on
 /// whether `compute_per_draw_vp_triple` returns identical left/right matrices.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
-)]
 fn pack_per_draw_vp_uniforms(
     uniforms: &mut [PaddedPerDrawUniforms],
     draws: &[WorldMeshDrawItem],
@@ -357,10 +341,6 @@ fn pack_per_draw_vp_uniforms(
 }
 
 /// Builds [`FrameGpuUniforms`], syncs cluster viewport, and writes frame + lights.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "`HostCameraFrame` is Copy and threaded through the per-view frame path by value by design"
-)]
 pub(super) fn write_frame_uniforms_and_cluster(
     queue: &wgpu::Queue,
     frame_resources: &FrameResourceManager,
@@ -732,10 +712,6 @@ fn publish_world_mesh_hud_outputs(
 /// Multi-view paths plant a [`PerViewFramePlanSlot`] on the blackboard naming the per-view bind
 /// group and uniform buffer; single-view fallbacks keep writing the shared `frame_uniform`
 /// buffer directly on the GPU queue.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "matches the Copy-by-value convention used throughout the per-view frame path"
-)]
 fn write_per_view_frame_uniforms(
     queue: &wgpu::Queue,
     upload_batch: &FrameUploadBatch,
@@ -764,10 +740,6 @@ fn write_per_view_frame_uniforms(
 }
 
 /// Resolves cluster + camera-world scratch into [`FrameGpuUniforms`] for the per-view buffer write.
-#[expect(
-    clippy::large_types_passed_by_value,
-    reason = "matches the Copy-by-value convention used throughout the per-view frame path"
-)]
 fn build_per_view_frame_gpu_uniforms(
     frame: &FrameRenderParams<'_>,
     use_multiview: bool,
