@@ -83,9 +83,24 @@ impl CompiledRenderGraph {
         // parallel instead of serially blocking the main thread. `MaterialPipelineCache`
         // releases its mutex before `create_shader_module` / `create_render_pipeline` and
         // elides duplicate inserts on re-lock, so concurrent callers are safe.
+        //
+        // `par_iter().for_each` parks the calling (main) thread until every worker finishes,
+        // so a single pathological FXC compile freezes the message pump and Windows marks
+        // the window "Not Responding". Logging the asset id *before* the compile starts so a
+        // hang leaves a breadcrumb identifying which shader stalled (cross-reference with
+        // `shader_upload: asset_id=N unity_shader_name=...` from earlier in the log).
         use rayon::prelude::*;
+        let total = compile_requests.len();
+        logger::info!("pre_warm: compiling {total} pipeline permutation(s)");
+        let started = std::time::Instant::now();
         compile_requests.par_iter().for_each(|req| {
             profiling::scope!("graph::pre_warm_pipelines::compile");
+            logger::debug!(
+                "pre_warm: compiling shader_asset_id={} blend={:?}",
+                req.shader_asset_id,
+                req.blend_mode
+            );
+            let t0 = std::time::Instant::now();
             let _ = reg.pipeline_for_shader_asset(
                 req.shader_asset_id,
                 &req.pass_desc,
@@ -93,7 +108,22 @@ impl CompiledRenderGraph {
                 req.blend_mode,
                 req.render_state,
             );
+            let dt = t0.elapsed();
+            if dt.as_millis() > 100 {
+                logger::warn!(
+                    "pre_warm: slow pipeline shader_asset_id={} blend={:?} took {}ms",
+                    req.shader_asset_id,
+                    req.blend_mode,
+                    dt.as_millis()
+                );
+            }
         });
+        let total_ms = started.elapsed().as_millis();
+        if total_ms > 50 {
+            logger::info!(
+                "pre_warm: {total} permutation(s) compiled in {total_ms}ms (main thread blocked for the duration)"
+            );
+        }
     }
 
     /// Eagerly allocates per-view frame state ([`crate::backend::FrameResourceManager::per_view_frame_or_create`])

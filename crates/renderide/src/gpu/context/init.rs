@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use winit::window::Window;
 
 use super::super::frame_cpu_gpu_timing::FrameCpuGpuTiming;
-use super::super::instance_limits::instance_flags_for_gpu_init;
+use super::super::instance_limits::{
+    backend_options_for_gpu_init, backends_for_gpu_init, instance_flags_for_gpu_init,
+};
 use super::super::limits::GpuLimits;
 use super::{
     adapter_render_features_intersection, install_uncaptured_error_handler,
@@ -24,9 +26,10 @@ impl GpuContext {
         gpu_validation_layers: bool,
     ) -> Result<Self, GpuError> {
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
+        instance_desc.backends = backends_for_gpu_init();
         let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
         instance_desc.flags = instance_flags;
+        instance_desc.backend_options = backend_options_for_gpu_init();
         let instance = wgpu::Instance::new(instance_desc);
 
         let surface = instance
@@ -145,9 +148,10 @@ impl GpuContext {
         gpu_validation_layers: bool,
     ) -> Result<Self, GpuError> {
         let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
-        instance_desc.backends = wgpu::Backends::all();
+        instance_desc.backends = backends_for_gpu_init();
         let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
         instance_desc.flags = instance_flags;
+        instance_desc.backend_options = backend_options_for_gpu_init();
         let instance = wgpu::Instance::new(instance_desc);
 
         let adapter = instance

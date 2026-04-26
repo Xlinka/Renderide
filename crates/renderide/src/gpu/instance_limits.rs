@@ -49,6 +49,76 @@ pub fn instance_flags_for_gpu_init(gpu_validation_layers: bool) -> wgpu::Instanc
     instance_flags_base(gpu_validation_layers).with_env()
 }
 
+/// Returns the [`wgpu::Backends`] mask used at instance creation, scoped per-OS to skip backends
+/// that wgpu would otherwise probe at startup.
+///
+/// On Windows the OpenGL/WGL probe alone takes ~370 ms on a stock NVIDIA driver — visible in the
+/// Tracy trace as `Init OpenGL (WGL) Backend` blocking the main thread. The renderer never picks
+/// the GL backend on Windows (DX12/Vulkan are always preferred), so probing it is pure dead weight
+/// at startup. Other platforms keep `Backends::all()` so adapter selection is unchanged there.
+pub fn backends_for_gpu_init() -> wgpu::Backends {
+    #[cfg(windows)]
+    {
+        wgpu::Backends::DX12 | wgpu::Backends::VULKAN
+    }
+    #[cfg(not(windows))]
+    {
+        wgpu::Backends::all()
+    }
+}
+
+/// Builds [`wgpu::BackendOptions`] preferring DXC over FXC for DX12 shader compilation.
+///
+/// `Fxc` is the legacy HLSL compiler and can stall the calling thread for many seconds on
+/// permutation-heavy shaders (the new triplanar / displace materials hit this); `DynamicDxc`
+/// loads `dxcompiler.dll` next to the executable and compiles dramatically faster. Falls back
+/// to wgpu's `Auto` (static → dynamic → FXC chain) when no `dxcompiler.dll` sits next to the
+/// running binary so behavior degrades gracefully on machines without DXC.
+pub fn backend_options_for_gpu_init() -> wgpu::BackendOptions {
+    let mut options = wgpu::BackendOptions::default();
+    options.dx12.shader_compiler = select_dx12_shader_compiler();
+    options.with_env()
+}
+
+#[cfg(windows)]
+fn select_dx12_shader_compiler() -> wgpu::Dx12Compiler {
+    if let Some(dxc_path) = dxcompiler_dll_next_to_exe() {
+        logger::info!(
+            "DX12 shader compiler: DynamicDxc (dxcompiler.dll at {})",
+            dxc_path.display()
+        );
+        return wgpu::Dx12Compiler::DynamicDxc {
+            dxc_path: dxc_path.to_string_lossy().into_owned(),
+        };
+    }
+    logger::warn!(
+        "DX12 shader compiler: dxcompiler.dll not found next to renderide.exe — \
+         wgpu will use its default Auto chain (static→dynamic→FXC). On a fresh build \
+         this typically falls back to FXC, which can stall the main thread for seconds \
+         per shader. Drop dxcompiler.dll into the same folder as renderide.exe for fast \
+         compiles (Windows SDK ships it under \
+         `C:\\Program Files (x86)\\Windows Kits\\10\\bin\\<sdk_ver>\\x64\\dxcompiler.dll`)."
+    );
+    wgpu::Dx12Compiler::Auto
+}
+
+#[cfg(not(windows))]
+fn select_dx12_shader_compiler() -> wgpu::Dx12Compiler {
+    wgpu::Dx12Compiler::Auto
+}
+
+#[cfg(windows)]
+fn dxcompiler_dll_next_to_exe() -> Option<std::path::PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let candidate = dir.join("dxcompiler.dll");
+    if candidate.is_file() {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{instance_flags_base, required_limits_from_adapter_limits};
