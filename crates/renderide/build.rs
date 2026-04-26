@@ -304,6 +304,80 @@ fn validate_entry_points(
     Ok(())
 }
 
+/// Canonical Unity pipeline-state property names that must NEVER appear in a material's
+/// `@group(1) @binding(0)` uniform struct.
+///
+/// Pipeline state (blend, depth compare/write, cull, stencil, color mask, depth bias) is consumed
+/// by [`crate::materials::MaterialPipelineCacheKey`] via
+/// [`crate::materials::MaterialBlendMode`] + [`crate::materials::MaterialRenderState`], never by
+/// shader code. Embedding any of these names in a shader uniform wastes uniform space and blurs
+/// the boundary between "what the shader needs" and "what the pipeline needs".
+///
+/// Keep this list in sync with `MaterialPipelinePropertyIds::new` in
+/// `src/materials/material_passes.rs`.
+const PIPELINE_STATE_PROPERTY_NAMES: &[&str] = &[
+    "_SrcBlend",
+    "_SrcBlendBase",
+    "_SrcBlendAdd",
+    "_DstBlend",
+    "_DstBlendBase",
+    "_DstBlendAdd",
+    "_ZWrite",
+    "_ZTest",
+    "_Cull",
+    "_Stencil",
+    "_StencilComp",
+    "_StencilOp",
+    "_StencilFail",
+    "_StencilZFail",
+    "_StencilReadMask",
+    "_StencilWriteMask",
+    "_ColorMask",
+    "_OffsetFactor",
+    "_OffsetUnits",
+];
+
+/// Rejects any material whose `@group(1) @binding(0)` uniform struct declares a member named in
+/// [`PIPELINE_STATE_PROPERTY_NAMES`]. Run after composition so imports and module merges don't
+/// hide a leak.
+fn validate_no_pipeline_state_uniform_fields(
+    module: &naga::Module,
+    label: &str,
+) -> Result<(), BuildError> {
+    for (_, var) in module.global_variables.iter() {
+        let Some(binding) = &var.binding else {
+            continue;
+        };
+        if binding.group != 1 || binding.binding != 0 {
+            continue;
+        }
+        if !matches!(var.space, naga::AddressSpace::Uniform) {
+            continue;
+        }
+        let ty = &module.types[var.ty];
+        let naga::TypeInner::Struct { ref members, .. } = ty.inner else {
+            continue;
+        };
+        for member in members {
+            let Some(name) = member.name.as_deref() else {
+                continue;
+            };
+            if PIPELINE_STATE_PROPERTY_NAMES.contains(&name) {
+                let struct_name = ty.name.as_deref().unwrap_or("<unnamed>");
+                return Err(BuildError::Message(format!(
+                    "{label}: material uniform struct `{struct_name}` declares pipeline-state \
+                     field `{name}` at @group(1) @binding(0). Pipeline-state properties \
+                     (blend, depth, cull, stencil, color mask, depth bias) flow through \
+                     MaterialBlendMode + MaterialRenderState and are baked into \
+                     MaterialPipelineCacheKey; they must never appear in a shader uniform. \
+                     Remove the field from the WGSL struct."
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validates `module` with naga and flattens it back to WGSL. Returns the WGSL string without
 /// writing it to disk — callers decide whether/where to persist it.
 fn module_to_wgsl(module: &naga::Module, label: &str) -> Result<String, BuildError> {
@@ -640,6 +714,14 @@ fn compose_and_emit_variants(
         &multiview_module,
         &format!("{stem} (MULTIVIEW=true)"),
         &pass_directives,
+    )?;
+    validate_no_pipeline_state_uniform_fields(
+        &default_module,
+        &format!("{stem} (MULTIVIEW=false)"),
+    )?;
+    validate_no_pipeline_state_uniform_fields(
+        &multiview_module,
+        &format!("{stem} (MULTIVIEW=true)"),
     )?;
     let default_wgsl = module_to_wgsl(&default_module, &format!("{stem} (MULTIVIEW=false)"))?;
     let multiview_wgsl = module_to_wgsl(&multiview_module, &format!("{stem} (MULTIVIEW=true)"))?;

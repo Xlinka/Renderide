@@ -108,20 +108,6 @@ struct XiexeToon2Material {
 
     _VertexColorAlbedo: f32,
     _TilingMode: f32,
-    _Culling: f32,
-    _Cull: f32,
-    _ColorMask: f32,
-    _ZWrite: f32,
-    _SrcBlendBase: f32,
-    _DstBlendBase: f32,
-    _SrcBlendAdd: f32,
-    _DstBlendAdd: f32,
-
-    _Stencil: f32,
-    _StencilComp: f32,
-    _StencilOp: f32,
-    _StencilReadMask: f32,
-    _StencilWriteMask: f32,
 
     _UVSetAlbedo: f32,
     _UVSetNormal: f32,
