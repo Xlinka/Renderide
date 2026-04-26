@@ -11,6 +11,7 @@ mod debug;
 mod display;
 mod post_processing;
 mod rendering;
+mod watchdog;
 
 pub use debug::{DebugSettings, PowerPreferenceSetting};
 pub use display::DisplaySettings;
@@ -21,6 +22,7 @@ pub use post_processing::{
 pub use rendering::{
     MsaaSampleCount, RecordParallelism, RenderingSettings, SceneColorFormat, VsyncMode,
 };
+pub use watchdog::{WatchdogAction, WatchdogSettings};
 
 /// Runtime settings for the renderer process: defaults, merged from file, and edited via the debug UI.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -34,6 +36,8 @@ pub struct RendererSettings {
     pub debug: DebugSettings,
     /// Post-processing stack toggles and per-effect parameters.
     pub post_processing: PostProcessingSettings,
+    /// Cooperative hang/hitch detection ([`crate::diagnostics::Watchdog`]).
+    pub watchdog: WatchdogSettings,
 }
 
 impl RendererSettings {
