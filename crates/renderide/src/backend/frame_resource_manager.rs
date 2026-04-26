@@ -129,6 +129,9 @@ pub struct FrameResourceManager {
     ///
     /// Each view owns its own mutex-wrapped slot so rayon workers never alias the same scratch.
     per_view_per_draw_scratch: HashMap<OcclusionViewId, Mutex<PerViewPerDrawScratch>>,
+    /// One-shot guard for the [`MAX_LIGHTS`] overflow warning so a content scene with too many
+    /// lights does not spam logs every frame.
+    lights_overflow_warned: bool,
 }
 
 impl Default for FrameResourceManager {
@@ -153,6 +156,7 @@ impl FrameResourceManager {
             lights_gpu_uploaded_this_tick: AtomicBool::new(false),
             mesh_deform_dispatched_this_tick: AtomicBool::new(false),
             per_view_per_draw_scratch: HashMap::new(),
+            lights_overflow_warned: false,
         }
     }
 
@@ -488,11 +492,21 @@ impl FrameResourceManager {
 
         self.resolved_flatten_scratch.retain(light_contributes);
         order_lights_for_clustered_shading_in_place(&mut self.resolved_flatten_scratch);
-        self.light_scratch
-            .reserve(self.resolved_flatten_scratch.len().min(MAX_LIGHTS));
+        let resolved_len = self.resolved_flatten_scratch.len();
+        if resolved_len > MAX_LIGHTS && !self.lights_overflow_warned {
+            logger::warn!(
+                "scene contains {resolved_len} contributing lights but the engine only uploads \
+                 the first {MAX_LIGHTS} (MAX_LIGHTS); the remainder will be ignored for shading. \
+                 This warning is only logged once per renderer instance."
+            );
+            self.lights_overflow_warned = true;
+        }
+        let kept = resolved_len.min(MAX_LIGHTS);
+        self.light_scratch.reserve(kept);
         self.light_scratch.extend(
             self.resolved_flatten_scratch
                 .iter()
+                .take(kept)
                 .map(GpuLight::from_resolved),
         );
         self.light_prep_done_this_tick = true;
