@@ -81,6 +81,21 @@ fn world_matrix_for_local_vertex_stream(
     )
 }
 
+/// Returns `true` when a renderer node's effective transform chain collapses object scale.
+#[inline]
+fn transform_chain_has_degenerate_scale(
+    ctx: &DrawCollectionContext<'_>,
+    space_id: RenderSpaceId,
+    node_id: i32,
+) -> bool {
+    node_id >= 0
+        && ctx.scene.transform_has_degenerate_scale_for_context(
+            space_id,
+            node_id as usize,
+            ctx.render_context,
+        )
+}
+
 /// Resolves the raster front face for the model matrix used by the forward vertex shader.
 #[inline]
 fn front_face_for_world_matrix(world_matrix: Option<Mat4>) -> RasterFrontFace {
@@ -197,6 +212,9 @@ fn push_draws_for_renderer(
         if !passes {
             return;
         }
+    }
+    if transform_chain_has_degenerate_scale(ctx, draw.space_id, draw.renderer.node_id) {
+        return;
     }
 
     // Resolve material slots inline to avoid the Cow::Owned(vec![..]) allocation for the
@@ -534,6 +552,9 @@ fn collect_prepared_chunk(
                 continue;
             }
         }
+        if transform_chain_has_degenerate_scale(ctx, d.space_id, d.node_id) {
+            continue;
+        }
 
         let Some(mesh) = ctx.mesh_pool.get_mesh(d.mesh_asset_id) else {
             continue;
@@ -812,5 +833,126 @@ fn collect_world_mesh_chunks(
                 .map(|spec| collect_chunk(spec, ctx, cache, filter_masks))
                 .collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hashbrown::HashMap;
+
+    use glam::{Mat4, Quat, Vec3};
+
+    use super::*;
+    use crate::assets::material::{
+        MaterialDictionary, MaterialPropertyLookupIds, MaterialPropertyStore, PropertyIdRegistry,
+    };
+    use crate::materials::{MaterialPipelinePropertyIds, MaterialRouter, RasterPipelineKind};
+    use crate::resources::MeshPool;
+    use crate::scene::{RenderSpaceId, SceneCoordinator};
+    use crate::shared::{RenderTransform, RenderingContext};
+
+    /// Builds a unit-scale transform for draw-prep tests.
+    fn identity_transform() -> RenderTransform {
+        RenderTransform {
+            position: Vec3::ZERO,
+            scale: Vec3::ONE,
+            rotation: Quat::IDENTITY,
+        }
+    }
+
+    /// Minimal prepared draw used to exercise transform-scale filtering before mesh lookup.
+    fn prepared_draw(space_id: RenderSpaceId) -> FramePreparedDraw {
+        FramePreparedDraw {
+            space_id,
+            renderable_index: 0,
+            node_id: 0,
+            mesh_asset_id: 7,
+            is_overlay: false,
+            sorting_order: 0,
+            skinned: false,
+            world_space_deformed: false,
+            slot_index: 0,
+            first_index: 0,
+            index_count: 3,
+            material_asset_id: 9,
+            property_block_id: None,
+            lookup_ids: MaterialPropertyLookupIds {
+                material_asset_id: 9,
+                mesh_property_block_slot0: None,
+            },
+        }
+    }
+
+    /// Prepared collection skips zero-scale transforms before mesh lookup or cull counters.
+    #[test]
+    fn prepared_chunk_skips_degenerate_scale_before_culling() {
+        let mut scene = SceneCoordinator::new();
+        let space_id = RenderSpaceId(27);
+        let mut collapsed = identity_transform();
+        collapsed.scale = Vec3::ZERO;
+        scene.test_seed_space_identity_worlds(space_id, vec![collapsed], vec![-1]);
+
+        let mesh_pool = MeshPool::default_pool();
+        let store = MaterialPropertyStore::new();
+        let material_dict = MaterialDictionary::new(&store);
+        let router = MaterialRouter::new(RasterPipelineKind::Null);
+        let registry = PropertyIdRegistry::new();
+        let property_ids = MaterialPipelinePropertyIds::new(&registry);
+        let cache = FrameMaterialBatchCache::new();
+        let filter_masks = HashMap::new();
+        let ctx = DrawCollectionContext {
+            scene: &scene,
+            mesh_pool: &mesh_pool,
+            material_dict: &material_dict,
+            material_router: &router,
+            pipeline_property_ids: &property_ids,
+            shader_perm: ShaderPermutation::default(),
+            render_context: RenderingContext::UserView,
+            head_output_transform: Mat4::IDENTITY,
+            view_origin_world: Vec3::ZERO,
+            culling: None,
+            transform_filter: None,
+            material_cache: None,
+            prepared: None,
+        };
+
+        let draw = prepared_draw(space_id);
+        let (items, cull_stats) =
+            collect_prepared_chunk(std::slice::from_ref(&draw), &ctx, &cache, &filter_masks);
+
+        assert!(items.is_empty());
+        assert_eq!(cull_stats, (0, 0, 0));
+    }
+
+    /// Unit-scale renderer nodes remain eligible for draw collection.
+    #[test]
+    fn draw_transform_scale_filter_allows_unit_scale() {
+        let mut scene = SceneCoordinator::new();
+        let space_id = RenderSpaceId(28);
+        scene.test_seed_space_identity_worlds(space_id, vec![identity_transform()], vec![-1]);
+
+        let mesh_pool = MeshPool::default_pool();
+        let store = MaterialPropertyStore::new();
+        let material_dict = MaterialDictionary::new(&store);
+        let router = MaterialRouter::new(RasterPipelineKind::Null);
+        let registry = PropertyIdRegistry::new();
+        let property_ids = MaterialPipelinePropertyIds::new(&registry);
+        let ctx = DrawCollectionContext {
+            scene: &scene,
+            mesh_pool: &mesh_pool,
+            material_dict: &material_dict,
+            material_router: &router,
+            pipeline_property_ids: &property_ids,
+            shader_perm: ShaderPermutation::default(),
+            render_context: RenderingContext::UserView,
+            head_output_transform: Mat4::IDENTITY,
+            view_origin_world: Vec3::ZERO,
+            culling: None,
+            transform_filter: None,
+            material_cache: None,
+            prepared: None,
+        };
+
+        assert!(!transform_chain_has_degenerate_scale(&ctx, space_id, 0));
     }
 }

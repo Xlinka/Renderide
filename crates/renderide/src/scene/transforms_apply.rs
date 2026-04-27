@@ -130,6 +130,9 @@ pub fn apply_transform_removals_ordered(
             cache.computed.swap_remove(idx);
             cache.local_matrices.swap_remove(idx);
             cache.local_dirty.swap_remove(idx);
+            if idx < cache.degenerate_scales.len() {
+                cache.degenerate_scales.swap_remove(idx);
+            }
             if idx < cache.visit_epoch.len() {
                 cache.visit_epoch.swap_remove(idx);
             }
@@ -149,7 +152,9 @@ fn ensure_world_cache_matches_node_count(
     cache: &mut WorldTransformCache,
     invalidate_world: &mut bool,
 ) {
-    if cache.world_matrices.len() == space.nodes.len() {
+    if cache.world_matrices.len() == space.nodes.len()
+        && cache.degenerate_scales.len() == space.nodes.len()
+    {
         return;
     }
     cache
@@ -160,6 +165,7 @@ fn ensure_world_cache_matches_node_count(
         .local_matrices
         .resize(space.nodes.len(), glam::Mat4::IDENTITY);
     cache.local_dirty.resize(space.nodes.len(), true);
+    cache.degenerate_scales.resize(space.nodes.len(), false);
     cache.visit_epoch.resize(space.nodes.len(), 0);
     *invalidate_world = true;
 }
@@ -179,6 +185,7 @@ fn grow_transform_buffers_to_target_target(
         cache.computed.push(false);
         cache.local_matrices.push(glam::Mat4::IDENTITY);
         cache.local_dirty.push(true);
+        cache.degenerate_scales.push(false);
         cache.visit_epoch.push(0);
     }
     if space.nodes.len() != nodes_before {
@@ -457,6 +464,7 @@ mod tests {
             computed: vec![false; nodes_len],
             local_matrices: vec![glam::Mat4::IDENTITY; nodes_len],
             local_dirty: vec![true; nodes_len],
+            degenerate_scales: vec![false; nodes_len],
             visit_epoch: vec![0; nodes_len],
             walk_epoch: 0,
             children: Vec::new(),

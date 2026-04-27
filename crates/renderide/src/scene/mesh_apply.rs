@@ -754,6 +754,7 @@ mod static_fixup_tests {
             computed: vec![false; 2],
             local_matrices: vec![glam::Mat4::IDENTITY; 2],
             local_dirty: vec![true; 2],
+            degenerate_scales: vec![false; 2],
             visit_epoch: vec![0; 2],
             walk_epoch: 0,
             children: Vec::new(),

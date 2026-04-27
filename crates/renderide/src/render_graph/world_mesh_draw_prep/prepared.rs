@@ -95,8 +95,9 @@ impl FramePreparedRenderables {
     ///
     /// Per-space expansion runs in parallel via [`rayon`] and the per-space outputs are
     /// concatenated in render-space-id order. Every entry is filtered to only include draws that
-    /// would survive [`super::collect::collect_chunk`]'s resident-mesh / slot-validity checks —
-    /// per-view collection can iterate unconditionally without duplicating those guards.
+    /// would survive [`super::collect::collect_chunk`]'s transform-scale, resident-mesh, and
+    /// slot-validity checks — per-view collection can iterate unconditionally without duplicating
+    /// those guards.
     pub fn build_for_frame(
         scene: &SceneCoordinator,
         mesh_pool: &MeshPool,
@@ -214,6 +215,13 @@ fn expand_space_into(
         if r.mesh_asset_id < 0 || r.node_id < 0 {
             continue;
         }
+        if scene.transform_has_degenerate_scale_for_context(
+            space_id,
+            r.node_id as usize,
+            render_context,
+        ) {
+            continue;
+        }
         let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
             continue;
         };
@@ -238,6 +246,13 @@ fn expand_space_into(
     for (renderable_index, sk) in space.skinned_mesh_renderers.iter().enumerate() {
         let r = &sk.base;
         if r.mesh_asset_id < 0 || r.node_id < 0 {
+            continue;
+        }
+        if scene.transform_has_degenerate_scale_for_context(
+            space_id,
+            r.node_id as usize,
+            render_context,
+        ) {
             continue;
         }
         let Some(mesh) = mesh_pool.get_mesh(r.mesh_asset_id) else {
