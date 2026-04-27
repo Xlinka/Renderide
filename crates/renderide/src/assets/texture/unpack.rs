@@ -36,16 +36,14 @@ fn necessary_bits(mut value: u32) -> u32 {
 
 /// Unpacks `packed` using the shared `IdPacker<TextureAssetType>` layout (six enum variants).
 ///
-/// Returns `(asset_id, kind)` when `packed` is positive and the type field is valid.
+/// Returns `(asset_id, kind)` when the type field is valid.
 pub fn unpack_host_texture_packed(packed: i32) -> Option<(i32, HostTextureAssetKind)> {
-    if packed <= 0 {
-        return None;
-    }
     let type_bits = necessary_bits(TEXTURE_ASSET_TYPE_COUNT);
-    let pack_type_shift = 32u32.saturating_sub(type_bits);
-    let unpack_mask = (u32::MAX >> type_bits) as i32;
-    let id = packed & unpack_mask;
-    let type_val = (packed as u32).wrapping_shr(pack_type_shift);
+    let pack_type_shift = 32u32 - type_bits;
+    let unpack_mask = u32::MAX >> type_bits;
+    let packed_bits = packed as u32;
+    let id = (packed_bits & unpack_mask) as i32;
+    let type_val = packed_bits >> pack_type_shift;
     let kind = match type_val {
         0 => HostTextureAssetKind::Texture2D,
         1 => HostTextureAssetKind::Texture3D,
@@ -68,13 +66,22 @@ pub fn texture2d_asset_id_from_packed(packed: i32) -> Option<i32> {
 mod tests {
     use super::{texture2d_asset_id_from_packed, unpack_host_texture_packed, HostTextureAssetKind};
 
-    #[test]
-    fn unpack_zero_is_none() {
-        assert!(unpack_host_texture_packed(0).is_none());
+    fn pack_host_texture(asset_id: i32, kind: HostTextureAssetKind) -> i32 {
+        let type_bits = super::necessary_bits(super::TEXTURE_ASSET_TYPE_COUNT);
+        let pack_type_shift = 32u32 - type_bits;
+        ((asset_id as u32) | ((kind as u32) << pack_type_shift)) as i32
     }
 
     #[test]
-    fn unpack_negative_is_none() {
+    fn unpack_zero_is_texture2d_asset_zero() {
+        assert_eq!(
+            unpack_host_texture_packed(0),
+            Some((0, HostTextureAssetKind::Texture2D))
+        );
+    }
+
+    #[test]
+    fn unpack_null_sentinel_is_none() {
         assert!(unpack_host_texture_packed(-1).is_none());
     }
 
@@ -89,14 +96,22 @@ mod tests {
     }
 
     #[test]
-    fn nonzero_type_bits_still_yields_correct_low_id() {
-        let type_bits = super::necessary_bits(super::TEXTURE_ASSET_TYPE_COUNT);
-        let pack_type_shift = 32u32.saturating_sub(type_bits);
-        let packed = 5i32 | ((HostTextureAssetKind::Texture3D as i32) << pack_type_shift);
-        assert_eq!(texture2d_asset_id_from_packed(packed), None);
-        let (id, k) = unpack_host_texture_packed(packed).expect("unpack");
-        assert_eq!(id, 5);
-        assert_eq!(k, HostTextureAssetKind::Texture3D);
+    fn all_host_texture_kinds_round_trip_from_host_bits() {
+        let cases = [
+            (0, HostTextureAssetKind::Texture2D),
+            (5, HostTextureAssetKind::Texture3D),
+            (6, HostTextureAssetKind::Cubemap),
+            (7, HostTextureAssetKind::RenderTexture),
+            (8, HostTextureAssetKind::VideoTexture),
+            (9, HostTextureAssetKind::Desktop),
+        ];
+
+        for (asset_id, kind) in cases {
+            assert_eq!(
+                unpack_host_texture_packed(pack_host_texture(asset_id, kind)),
+                Some((asset_id, kind))
+            );
+        }
     }
 
     #[test]
@@ -110,14 +125,35 @@ mod tests {
     }
 
     #[test]
-    fn render_texture_packed_id_unpacks() {
-        let type_bits = super::necessary_bits(super::TEXTURE_ASSET_TYPE_COUNT);
-        let pack_type_shift = 32u32.saturating_sub(type_bits);
-        let asset_id = 7i32;
-        let packed = asset_id | ((HostTextureAssetKind::RenderTexture as i32) << pack_type_shift);
-        let (id, k) = unpack_host_texture_packed(packed).expect("unpack");
-        assert_eq!(id, asset_id);
-        assert_eq!(k, HostTextureAssetKind::RenderTexture);
-        assert_eq!(texture2d_asset_id_from_packed(packed), None);
+    fn sign_bit_texture_kinds_still_unpack() {
+        for kind in [
+            HostTextureAssetKind::VideoTexture,
+            HostTextureAssetKind::Desktop,
+        ] {
+            let packed = pack_host_texture(11, kind);
+            assert!(packed < 0);
+            assert_eq!(unpack_host_texture_packed(packed), Some((11, kind)));
+        }
+    }
+
+    #[test]
+    fn texture2d_asset_id_only_accepts_texture2d_kind() {
+        assert_eq!(
+            texture2d_asset_id_from_packed(pack_host_texture(12, HostTextureAssetKind::Texture2D)),
+            Some(12)
+        );
+
+        for kind in [
+            HostTextureAssetKind::Texture3D,
+            HostTextureAssetKind::Cubemap,
+            HostTextureAssetKind::RenderTexture,
+            HostTextureAssetKind::VideoTexture,
+            HostTextureAssetKind::Desktop,
+        ] {
+            assert_eq!(
+                texture2d_asset_id_from_packed(pack_host_texture(12, kind)),
+                None
+            );
+        }
     }
 }
