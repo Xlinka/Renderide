@@ -215,10 +215,7 @@ fn base_view_dir(ndc: vec2<f32>, view_layer: u32) -> vec3<f32> {
     if (uvu::kw_enabled(mat._PERSPECTIVE)) {
         return perspective_view_dir(ndc);
     }
-    if (uvu::kw_enabled(mat._NORMAL) || uvu::kw_enabled(mat._WORLD_VIEW)) {
-        return normalize(-camera_ray_world);
-    }
-    return normalize(-camera_ray_view);
+    return normalize(-camera_ray_world);
 }
 
 @vertex
