@@ -36,6 +36,9 @@ const SPECULAR_AA_THRESHOLD: f32 = 0.18;
 /// Quadratic coefficient used by Unity BiRP's normalized punctual-light attenuation LUT.
 const BIRP_ATTENUATION_QUADRATIC: f32 = 25.0;
 
+/// Temporary direct-light multiplier used to match BiRP-authored scene brightness.
+const INTENSITY_BOOST: f32 = 2.0;
+
 /// Tokuyoshi & Kaplanyan 2019 "Improved Geometric Specular Antialiasing".
 ///
 /// Widens the GGX lobe by the screen-space variance of the surface normal so that sub-pixel
@@ -117,7 +120,7 @@ fn birp_range_fade(t: f32) -> f32 {
 /// The main LUT curve is well-approximated by `1 / (1 + 25·t²)` with `t = dist/range`, so the range
 /// slider stretches the falloff without changing peak brightness. The quartic range window keeps
 /// clustered shading bounded at `dist == range`.
-/// Intensity is applied by the call site.
+/// Intensity is applied by the call site; [`INTENSITY_BOOST`] compensates for observed scene parity.
 fn distance_attenuation(dist: f32, range: f32) -> f32 {
     if (range <= 0.0) {
         return 0.0;
@@ -125,7 +128,7 @@ fn distance_attenuation(dist: f32, range: f32) -> f32 {
     let t = dist / range;
     let t2 = t * t;
     let lut = 1.0 / (1.0 + BIRP_ATTENUATION_QUADRATIC * t2);
-    return lut * birp_range_fade(t);
+    return lut * birp_range_fade(t) * INTENSITY_BOOST;
 }
 
 /// Result of evaluating one punctual light at a surface point.

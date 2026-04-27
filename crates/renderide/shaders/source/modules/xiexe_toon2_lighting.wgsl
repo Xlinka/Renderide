@@ -56,6 +56,9 @@ const SPECCUBE_LOD_STEPS: f32 = 6.0;
 /// Quadratic coefficient used by Unity BiRP's normalized punctual-light attenuation LUT.
 const BIRP_ATTENUATION_QUADRATIC: f32 = 25.0;
 
+/// Temporary direct-light multiplier used to match BiRP-authored scene brightness.
+const INTENSITY_BOOST: f32 = 2.0;
+
 /// Quartic window that masks punctual attenuation to zero at the light range.
 fn birp_range_fade(t: f32) -> f32 {
     let t2 = t * t;
@@ -67,7 +70,8 @@ fn birp_range_fade(t: f32) -> f32 {
 /// Unity BiRP-style distance attenuation for punctual lights.
 /// `1 / (1 + 25·t²)` with `t = dist/range` approximates the Built-in RP attenuation LUT while
 /// keeping the light's peak brightness independent of range. The quartic range window prevents
-/// clustered lights from leaking past their declared range.
+/// clustered lights from leaking past their declared range. [`INTENSITY_BOOST`] compensates for
+/// observed scene parity.
 fn punctual_attenuation(intensity: f32, dist: f32, range: f32) -> f32 {
     if (range <= 0.0) {
         return 0.0;
@@ -75,7 +79,7 @@ fn punctual_attenuation(intensity: f32, dist: f32, range: f32) -> f32 {
     let t = dist / range;
     let t2 = t * t;
     let lut = 1.0 / (1.0 + BIRP_ATTENUATION_QUADRATIC * t2);
-    return intensity * lut * birp_range_fade(t);
+    return intensity * lut * birp_range_fade(t) * INTENSITY_BOOST;
 }
 
 /// Resolves a single `rg::GpuLight` into a `LightSample` (direction toward the light,
