@@ -60,12 +60,12 @@ struct ViewCullSnapshot {
     hi_z_temporal: Option<HiZTemporalState>,
 }
 
-/// Immutable per-frame references shared by every per-view draw-collection call.
+/// Narrow immutable frame extract shared by every per-view draw-collection call.
 ///
 /// Grouped into one struct so the `par_iter().map(...)` closure in [`RendererRuntime::render_frame`]
 /// can close over a single reference rather than shuttling seven individual bindings through the
 /// rayon worker boundary.
-struct FrameCollectionContext<'a> {
+struct RenderFrameExtract<'a> {
     /// Scene after cache flush — used for world-matrix lookups and cull evaluation.
     scene: &'a SceneCoordinator,
     /// Mesh GPU asset pool, queried for bounds and skinning metadata during draw collection.
@@ -81,9 +81,66 @@ struct FrameCollectionContext<'a> {
     /// Persistent mono material batch cache, refreshed once at the start of [`RendererRuntime::render_frame`].
     material_cache: &'a crate::render_graph::FrameMaterialBatchCache,
     /// Dense per-frame walk of renderables pre-expanded once before per-view collection.
-    prepared: &'a FramePreparedRenderables,
+    prepared: FramePreparedRenderables,
     /// Rayon parallelism tier for each view's inner walk.
     inner_parallelism: WorldMeshDrawCollectParallelism,
+}
+
+/// Inputs needed to build one [`RenderFrameExtract`] before per-view draw collection.
+struct RenderFrameExtractInput<'a> {
+    /// Scene after runtime updates have been applied for this tick.
+    scene: &'a SceneCoordinator,
+    /// Mesh GPU asset pool used while preparing renderables.
+    mesh_pool: &'a crate::resources::MeshPool,
+    /// Material property store used to build the per-frame material dictionary.
+    property_store: &'a crate::assets::material::MaterialPropertyStore,
+    /// Resolved raster pipeline selection for embedded materials.
+    router: &'a MaterialRouter,
+    /// Registry of renderer-side property ids used by the pipeline selector.
+    pipeline_property_ids: MaterialPipelinePropertyIds,
+    /// Active render context used by prepared renderable extraction.
+    render_context: crate::shared::RenderingContext,
+    /// Rayon parallelism tier for each view's inner draw walk.
+    inner_parallelism: WorldMeshDrawCollectParallelism,
+}
+
+/// Builds the narrow frame extract consumed by per-view draw collection.
+fn build_render_frame_extract<'a>(
+    input: RenderFrameExtractInput<'a>,
+    material_cache: &'a mut crate::render_graph::FrameMaterialBatchCache,
+) -> RenderFrameExtract<'a> {
+    {
+        profiling::scope!("render::build_frame_material_cache");
+        let dict = MaterialDictionary::new(input.property_store);
+        material_cache.refresh_for_frame(
+            input.scene,
+            &dict,
+            input.router,
+            &input.pipeline_property_ids,
+            ShaderPermutation(0),
+        );
+    }
+
+    let prepared = {
+        profiling::scope!("render::build_frame_prepared_renderables");
+        FramePreparedRenderables::build_for_frame(
+            input.scene,
+            input.mesh_pool,
+            input.render_context,
+        )
+    };
+
+    RenderFrameExtract {
+        scene: input.scene,
+        mesh_pool: input.mesh_pool,
+        property_store: input.property_store,
+        router: input.router,
+        pipeline_property_ids: input.pipeline_property_ids,
+        render_context: input.render_context,
+        material_cache,
+        prepared,
+        inner_parallelism: input.inner_parallelism,
+    }
 }
 
 /// Collects and sorts world-mesh draws for every prepared view in parallel.
@@ -91,7 +148,7 @@ struct FrameCollectionContext<'a> {
 /// Returns one explicit [`WorldMeshDrawPlan`] per prepared view, preserving input order so the
 /// compiled graph never has to infer whether draws were intentionally omitted or merely missing.
 fn collect_view_draws(
-    ctx: &FrameCollectionContext<'_>,
+    ctx: &RenderFrameExtract<'_>,
     prepared: &[FrameViewPlan<'_>],
     cull_snapshots: &[Option<ViewCullSnapshot>],
 ) -> Vec<WorldMeshDrawPlan> {
@@ -125,7 +182,7 @@ fn collect_view_draws(
                     culling: culling.as_ref(),
                     transform_filter: prep.draw_filter.as_ref(),
                     material_cache,
-                    prepared: Some(ctx.prepared),
+                    prepared: Some(&ctx.prepared),
                 },
                 ctx.inner_parallelism,
             );
@@ -241,49 +298,28 @@ impl RendererRuntime {
         let occlusion_ref: &OcclusionSystem = &self.backend.occlusion;
         let inner_parallelism = select_inner_parallelism(&prepared);
 
-        // Refresh the persistent material batch cache **once** before any per-view collection.
-        // Every per-view call reuses the same immutable cache via `material_cache`, removing the
-        // N+1 dictionary/router resolution walks that used to dominate multi-view frame cost.
-        {
-            profiling::scope!("render::build_frame_material_cache");
-            let dict = MaterialDictionary::new(property_store);
-            self.backend.material_batch_cache.refresh_for_frame(
-                scene_ref,
-                &dict,
-                router_ref,
-                &pipeline_property_ids,
-                ShaderPermutation(0),
+        let view_draws = {
+            let extract = build_render_frame_extract(
+                RenderFrameExtractInput {
+                    scene: scene_ref,
+                    mesh_pool,
+                    property_store,
+                    router: router_ref,
+                    pipeline_property_ids,
+                    render_context,
+                    inner_parallelism,
+                },
+                &mut self.backend.material_batch_cache,
             );
-        }
-
-        // Pre-expand the scene walk into a dense draw list once per frame. Every per-view
-        // collection iterates this shared list instead of walking each active render space
-        // independently. `render_context` is the same for every view in this tick.
-        let frame_prepared = {
-            profiling::scope!("render::build_frame_prepared_renderables");
-            FramePreparedRenderables::build_for_frame(scene_ref, mesh_pool, render_context)
+            let cull_snapshots: Vec<Option<ViewCullSnapshot>> = {
+                profiling::scope!("render::gather_view_cull_snapshots");
+                prepared
+                    .par_iter()
+                    .map(|prep| cull_snapshot_for_view(scene_ref, occlusion_ref, prep))
+                    .collect()
+            };
+            collect_view_draws(&extract, &prepared, &cull_snapshots)
         };
-
-        let collect_ctx = FrameCollectionContext {
-            scene: scene_ref,
-            mesh_pool,
-            property_store,
-            router: router_ref,
-            pipeline_property_ids,
-            render_context,
-            material_cache: &self.backend.material_batch_cache,
-            prepared: &frame_prepared,
-            inner_parallelism,
-        };
-
-        let cull_snapshots: Vec<Option<ViewCullSnapshot>> = {
-            profiling::scope!("render::gather_view_cull_snapshots");
-            prepared
-                .par_iter()
-                .map(|prep| cull_snapshot_for_view(scene_ref, occlusion_ref, prep))
-                .collect()
-        };
-        let view_draws = collect_view_draws(&collect_ctx, &prepared, &cull_snapshots);
 
         // Headless substitution: snapshot persistent offscreen handles BEFORE building views so
         // we can borrow from a local instead of a long-lived `&mut gpu` (which would conflict
