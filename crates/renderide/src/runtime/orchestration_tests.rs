@@ -91,9 +91,13 @@ fn dispatch_quality_config_increments_unhandled_when_no_handler() {
 }
 
 #[test]
-fn dispatch_desktop_config_updates_vsync_and_fps_caps() {
+fn dispatch_desktop_config_updates_fps_caps_without_overriding_renderer_vsync() {
     let mut rt = test_runtime_standalone();
     let before = rt.unhandled_ipc_command_event_total();
+    {
+        let mut settings = rt.settings().write().expect("settings writable");
+        settings.rendering.vsync = VsyncMode::Auto;
+    }
 
     handle_running_command(
         &mut rt,
@@ -105,7 +109,7 @@ fn dispatch_desktop_config_updates_vsync_and_fps_caps() {
     );
 
     let settings = rt.settings().read().expect("settings readable");
-    assert_eq!(settings.rendering.vsync, VsyncMode::On);
+    assert_eq!(settings.rendering.vsync, VsyncMode::Auto);
     assert_eq!(settings.display.focused_fps_cap, 0);
     assert_eq!(settings.display.unfocused_fps_cap, 30);
     assert_eq!(rt.unhandled_ipc_command_event_total(), before);
@@ -114,6 +118,10 @@ fn dispatch_desktop_config_updates_vsync_and_fps_caps() {
 #[test]
 fn dispatch_desktop_config_clamps_enabled_caps_to_host_minimum() {
     let mut rt = test_runtime_standalone();
+    {
+        let mut settings = rt.settings().write().expect("settings writable");
+        settings.rendering.vsync = VsyncMode::On;
+    }
 
     handle_running_command(
         &mut rt,
@@ -125,7 +133,7 @@ fn dispatch_desktop_config_clamps_enabled_caps_to_host_minimum() {
     );
 
     let settings = rt.settings().read().expect("settings readable");
-    assert_eq!(settings.rendering.vsync, VsyncMode::Off);
+    assert_eq!(settings.rendering.vsync, VsyncMode::On);
     assert_eq!(settings.display.focused_fps_cap, 5);
     assert_eq!(settings.display.unfocused_fps_cap, 5);
 }

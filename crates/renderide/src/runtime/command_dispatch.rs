@@ -9,8 +9,6 @@ use crate::shared::{
     SetTexture3DData, SetTexture3DFormat, SetTexture3DProperties,
 };
 
-use crate::config::VsyncMode;
-
 use super::renderer_command_kind::renderer_command_variant_tag;
 use super::RendererRuntime;
 
@@ -184,26 +182,25 @@ fn apply_render_decoupling_config(runtime: &mut RendererRuntime, cfg: RenderDeco
     runtime.frontend.set_decoupling_config(cfg);
 }
 
-/// Applies host desktop presentation settings to the live renderer settings store.
+/// Applies host desktop FPS caps to the live renderer settings store.
+///
+/// The host command also carries a `v_sync` boolean, but the renderer exposes a richer
+/// [`crate::config::VsyncMode`] policy (`Off` / `On` / `Auto`). The renderer config remains
+/// authoritative for vsync so host IPC cannot collapse `Auto` back to a boolean mode.
 fn apply_desktop_config(runtime: &mut RendererRuntime, cfg: DesktopConfig) {
     let focused_fps_cap = desktop_config_fps_cap(cfg.maximum_foreground_framerate);
     let unfocused_fps_cap = desktop_config_fps_cap(cfg.maximum_background_framerate);
-    let vsync = if cfg.v_sync {
-        VsyncMode::On
-    } else {
-        VsyncMode::Off
-    };
 
     match runtime.settings().write() {
         Ok(mut settings) => {
-            settings.rendering.vsync = vsync;
             settings.display.focused_fps_cap = focused_fps_cap;
             settings.display.unfocused_fps_cap = unfocused_fps_cap;
             logger::info!(
-                "runtime: desktop_config applied vsync={:?} focused_fps_cap={} unfocused_fps_cap={}",
-                vsync,
+                "runtime: desktop_config applied focused_fps_cap={} unfocused_fps_cap={} host_vsync_ignored={} renderer_vsync={:?}",
                 focused_fps_cap,
-                unfocused_fps_cap
+                unfocused_fps_cap,
+                cfg.v_sync,
+                settings.rendering.vsync
             );
         }
         Err(e) => {
