@@ -483,9 +483,6 @@ fn add_main_graph_passes_and_edges(
     let forward_intersect = builder.add_raster_pass(Box::new(
         passes::WorldMeshForwardIntersectPass::new(forward_resources),
     ));
-    let depth_resolve = builder.add_compute_pass(Box::new(
-        passes::WorldMeshForwardDepthResolvePass::new(forward_resources),
-    ));
     // Color resolve replaces the wgpu automatic linear `resolve_target`. Only added when MSAA is
     // active; in 1× mode the intersect pass writes `scene_color_hdr` directly via
     // `frame_sampled_color`'s single-sample target and no resolve work is needed.
@@ -497,6 +494,15 @@ fn add_main_graph_passes_and_edges(
             },
         )))
     });
+    let color_snapshot = builder.add_compute_pass(Box::new(
+        passes::WorldMeshColorSnapshotPass::new(forward_resources),
+    ));
+    let forward_transparent = builder.add_raster_pass(Box::new(
+        passes::WorldMeshForwardTransparentPass::new(forward_resources),
+    ));
+    let depth_resolve = builder.add_compute_pass(Box::new(
+        passes::WorldMeshForwardDepthResolvePass::new(forward_resources),
+    ));
     let hiz = builder.add_compute_pass(Box::new(passes::HiZBuildPass::new(
         passes::HiZBuildGraphResources {
             depth: h.depth,
@@ -520,18 +526,17 @@ fn add_main_graph_passes_and_edges(
     builder.add_edge(forward_prepare, forward_opaque);
     builder.add_edge(forward_opaque, depth_snapshot);
     builder.add_edge(depth_snapshot, forward_intersect);
-    builder.add_edge(forward_intersect, depth_resolve);
-    builder.add_edge(depth_resolve, hiz);
-    // Sequence the color resolve after intersect (which produced the multisampled scene color)
-    // and before the post-processing chain (which reads the resolved single-sample HDR).
     if let Some(color_resolve) = color_resolve {
         builder.add_edge(forward_intersect, color_resolve);
-        if let Some((first_post, _last_post)) = chain_output.pass_range() {
-            builder.add_edge(color_resolve, first_post);
-        } else {
-            builder.add_edge(color_resolve, compose);
-        }
+        builder.add_edge(color_resolve, color_snapshot);
+    } else {
+        builder.add_edge(forward_intersect, color_snapshot);
     }
+    builder.add_edge(color_snapshot, forward_transparent);
+    builder.add_edge(forward_transparent, depth_resolve);
+    builder.add_edge(depth_resolve, hiz);
+    // Sequence the color resolve before the grab-pass snapshot. Post-processing reads the
+    // single-sample HDR target after grab-pass transparent draws have been recorded.
     if let Some((first_post, last_post)) = chain_output.pass_range() {
         builder.add_edge(hiz, first_post);
         builder.add_edge(last_post, compose);
@@ -665,12 +670,32 @@ mod default_graph_tests {
     }
 
     #[test]
-    fn default_main_needs_surface_and_nine_passes() {
+    fn default_main_needs_surface_and_eleven_passes() {
         let g = build_main_graph(smoke_key(), &no_post()).expect("default graph");
         assert!(g.needs_surface_acquire());
-        assert_eq!(g.pass_count(), 9);
-        assert_eq!(g.compile_stats.topo_levels, 9);
+        assert_eq!(g.pass_count(), 11);
+        assert_eq!(g.compile_stats.topo_levels, 11);
         assert_eq!(g.compile_stats.transient_texture_count, 4);
+    }
+
+    #[test]
+    fn msaa_main_graph_inserts_color_resolve_before_snapshot() {
+        let mut key = smoke_key();
+        key.msaa_sample_count = 4;
+        let g = build_main_graph(key, &no_post()).expect("MSAA graph");
+        let pass_names: Vec<&str> = g.pass_info.iter().map(|p| p.name.as_str()).collect();
+        let resolve_pos = pass_names
+            .iter()
+            .position(|name| *name == "WorldMeshForwardColorResolve")
+            .expect("color resolve pass");
+        let snapshot_pos = pass_names
+            .iter()
+            .position(|name| *name == "WorldMeshColorSnapshot")
+            .expect("color snapshot pass");
+
+        assert!(resolve_pos < snapshot_pos);
+        assert_eq!(g.pass_count(), 12);
+        assert_eq!(g.compile_stats.topo_levels, 12);
     }
 
     #[test]

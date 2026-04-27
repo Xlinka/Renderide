@@ -12,6 +12,7 @@ use super::{
     msaa_supported_sample_counts, msaa_supported_sample_counts_stereo, request_device_for_adapter,
     GpuContext, GpuError,
 };
+use crate::config::VsyncMode;
 
 /// Lower scores rank earlier. Stable across systems so Vulkan ICD reordering does not flip the
 /// chosen adapter.
@@ -157,9 +158,15 @@ impl GpuContext {
     /// from [`crate::config::DebugSettings::power_preference`] and used to rank enumerated
     /// adapters (discrete first when [`wgpu::PowerPreference::HighPerformance`], integrated first
     /// when [`wgpu::PowerPreference::LowPower`]).
+    ///
+    /// `vsync` is resolved against the surface's actual present-mode capabilities via
+    /// [`VsyncMode::resolve_present_mode`] (so e.g. [`VsyncMode::On`] picks `Mailbox` when
+    /// available rather than the deeper-queue plain `Fifo`). The swapchain is also pinned to
+    /// `desired_maximum_frame_latency = 1` to match Unity's `QualitySettings.maxQueuedFrames`
+    /// default and keep input → photon latency at one frame of OS-side queueing.
     pub async fn new(
         window: Arc<Window>,
-        present_mode: wgpu::PresentMode,
+        vsync: VsyncMode,
         gpu_validation_layers: bool,
         power_preference: wgpu::PowerPreference,
     ) -> Result<Self, GpuError> {
@@ -178,10 +185,12 @@ impl GpuContext {
 
         let limits = GpuLimits::try_new(device.as_ref(), &adapter)?;
         let size = window.inner_size();
+        let supported_present_modes = surface_safe.get_capabilities(&adapter).present_modes;
         let mut config = surface_safe
             .get_default_config(&adapter, size.width.max(1), size.height.max(1))
             .ok_or(GpuError::SurfaceUnsupported)?;
-        config.present_mode = present_mode;
+        config.present_mode = vsync.resolve_present_mode(&supported_present_modes);
+        config.desired_maximum_frame_latency = 1;
         surface_safe.configure(&device, &config);
 
         let adapter_info = adapter.get_info();
@@ -213,12 +222,16 @@ impl GpuContext {
             .copied()
             .unwrap_or(1);
         logger::info!(
-            "GPU: adapter={} backend={:?} present_mode={:?} instance_flags={:?} \
+            "GPU: adapter={} backend={:?} vsync={:?} present_mode={:?} \
+             supported_present_modes={:?} desired_maximum_frame_latency={} instance_flags={:?} \
              msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
              msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
             adapter_info.name,
             adapter_info.backend,
+            vsync,
             config.present_mode,
+            supported_present_modes,
+            config.desired_maximum_frame_latency,
             instance_flags,
             msaa_supported_sample_counts,
             msaa_max,
@@ -254,6 +267,7 @@ impl GpuContext {
             write_texture_submit_gate,
             surface: Some(surface_safe),
             config,
+            supported_present_modes,
             window: Some(window),
             depth_attachment: None,
             depth_extent_px: (0, 0),
@@ -347,6 +361,7 @@ impl GpuContext {
             write_texture_submit_gate,
             surface: None,
             config,
+            supported_present_modes: Vec::new(),
             window: None,
             depth_attachment: None,
             depth_extent_px: (0, 0),
@@ -358,13 +373,17 @@ impl GpuContext {
     }
 
     /// Builds GPU state using an existing wgpu instance/device from OpenXR bootstrap (mirror window).
+    ///
+    /// The mirror surface uses the same capability-aware [`VsyncMode`] mapping and one-frame
+    /// swapchain latency cap as the desktop constructor so windowed presentation behaves
+    /// consistently across desktop and VR startup paths.
     pub fn new_from_openxr_bootstrap(
         instance: &wgpu::Instance,
         adapter: &wgpu::Adapter,
         device: Arc<wgpu::Device>,
         queue: Arc<wgpu::Queue>,
         window: Arc<Window>,
-        present_mode: wgpu::PresentMode,
+        vsync: VsyncMode,
     ) -> Result<Self, GpuError> {
         install_uncaptured_error_handler(device.as_ref());
         // `Arc<Window>` is `Into<SurfaceTarget<'static>>`, so the returned `Surface` is
@@ -373,10 +392,12 @@ impl GpuContext {
             .create_surface(window.clone())
             .map_err(|e| GpuError::Surface(format!("{e:?}")))?;
         let size = window.inner_size();
+        let supported_present_modes = surface_safe.get_capabilities(adapter).present_modes;
         let mut config = surface_safe
             .get_default_config(adapter, size.width.max(1), size.height.max(1))
             .ok_or(GpuError::SurfaceUnsupported)?;
-        config.present_mode = present_mode;
+        config.present_mode = vsync.resolve_present_mode(&supported_present_modes);
+        config.desired_maximum_frame_latency = 1;
         surface_safe.configure(&device, &config);
         let adapter_info = adapter.get_info();
         let limits = GpuLimits::try_new(device.as_ref(), adapter)?;
@@ -408,12 +429,16 @@ impl GpuContext {
             .copied()
             .unwrap_or(1);
         logger::info!(
-            "GPU (OpenXR path): adapter={} backend={:?} present_mode={:?} \
+            "GPU (OpenXR path): adapter={} backend={:?} vsync={:?} present_mode={:?} \
+             supported_present_modes={:?} desired_maximum_frame_latency={} \
              msaa_supported_sample_counts={:?} msaa_max_sample_count={} \
              msaa_supported_sample_counts_stereo={:?} msaa_max_sample_count_stereo={}",
             adapter_info.name,
             adapter_info.backend,
+            vsync,
             config.present_mode,
+            supported_present_modes,
+            config.desired_maximum_frame_latency,
             msaa_supported_sample_counts,
             msaa_max,
             msaa_supported_sample_counts_stereo,
@@ -446,6 +471,7 @@ impl GpuContext {
             write_texture_submit_gate,
             surface: Some(surface_safe),
             config,
+            supported_present_modes,
             window: Some(window),
             depth_attachment: None,
             depth_extent_px: (0, 0),

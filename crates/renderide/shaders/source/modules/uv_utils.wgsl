@@ -3,9 +3,11 @@
 //! Import with `#import renderide::uv_utils as uvu` (do **not** use alias `uv` — naga-oil rejects it).
 //!
 //! The `1.0 - v` flip in `apply_st` exists because host-uploaded textures arrive in Unity/Resonite
-//! bottom-up V order while wgpu samples top-down. Render textures produced by the renderer itself
-//! are top-down, so newer shaders use `apply_st_for_storage` / `flip_v_for_storage` with an
-//! explicit `_<Tex>_StorageVInverted` uniform. Older shaders fall back to CPU-side `_ST` rewriting.
+//! bottom-up V order while wgpu samples top-down. `_ST` values are material data and are applied
+//! as-authored regardless of whether a binding resolves to a host-uploaded texture or a render
+//! texture. Native compressed uploads that intentionally keep host row order use
+//! `apply_st_for_storage` / `flip_v_for_storage` with an explicit `_<Tex>_StorageVInverted`
+//! uniform to skip that final V flip.
 
 #define_import_path renderide::uv_utils
 
