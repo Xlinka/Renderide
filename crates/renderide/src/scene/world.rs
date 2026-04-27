@@ -5,7 +5,7 @@ use glam::Mat4;
 use crate::shared::RenderTransform;
 
 use super::error::SceneError;
-use super::math::render_transform_to_matrix;
+use super::math::{render_transform_has_degenerate_scale, render_transform_to_matrix};
 
 /// Per-space cache: world matrices and incremental recompute bookkeeping.
 #[derive(Debug)]
@@ -18,6 +18,8 @@ pub struct WorldTransformCache {
     pub local_matrices: Vec<Mat4>,
     /// Stale local TRS when pose changed.
     pub local_dirty: Vec<bool>,
+    /// `true` when this node or any ancestor has a raw zero / near-zero object scale axis.
+    pub degenerate_scales: Vec<bool>,
     /// Epoch per node for O(1) cycle detection during upward walks.
     pub(super) visit_epoch: Vec<u32>,
     /// Incremented before each upward walk.
@@ -35,6 +37,7 @@ impl Default for WorldTransformCache {
             computed: Vec::new(),
             local_matrices: Vec::new(),
             local_dirty: Vec::new(),
+            degenerate_scales: Vec::new(),
             visit_epoch: Vec::new(),
             walk_epoch: 0,
             children: Vec::new(),
@@ -120,6 +123,7 @@ impl WorldTransformCache {
         let computed = &mut self.computed;
         let local_matrices = &mut self.local_matrices;
         let local_dirty = &mut self.local_dirty;
+        let degenerate_scales = &mut self.degenerate_scales;
         let visit_epoch = &mut self.visit_epoch;
         let walk_epoch = &mut self.walk_epoch;
         let n = nodes.len();
@@ -127,6 +131,9 @@ impl WorldTransformCache {
 
         if visit_epoch.len() < n {
             visit_epoch.resize(n, 0);
+        }
+        if degenerate_scales.len() < n {
+            degenerate_scales.resize(n, false);
         }
 
         for transform_index in (0..n).rev() {
@@ -176,29 +183,34 @@ impl WorldTransformCache {
                     if !computed[cid] {
                         let local = get_local_matrix(nodes, local_matrices, local_dirty, cid);
                         world_matrices[cid] = local;
+                        degenerate_scales[cid] = render_transform_has_degenerate_scale(&nodes[cid]);
                         computed[cid] = true;
                     }
                 }
                 continue;
             }
 
-            let mut parent_matrix = match maybe_uppermost_matrix {
-                Some(m) => m,
+            let (mut parent_matrix, mut parent_degenerate) = match maybe_uppermost_matrix {
+                Some(m) => (m, degenerate_scales.get(id).copied().unwrap_or(false)),
                 None => {
                     let Some(top) = stack.pop() else {
                         continue;
                     };
                     let local = get_local_matrix(nodes, local_matrices, local_dirty, top);
+                    let degenerate = render_transform_has_degenerate_scale(&nodes[top]);
                     world_matrices[top] = local;
+                    degenerate_scales[top] = degenerate;
                     computed[top] = true;
-                    local
+                    (local, degenerate)
                 }
             };
 
             while let Some(child_id) = stack.pop() {
                 let local = get_local_matrix(nodes, local_matrices, local_dirty, child_id);
                 parent_matrix *= local;
+                parent_degenerate |= render_transform_has_degenerate_scale(&nodes[child_id]);
                 world_matrices[child_id] = parent_matrix;
+                degenerate_scales[child_id] = parent_degenerate;
                 computed[child_id] = true;
             }
         }
@@ -213,11 +225,12 @@ pub(super) fn ensure_cache_shapes(
     node_count: usize,
     force_invalidate: bool,
 ) {
-    if cache.world_matrices.len() != node_count {
+    if cache.world_matrices.len() != node_count || cache.degenerate_scales.len() != node_count {
         cache.world_matrices.resize(node_count, Mat4::IDENTITY);
         cache.computed.resize(node_count, false);
         cache.local_matrices.resize(node_count, Mat4::IDENTITY);
         cache.local_dirty.resize(node_count, true);
+        cache.degenerate_scales.resize(node_count, false);
         cache.visit_epoch.resize(node_count, 0);
         cache.children_dirty = true;
         for c in &mut cache.computed {
@@ -357,6 +370,7 @@ mod tests {
         let mut cache = WorldTransformCache::default();
         ensure_cache_shapes(&mut cache, 3, false);
         assert_eq!(cache.world_matrices.len(), 3);
+        assert_eq!(cache.degenerate_scales.len(), 3);
         assert_eq!(cache.computed, vec![false, false, false]);
         assert!(
             cache.children_dirty,
@@ -368,6 +382,7 @@ mod tests {
         }
         ensure_cache_shapes(&mut cache, 5, false);
         assert_eq!(cache.world_matrices.len(), 5);
+        assert_eq!(cache.degenerate_scales.len(), 5);
         assert!(
             cache.computed.iter().all(|c| !*c),
             "resize must invalidate all computed flags"
@@ -393,6 +408,7 @@ mod tests {
         compute_world_matrices_for_space(0, &[], &[], &mut cache).expect("ok");
         assert!(cache.world_matrices.is_empty());
         assert!(cache.computed.is_empty());
+        assert!(cache.degenerate_scales.is_empty());
     }
 
     #[test]
@@ -419,6 +435,34 @@ mod tests {
         let expected =
             render_transform_to_matrix(&nodes[0]) * render_transform_to_matrix(&nodes[1]);
         assert!(child_world.abs_diff_eq(expected, 1e-5));
+    }
+
+    /// Degenerate object scale on a parent marks every child in that transform chain.
+    #[test]
+    fn compute_world_matrices_for_space_propagates_degenerate_scale_to_children() {
+        let mut collapsed_parent = identity_xform();
+        collapsed_parent.scale = Vec3::new(0.0, 1.0, 1.0);
+        let nodes = vec![collapsed_parent, identity_xform()];
+        let parents = vec![-1, 0];
+        let mut cache = WorldTransformCache::default();
+
+        compute_world_matrices_for_space(0, &nodes, &parents, &mut cache).expect("ok");
+
+        assert_eq!(cache.degenerate_scales, vec![true, true]);
+    }
+
+    /// Negative nonzero object scale keeps the transform renderable for mirrored draw paths.
+    #[test]
+    fn compute_world_matrices_for_space_keeps_negative_nonzero_scale_renderable() {
+        let mut mirrored = identity_xform();
+        mirrored.scale = Vec3::new(-1.0, 1.0, 1.0);
+        let nodes = vec![mirrored];
+        let parents = vec![-1];
+        let mut cache = WorldTransformCache::default();
+
+        compute_world_matrices_for_space(0, &nodes, &parents, &mut cache).expect("ok");
+
+        assert_eq!(cache.degenerate_scales, vec![false]);
     }
 
     #[test]

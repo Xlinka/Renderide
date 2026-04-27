@@ -4,22 +4,33 @@ use glam::{Mat4, Quat, Vec3};
 
 use crate::shared::RenderTransform;
 
-const MIN_SCALE: f32 = 1e-8;
+/// Minimum absolute object scale axis that remains renderable.
+pub(crate) const MIN_RENDER_SCALE: f32 = 1e-8;
+
+/// Returns `true` when any raw scale axis would collapse an object draw.
+#[inline]
+pub(crate) fn render_transform_has_degenerate_scale(t: &RenderTransform) -> bool {
+    let scale = t.scale;
+    !(scale.x.is_finite() && scale.y.is_finite() && scale.z.is_finite())
+        || scale.x.abs() <= MIN_RENDER_SCALE
+        || scale.y.abs() <= MIN_RENDER_SCALE
+        || scale.z.abs() <= MIN_RENDER_SCALE
+}
 
 /// Builds column-major TRS = `T * R * S`, matching Unity / host `RenderTransform` convention.
 #[inline]
 pub fn render_transform_to_matrix(t: &RenderTransform) -> Mat4 {
-    let sx = if t.scale.x.is_finite() && t.scale.x.abs() >= MIN_SCALE {
+    let sx = if t.scale.x.is_finite() && t.scale.x.abs() >= MIN_RENDER_SCALE {
         t.scale.x
     } else {
         1.0
     };
-    let sy = if t.scale.y.is_finite() && t.scale.y.abs() >= MIN_SCALE {
+    let sy = if t.scale.y.is_finite() && t.scale.y.abs() >= MIN_RENDER_SCALE {
         t.scale.y
     } else {
         1.0
     };
-    let sz = if t.scale.z.is_finite() && t.scale.z.abs() >= MIN_SCALE {
+    let sz = if t.scale.z.is_finite() && t.scale.z.abs() >= MIN_RENDER_SCALE {
         t.scale.z
     } else {
         1.0
@@ -56,6 +67,47 @@ pub fn multiply_root(world_local: Mat4, root: &RenderTransform) -> Mat4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Builds a transform with the requested scale and otherwise identity components.
+    fn scaled_transform(scale: Vec3) -> RenderTransform {
+        RenderTransform {
+            position: Vec3::ZERO,
+            scale,
+            rotation: Quat::IDENTITY,
+        }
+    }
+
+    /// Unit scale is a renderable object scale.
+    #[test]
+    fn unit_scale_is_not_degenerate_for_draws() {
+        assert!(!render_transform_has_degenerate_scale(&scaled_transform(
+            Vec3::ONE
+        )));
+    }
+
+    /// Exact zero on any object scale axis collapses mesh draws.
+    #[test]
+    fn zero_scale_axis_is_degenerate_for_draws() {
+        assert!(render_transform_has_degenerate_scale(&scaled_transform(
+            Vec3::new(1.0, 0.0, 1.0)
+        )));
+    }
+
+    /// The existing near-zero transform threshold is also treated as non-renderable.
+    #[test]
+    fn near_zero_scale_axis_is_degenerate_for_draws() {
+        assert!(render_transform_has_degenerate_scale(&scaled_transform(
+            Vec3::new(1.0, MIN_RENDER_SCALE, 1.0)
+        )));
+    }
+
+    /// Negative nonzero scale preserves mirrored draw semantics instead of being skipped.
+    #[test]
+    fn negative_nonzero_scale_is_not_degenerate_for_draws() {
+        assert!(!render_transform_has_degenerate_scale(&scaled_transform(
+            Vec3::new(-1.0, 1.0, 1.0)
+        )));
+    }
 
     #[test]
     fn render_transform_to_matrix_trs() {

@@ -5,8 +5,9 @@ use glam::{Mat4, Quat, Vec3};
 use crate::render_graph::{
     view_matrix_for_world_mesh_render_space, view_matrix_from_render_transform,
 };
+use crate::scene::render_overrides::RenderTransformOverrideEntry;
 use crate::scene::render_space::RenderSpaceState;
-use crate::shared::RenderingContext;
+use crate::shared::{RenderTransform, RenderingContext};
 
 use super::super::ids::RenderSpaceId;
 use super::super::world::{compute_world_matrices_for_space, WorldTransformCache};
@@ -47,6 +48,15 @@ impl SceneCoordinator {
         let _ =
             compute_world_matrices_for_space(id.0, &space.nodes, &space.node_parents, &mut cache);
         self.world_caches.insert(id, cache);
+    }
+}
+
+/// Builds a unit-scale test transform at the origin.
+fn identity_transform() -> RenderTransform {
+    RenderTransform {
+        position: Vec3::ZERO,
+        scale: Vec3::ONE,
+        rotation: Quat::IDENTITY,
     }
 }
 
@@ -146,6 +156,73 @@ fn overlay_render_matrix_tracks_head_output_transform() {
         (t.z + 4.0).abs() < 1e-4,
         "overlay z should subtract space root"
     );
+}
+
+/// Cached zero-scale state reports the selected node as non-renderable for draw collection.
+#[test]
+fn transform_has_degenerate_scale_reads_cached_world_state() {
+    let mut scene = SceneCoordinator::new();
+    let id = RenderSpaceId(11);
+    let mut collapsed = identity_transform();
+    collapsed.scale = Vec3::new(0.0, 1.0, 1.0);
+    scene.test_seed_space_identity_worlds(id, vec![collapsed], vec![-1]);
+
+    assert!(scene.transform_has_degenerate_scale(id, 0));
+    assert!(scene.transform_has_degenerate_scale_for_context(id, 0, RenderingContext::UserView));
+}
+
+/// A zero-scale render-context override hides only the context that owns the override.
+#[test]
+fn transform_override_zero_scale_is_context_local_degenerate_state() {
+    let mut scene = SceneCoordinator::new();
+    let id = RenderSpaceId(12);
+    scene.test_seed_space_identity_worlds(id, vec![identity_transform()], vec![-1]);
+    scene
+        .spaces
+        .get_mut(&id)
+        .expect("space")
+        .render_transform_overrides
+        .push(RenderTransformOverrideEntry {
+            node_id: 0,
+            context: RenderingContext::UserView,
+            scale_override: Some(Vec3::ZERO),
+            ..Default::default()
+        });
+
+    assert!(scene.transform_has_degenerate_scale_for_context(id, 0, RenderingContext::UserView));
+    assert!(!scene.transform_has_degenerate_scale_for_context(
+        id,
+        0,
+        RenderingContext::ExternalView
+    ));
+}
+
+/// A context scale override can restore a base zero-scale transform for that context only.
+#[test]
+fn transform_override_unit_scale_replaces_cached_zero_scale_for_context() {
+    let mut scene = SceneCoordinator::new();
+    let id = RenderSpaceId(13);
+    let mut collapsed = identity_transform();
+    collapsed.scale = Vec3::ZERO;
+    scene.test_seed_space_identity_worlds(id, vec![collapsed], vec![-1]);
+    scene
+        .spaces
+        .get_mut(&id)
+        .expect("space")
+        .render_transform_overrides
+        .push(RenderTransformOverrideEntry {
+            node_id: 0,
+            context: RenderingContext::UserView,
+            scale_override: Some(Vec3::ONE),
+            ..Default::default()
+        });
+
+    assert!(!scene.transform_has_degenerate_scale_for_context(id, 0, RenderingContext::UserView));
+    assert!(scene.transform_has_degenerate_scale_for_context(
+        id,
+        0,
+        RenderingContext::ExternalView
+    ));
 }
 
 /// [`super::parallel_apply::apply_extracted_render_space_update`] mutates only the per-space

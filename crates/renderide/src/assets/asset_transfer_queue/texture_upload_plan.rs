@@ -17,8 +17,8 @@ pub(crate) struct TextureUploadPlan<'a> {
     pub(crate) device: &'a wgpu::Device,
     /// Queue used for `write_texture` calls.
     pub(crate) queue: &'a wgpu::Queue,
-    /// Shared gate held around texture writes to avoid write/submit lock inversion.
-    pub(crate) write_texture_submit_gate: &'a crate::gpu::WriteTextureSubmitGate,
+    /// Shared gate held around GPU queue access to avoid write/submit lock inversion.
+    pub(crate) gpu_queue_access_gate: &'a crate::gpu::GpuQueueAccessGate,
     /// Destination GPU texture.
     pub(crate) texture: &'a wgpu::Texture,
     /// Host-side format record for the texture.
@@ -112,7 +112,7 @@ impl TextureUploadStepper {
                 texture_upload_start(&Texture2dUploadContext {
                     device: plan.device,
                     queue: plan.queue,
-                    write_texture_submit_gate: plan.write_texture_submit_gate,
+                    gpu_queue_access_gate: plan.gpu_queue_access_gate,
                     texture: plan.texture,
                     fmt: plan.format,
                     wgpu_format: plan.wgpu_format,
@@ -150,7 +150,7 @@ impl TextureUploadStepper {
         match uploader.upload_next_mip(TextureMipUploadStep {
             device: plan.device,
             queue: plan.queue,
-            write_texture_submit_gate: plan.write_texture_submit_gate,
+            gpu_queue_access_gate: plan.gpu_queue_access_gate,
             texture: plan.texture,
             fmt: plan.format,
             wgpu_format: plan.wgpu_format,
