@@ -6,13 +6,13 @@ use crate::pipelines::ShaderPermutation;
 use crate::render_graph::blackboard::Blackboard;
 use crate::render_graph::frame_params::{
     FrameRenderParams, HostCameraFrame, PerViewHudConfig, PerViewHudOutputs, PerViewHudOutputsSlot,
-    PrefetchedWorldMeshDrawsSlot, PreparedWorldMeshForwardFrame,
+    PrefetchedWorldMeshDrawsSlot, PrefetchedWorldMeshViewDraws, PreparedWorldMeshForwardFrame,
 };
 use crate::render_graph::frame_upload_batch::FrameUploadBatch;
 use crate::render_graph::world_mesh_draw_prep::{WorldMeshDrawCollection, WorldMeshDrawItem};
 use crate::render_graph::{
-    build_world_mesh_cull_proj_params, world_mesh_draw_state_rows_from_sorted,
-    world_mesh_draw_stats_from_sorted, WorldMeshCullInput,
+    world_mesh_draw_state_rows_from_sorted, world_mesh_draw_stats_from_sorted,
+    WorldMeshCullProjParams,
 };
 
 use super::super::skybox::SkyboxRenderer;
@@ -22,30 +22,30 @@ use super::material_resolve::precompute_material_resolve_batches;
 use super::slab::{pack_and_upload_per_draw_slab, SlabPackInputs};
 
 /// Takes the explicit draw plan seeded into the per-view blackboard.
-pub(super) fn take_world_mesh_draws(blackboard: &mut Blackboard) -> WorldMeshDrawCollection {
+pub(super) fn take_world_mesh_draws(blackboard: &mut Blackboard) -> PrefetchedWorldMeshViewDraws {
     profiling::scope!("world_mesh::take_draw_plan");
     if let Some(prefetched) = blackboard.take::<PrefetchedWorldMeshDrawsSlot>() {
         return prefetched;
     }
     logger::warn!("WorldMeshForward: missing per-view draw plan; rendering no world-mesh draws");
-    WorldMeshDrawCollection::empty()
+    PrefetchedWorldMeshViewDraws::empty()
 }
 
 /// Copies Hi-Z temporal state for the next frame when culling is active.
 pub(super) fn capture_hi_z_temporal_after_collect(
     frame: &mut FrameRenderParams<'_>,
-    culling: Option<&WorldMeshCullInput<'_>>,
+    cull_proj: Option<WorldMeshCullProjParams>,
     hc: HostCameraFrame,
 ) {
     if hc.suppress_occlusion_temporal {
         return;
     }
-    let Some(cull_in) = culling else {
+    let Some(cull_proj) = cull_proj else {
         return;
     };
     frame.shared.occlusion.capture_hi_z_temporal_for_next_frame(
         frame.shared.scene,
-        cull_in.proj,
+        cull_proj,
         frame.view.viewport_px,
         frame.view.hi_z_slot.as_ref(),
         hc.explicit_world_to_view,
@@ -112,20 +112,18 @@ pub(in crate::render_graph::passes::world_mesh_forward) fn prepare_world_mesh_fo
     let use_multiview = pipeline.use_multiview;
     let shader_perm = pipeline.shader_perm;
 
-    let culling = build_world_mesh_cull_input(frame, &hc);
-
-    let collection = take_world_mesh_draws(blackboard);
-    capture_hi_z_temporal_after_collect(frame, culling.as_ref(), hc);
+    let prefetched = take_world_mesh_draws(blackboard);
+    capture_hi_z_temporal_after_collect(frame, prefetched.cull_proj, hc);
 
     publish_world_mesh_hud_outputs(
         frame,
         blackboard,
-        &collection,
+        &prefetched.collection,
         supports_base_instance,
         shader_perm,
     );
 
-    let draws = collection.items;
+    let draws = prefetched.collection.items;
     let (render_context, world_proj, overlay_proj) =
         compute_view_projections(frame.shared.scene, hc, frame.view.viewport_px, &draws);
 
@@ -182,32 +180,6 @@ pub(in crate::render_graph::passes::world_mesh_forward) fn prepare_world_mesh_fo
         tail_raster_recorded: false,
         precomputed_batches,
         skybox,
-    })
-}
-
-/// Builds the [`WorldMeshCullInput`] for this view, or returns `None` when the host has suppressed
-/// occlusion-temporal feedback for the frame (`HostCameraFrame::suppress_occlusion_temporal`).
-fn build_world_mesh_cull_input<'a, 'frame>(
-    frame: &FrameRenderParams<'frame>,
-    hc: &'a HostCameraFrame,
-) -> Option<WorldMeshCullInput<'a>>
-where
-    'frame: 'a,
-{
-    if hc.suppress_occlusion_temporal {
-        return None;
-    }
-    let cull_proj =
-        build_world_mesh_cull_proj_params(frame.shared.scene, frame.view.viewport_px, hc);
-    let depth_mode = frame.output_depth_mode();
-    let view_id = frame.view.occlusion_view;
-    let hi_z_temporal = frame.shared.occlusion.hi_z_temporal_snapshot(view_id);
-    let hi_z = frame.shared.occlusion.hi_z_cull_data(depth_mode, view_id);
-    Some(WorldMeshCullInput {
-        proj: cull_proj,
-        host_camera: hc,
-        hi_z,
-        hi_z_temporal,
     })
 }
 

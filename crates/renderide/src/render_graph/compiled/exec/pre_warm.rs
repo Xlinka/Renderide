@@ -158,12 +158,15 @@ impl CompiledRenderGraph {
             let Ok(depth_format) = view.target.depth_format(mv_ctx.gpu) else {
                 continue;
             };
+            let helper_needs = view.world_mesh_draw_plan.helper_needs();
             view_layouts.push(crate::backend::PreRecordViewResourceLayout {
                 width: viewport.0,
                 height: viewport.1,
                 stereo,
                 depth_format,
                 color_format,
+                needs_depth_snapshot: helper_needs.depth_snapshot,
+                needs_color_snapshot: helper_needs.color_snapshot,
             });
         }
         mv_ctx.backend.frame_resources.pre_record_sync_for_views(

@@ -19,7 +19,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use hashbrown::{HashMap, HashSet};
+use hashbrown::HashMap;
 use parking_lot::Mutex;
 
 use crate::backend::cluster_gpu::{ClusterBufferRefs, CLUSTER_PARAMS_UNIFORM_SIZE};
@@ -27,7 +27,7 @@ use crate::gpu::frame_globals::FrameGpuUniforms;
 use crate::gpu::GpuLimits;
 use crate::render_graph::OcclusionViewId;
 
-use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources};
+use super::frame_gpu::{EmptyMaterialBindGroup, FrameGpuResources, SceneSnapshotSyncParams};
 use super::frame_gpu_bindings::{FrameGpuBindings, FrameGpuBindingsError};
 use super::light_gpu::{order_lights_for_clustered_shading_in_place, GpuLight, MAX_LIGHTS};
 use super::mesh_deform::PaddedPerDrawUniforms;
@@ -98,6 +98,10 @@ pub struct PreRecordViewResourceLayout {
     pub depth_format: wgpu::TextureFormat,
     /// HDR scene-color snapshot format for grab-pass material sampling.
     pub color_format: wgpu::TextureFormat,
+    /// Whether this view has materials that need a full-size scene-depth snapshot.
+    pub needs_depth_snapshot: bool,
+    /// Whether this view has materials that need a full-size scene-color snapshot.
+    pub needs_color_snapshot: bool,
 }
 
 /// Per-frame GPU state: shared frame/light resources, per-view cluster buffers and bind groups,
@@ -545,22 +549,38 @@ impl FrameResourceManager {
         queue: &wgpu::Queue,
         view_layouts: &[PreRecordViewResourceLayout],
     ) {
-        let mut seen = HashSet::new();
+        let mut unique_layouts = HashMap::new();
         for &layout in view_layouts {
-            if !seen.insert(layout) {
-                continue;
-            }
+            let key = (
+                layout.width,
+                layout.height,
+                layout.stereo,
+                layout.depth_format,
+                layout.color_format,
+            );
+            let needs = unique_layouts.entry(key).or_insert((false, false));
+            needs.0 |= layout.needs_depth_snapshot;
+            needs.1 |= layout.needs_color_snapshot;
+        }
+
+        for ((width, height, stereo, depth_format, color_format), (needs_depth, needs_color)) in
+            unique_layouts
+        {
             let Some(fgpu) = self.frame_gpu_mut() else {
                 return;
             };
-            let viewport = (layout.width, layout.height);
-            fgpu.sync_cluster_viewport(device, viewport, layout.stereo);
+            let viewport = (width, height);
+            fgpu.sync_cluster_viewport(device, viewport, stereo);
             fgpu.sync_scene_snapshot_textures(
                 device,
-                viewport,
-                layout.depth_format,
-                layout.color_format,
-                layout.stereo,
+                SceneSnapshotSyncParams {
+                    viewport,
+                    depth_format,
+                    color_format,
+                    multiview: stereo,
+                    needs_depth_snapshot: needs_depth,
+                    needs_color_snapshot: needs_color,
+                },
             );
         }
         if self

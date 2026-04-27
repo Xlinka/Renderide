@@ -7,7 +7,10 @@ use crate::gpu::{GpuContext, GpuLimits};
 use crate::scene::SceneCoordinator;
 
 use super::error::GraphExecuteError;
-use super::frame_params::{FrameViewClear, HostCameraFrame, OcclusionViewId};
+use super::frame_params::{
+    FrameViewClear, HostCameraFrame, OcclusionViewId, PrefetchedWorldMeshViewDraws,
+    WorldMeshHelperNeeds,
+};
 use super::ids::{GroupId, PassId};
 use super::pass::{GroupScope, PassKind, PassMergeHint, PassNode};
 use super::resources::{
@@ -74,7 +77,7 @@ pub struct FrameView<'a> {
 /// Explicit world-mesh draw policy for a [`FrameView`].
 pub enum WorldMeshDrawPlan {
     /// Use the supplied collection and skip in-graph CPU scene collection.
-    Prefetched(WorldMeshDrawCollection),
+    Prefetched(Box<PrefetchedWorldMeshViewDraws>),
     /// Render no world-mesh draws for this view.
     Empty,
 }
@@ -83,9 +86,23 @@ impl WorldMeshDrawPlan {
     /// Returns the prefetched collection when this plan carries one.
     pub fn as_prefetched(&self) -> Option<&WorldMeshDrawCollection> {
         match self {
+            Self::Prefetched(draws) => Some(&draws.collection),
+            Self::Empty => None,
+        }
+    }
+
+    /// Returns the full prefetched per-view packet when this plan carries one.
+    pub fn as_prefetched_view_draws(&self) -> Option<&PrefetchedWorldMeshViewDraws> {
+        match self {
             Self::Prefetched(draws) => Some(draws),
             Self::Empty => None,
         }
+    }
+
+    /// Returns helper-pass requirements derived during draw collection.
+    pub fn helper_needs(&self) -> WorldMeshHelperNeeds {
+        self.as_prefetched_view_draws()
+            .map_or_else(WorldMeshHelperNeeds::default, |draws| draws.helper_needs)
     }
 }
 

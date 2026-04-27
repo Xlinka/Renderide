@@ -191,12 +191,12 @@ impl CompiledRenderGraph {
             view_blackboard.insert::<MsaaViewsSlot>(msaa_views);
         }
         match world_mesh_draw_plan {
-            WorldMeshDrawPlan::Prefetched(draws) => {
-                view_blackboard.insert::<PrefetchedWorldMeshDrawsSlot>(draws);
+            WorldMeshDrawPlan::Prefetched(view_draws) => {
+                view_blackboard.insert::<PrefetchedWorldMeshDrawsSlot>(*view_draws);
             }
             WorldMeshDrawPlan::Empty => {
                 view_blackboard.insert::<PrefetchedWorldMeshDrawsSlot>(
-                    crate::render_graph::world_mesh_draw_prep::WorldMeshDrawCollection::empty(),
+                    crate::render_graph::PrefetchedWorldMeshViewDraws::empty(),
                 );
             }
         }

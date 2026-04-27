@@ -525,90 +525,152 @@ fn collect_chunk(
     (out, cull_stats)
 }
 
-/// Collects draw items for one chunk of a pre-expanded [`FramePreparedRenderables`] list.
-///
-/// Unlike [`collect_chunk`], there is no scene walk: the prepared draws already captured every
-/// valid `(renderer × material slot)` tuple plus its frame-global resolution (material override,
-/// submesh index range, overlay flag, skin deform flag). This per-view pass only applies filters
-/// and per-view CPU culling, then builds [`WorldMeshDrawItem`]s.
-fn collect_prepared_chunk(
-    draws: &[FramePreparedDraw],
+/// Returns true when two prepared slot entries came from the same source renderer.
+#[inline]
+fn prepared_draws_share_renderer(a: &FramePreparedDraw, b: &FramePreparedDraw) -> bool {
+    a.space_id == b.space_id
+        && a.renderable_index == b.renderable_index
+        && a.node_id == b.node_id
+        && a.mesh_asset_id == b.mesh_asset_id
+        && a.is_overlay == b.is_overlay
+        && a.sorting_order == b.sorting_order
+        && a.skinned == b.skinned
+        && a.world_space_deformed == b.world_space_deformed
+}
+
+/// Per-renderer view-local state shared by every material slot in a prepared run.
+#[derive(Clone, Copy)]
+struct PreparedRunViewState {
+    /// Rigid model matrix reused by all emitted slot draws.
+    rigid_world_matrix: Option<Mat4>,
+    /// Raster front-face winding selected from [`Self::rigid_world_matrix`].
+    front_face: RasterFrontFace,
+    /// Camera distance reused by alpha-blended slot draws.
+    alpha_distance_sq: f32,
+}
+
+/// Skinned renderer lookup result for a prepared renderer run.
+enum PreparedRunSkinning<'a> {
+    /// The renderer uses the rigid static-mesh path.
+    Rigid,
+    /// The renderer uses the skinned path and still has a valid scene entry.
+    Skinned(&'a SkinnedMeshRenderer),
+    /// The prepared index no longer points at a valid skinned renderer this frame.
+    Stale,
+}
+
+impl<'a> PreparedRunSkinning<'a> {
+    /// Returns the culling target's optional skinned renderer borrow.
+    fn as_renderer(&self) -> Option<&'a SkinnedMeshRenderer> {
+        match self {
+            Self::Rigid | Self::Stale => None,
+            Self::Skinned(renderer) => Some(renderer),
+        }
+    }
+}
+
+/// Returns whether the renderer run passes the view's optional transform filter.
+fn prepared_run_passes_filter(
+    first: &FramePreparedDraw,
+    ctx: &DrawCollectionContext<'_>,
+    filter_masks: &HashMap<RenderSpaceId, Vec<bool>>,
+) -> bool {
+    let Some(filter) = ctx.transform_filter else {
+        return true;
+    };
+    match filter_masks.get(&first.space_id) {
+        Some(mask) => {
+            first.node_id >= 0
+                && (first.node_id as usize) < mask.len()
+                && mask[first.node_id as usize]
+        }
+        None => filter.passes_scene_node(ctx.scene, first.space_id, first.node_id),
+    }
+}
+
+/// Returns the skinned renderer backing a prepared run, or `None` when stale scene indices should skip it.
+fn prepared_run_skinned_renderer<'a>(
+    first: &FramePreparedDraw,
+    ctx: &'a DrawCollectionContext<'_>,
+) -> PreparedRunSkinning<'a> {
+    if !first.skinned {
+        return PreparedRunSkinning::Rigid;
+    }
+    let Some(space) = ctx.scene.space(first.space_id) else {
+        return PreparedRunSkinning::Stale;
+    };
+    space
+        .skinned_mesh_renderers
+        .get(first.renderable_index)
+        .map_or(PreparedRunSkinning::Stale, PreparedRunSkinning::Skinned)
+}
+
+/// Builds shared view-local state for one prepared renderer run and reports draw-slot cull stats.
+fn prepared_run_view_state(
+    run: &[FramePreparedDraw],
+    first: &FramePreparedDraw,
+    mesh: &crate::assets::mesh::GpuMesh,
+    skinning: &PreparedRunSkinning<'_>,
+    ctx: &DrawCollectionContext<'_>,
+) -> (Option<PreparedRunViewState>, (usize, usize, usize)) {
+    let mut cull_stats = (0usize, 0usize, 0usize);
+    let mut rigid_world_matrix = None;
+    if let Some(c) = ctx.culling {
+        cull_stats.0 += run.len();
+        let target = MeshCullTarget {
+            scene: ctx.scene,
+            space_id: first.space_id,
+            mesh,
+            skinned: first.skinned,
+            skinned_renderer: skinning.as_renderer(),
+            node_id: first.node_id,
+        };
+        match mesh_draw_passes_cpu_cull(&target, first.is_overlay, c, ctx.render_context) {
+            Err(CpuCullFailure::Frustum) => {
+                cull_stats.1 += run.len();
+                return (None, cull_stats);
+            }
+            Err(CpuCullFailure::HiZ) => {
+                cull_stats.2 += run.len();
+                return (None, cull_stats);
+            }
+            Ok(m) => {
+                rigid_world_matrix = m;
+            }
+        }
+    }
+    if !first.world_space_deformed && rigid_world_matrix.is_none() {
+        rigid_world_matrix =
+            world_matrix_for_local_vertex_stream(ctx, first.space_id, first.node_id);
+    }
+    let front_face = front_face_for_world_matrix(rigid_world_matrix);
+    let alpha_distance_sq = rigid_world_matrix
+        .map(|m| (m.col(3).truncate() - ctx.view_origin_world).length_squared())
+        .unwrap_or(0.0);
+    (
+        Some(PreparedRunViewState {
+            rigid_world_matrix,
+            front_face,
+            alpha_distance_sq,
+        }),
+        cull_stats,
+    )
+}
+
+/// Emits one [`WorldMeshDrawItem`] per material slot in a surviving prepared renderer run.
+fn append_prepared_run_draws(
+    run: &[FramePreparedDraw],
     ctx: &DrawCollectionContext<'_>,
     cache: &FrameMaterialBatchCache,
-    filter_masks: &HashMap<RenderSpaceId, Vec<bool>>,
-) -> (Vec<WorldMeshDrawItem>, (usize, usize, usize)) {
-    let mut out: Vec<WorldMeshDrawItem> = Vec::with_capacity(draws.len());
-    let mut cull_stats = (0usize, 0usize, 0usize);
-
-    for d in draws {
-        if let Some(filter) = ctx.transform_filter {
-            let passes = match filter_masks.get(&d.space_id) {
-                Some(mask) => {
-                    d.node_id >= 0 && (d.node_id as usize) < mask.len() && mask[d.node_id as usize]
-                }
-                None => filter.passes_scene_node(ctx.scene, d.space_id, d.node_id),
-            };
-            if !passes {
-                continue;
-            }
-        }
-        if transform_chain_has_degenerate_scale(ctx, d.space_id, d.node_id) {
-            continue;
-        }
-
-        let Some(mesh) = ctx.mesh_pool.get_mesh(d.mesh_asset_id) else {
-            continue;
-        };
-
-        // Skinned renderers need a borrow into the scene for skinning palette bounds; the index
-        // may go stale if the renderer list shrinks mid-frame (rare), so treat `None` as "skip".
-        let skinned_renderer: Option<&SkinnedMeshRenderer> = if d.skinned {
-            match ctx.scene.space(d.space_id) {
-                Some(space) => match space.skinned_mesh_renderers.get(d.renderable_index) {
-                    Some(sk) => Some(sk),
-                    None => continue,
-                },
-                None => continue,
-            }
-        } else {
-            None
-        };
-
-        let mut rigid_world_matrix = None;
-        if let Some(c) = ctx.culling {
-            cull_stats.0 += 1;
-            let target = MeshCullTarget {
-                scene: ctx.scene,
-                space_id: d.space_id,
-                mesh,
-                skinned: d.skinned,
-                skinned_renderer,
-                node_id: d.node_id,
-            };
-            match mesh_draw_passes_cpu_cull(&target, d.is_overlay, c, ctx.render_context) {
-                Err(CpuCullFailure::Frustum) => {
-                    cull_stats.1 += 1;
-                    continue;
-                }
-                Err(CpuCullFailure::HiZ) => {
-                    cull_stats.2 += 1;
-                    continue;
-                }
-                Ok(m) => {
-                    rigid_world_matrix = m;
-                }
-            }
-        }
-        if !d.world_space_deformed && rigid_world_matrix.is_none() {
-            rigid_world_matrix = world_matrix_for_local_vertex_stream(ctx, d.space_id, d.node_id);
-        }
-        let front_face = front_face_for_world_matrix(rigid_world_matrix);
-
+    state: PreparedRunViewState,
+    out: &mut Vec<WorldMeshDrawItem>,
+) {
+    for d in run {
         let batch_key = batch_key_for_slot_cached(
             d.material_asset_id,
             d.property_block_id,
             d.skinned,
-            front_face,
+            state.front_face,
             cache,
             MaterialResolveCtx {
                 dict: ctx.material_dict,
@@ -618,10 +680,7 @@ fn collect_prepared_chunk(
             },
         );
         let camera_distance_sq = if batch_key.alpha_blended {
-            match rigid_world_matrix {
-                Some(m) => (m.col(3).truncate() - ctx.view_origin_world).length_squared(),
-                None => 0.0,
-            }
+            state.alpha_distance_sq
         } else {
             0.0
         };
@@ -640,8 +699,67 @@ fn collect_prepared_chunk(
             camera_distance_sq,
             lookup_ids: d.lookup_ids,
             batch_key,
-            rigid_world_matrix,
+            rigid_world_matrix: state.rigid_world_matrix,
         });
+    }
+}
+
+/// Collects one prepared renderer run after frame-global slot expansion.
+fn collect_prepared_renderer_run(
+    run: &[FramePreparedDraw],
+    ctx: &DrawCollectionContext<'_>,
+    cache: &FrameMaterialBatchCache,
+    filter_masks: &HashMap<RenderSpaceId, Vec<bool>>,
+    out: &mut Vec<WorldMeshDrawItem>,
+) -> (usize, usize, usize) {
+    let Some(first) = run.first() else {
+        return (0, 0, 0);
+    };
+    if !prepared_run_passes_filter(first, ctx, filter_masks) {
+        return (0, 0, 0);
+    }
+    let Some(mesh) = ctx.mesh_pool.get_mesh(first.mesh_asset_id) else {
+        return (0, 0, 0);
+    };
+    let skinning = prepared_run_skinned_renderer(first, ctx);
+    if matches!(skinning, PreparedRunSkinning::Stale) {
+        return (0, 0, 0);
+    }
+    let (state, cull_stats) = prepared_run_view_state(run, first, mesh, &skinning, ctx);
+    if let Some(state) = state {
+        append_prepared_run_draws(run, ctx, cache, state, out);
+    }
+    cull_stats
+}
+
+/// Collects draw items for one chunk of a pre-expanded [`FramePreparedRenderables`] list.
+///
+/// Unlike [`collect_chunk`], there is no scene walk: the prepared draws already captured every
+/// valid `(renderer × material slot)` tuple plus its frame-global resolution (material override,
+/// submesh index range, overlay flag, skin deform flag). This per-view pass only applies filters
+/// and per-view CPU culling per renderer, then builds [`WorldMeshDrawItem`]s for each material slot.
+fn collect_prepared_chunk(
+    draws: &[FramePreparedDraw],
+    ctx: &DrawCollectionContext<'_>,
+    cache: &FrameMaterialBatchCache,
+    filter_masks: &HashMap<RenderSpaceId, Vec<bool>>,
+) -> (Vec<WorldMeshDrawItem>, (usize, usize, usize)) {
+    let mut out: Vec<WorldMeshDrawItem> = Vec::with_capacity(draws.len());
+    let mut cull_stats = (0usize, 0usize, 0usize);
+
+    let mut run_start = 0usize;
+    while run_start < draws.len() {
+        let first = &draws[run_start];
+        let mut run_end = run_start + 1;
+        while run_end < draws.len() && prepared_draws_share_renderer(first, &draws[run_end]) {
+            run_end += 1;
+        }
+        let run = &draws[run_start..run_end];
+        run_start = run_end;
+        let run_stats = collect_prepared_renderer_run(run, ctx, cache, filter_masks, &mut out);
+        cull_stats.0 += run_stats.0;
+        cull_stats.1 += run_stats.1;
+        cull_stats.2 += run_stats.2;
     }
 
     (out, cull_stats)
@@ -838,8 +956,6 @@ fn collect_world_mesh_chunks(
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashMap;
-
     use glam::{Mat4, Quat, Vec3};
 
     use super::*;
@@ -883,45 +999,24 @@ mod tests {
         }
     }
 
-    /// Prepared collection skips zero-scale transforms before mesh lookup or cull counters.
+    /// Prepared collection can collapse material-slot runs from the same source renderer.
     #[test]
-    fn prepared_chunk_skips_degenerate_scale_before_culling() {
-        let mut scene = SceneCoordinator::new();
+    fn prepared_draws_share_renderer_groups_material_slots_only() {
         let space_id = RenderSpaceId(27);
-        let mut collapsed = identity_transform();
-        collapsed.scale = Vec3::ZERO;
-        scene.test_seed_space_identity_worlds(space_id, vec![collapsed], vec![-1]);
-
-        let mesh_pool = MeshPool::default_pool();
-        let store = MaterialPropertyStore::new();
-        let material_dict = MaterialDictionary::new(&store);
-        let router = MaterialRouter::new(RasterPipelineKind::Null);
-        let registry = PropertyIdRegistry::new();
-        let property_ids = MaterialPipelinePropertyIds::new(&registry);
-        let cache = FrameMaterialBatchCache::new();
-        let filter_masks = HashMap::new();
-        let ctx = DrawCollectionContext {
-            scene: &scene,
-            mesh_pool: &mesh_pool,
-            material_dict: &material_dict,
-            material_router: &router,
-            pipeline_property_ids: &property_ids,
-            shader_perm: ShaderPermutation::default(),
-            render_context: RenderingContext::UserView,
-            head_output_transform: Mat4::IDENTITY,
-            view_origin_world: Vec3::ZERO,
-            culling: None,
-            transform_filter: None,
-            material_cache: None,
-            prepared: None,
+        let first_slot = prepared_draw(space_id);
+        let mut second_slot = prepared_draw(space_id);
+        second_slot.slot_index = 1;
+        second_slot.first_index = 3;
+        second_slot.material_asset_id = 10;
+        second_slot.lookup_ids = MaterialPropertyLookupIds {
+            material_asset_id: 10,
+            mesh_property_block_slot0: None,
         };
+        let mut next_renderer = second_slot.clone();
+        next_renderer.renderable_index = 1;
 
-        let draw = prepared_draw(space_id);
-        let (items, cull_stats) =
-            collect_prepared_chunk(std::slice::from_ref(&draw), &ctx, &cache, &filter_masks);
-
-        assert!(items.is_empty());
-        assert_eq!(cull_stats, (0, 0, 0));
+        assert!(prepared_draws_share_renderer(&first_slot, &second_slot));
+        assert!(!prepared_draws_share_renderer(&second_slot, &next_renderer));
     }
 
     /// Unit-scale renderer nodes remain eligible for draw collection.

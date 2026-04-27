@@ -29,6 +29,7 @@ use crate::scene::SceneCoordinator;
 use crate::shared::{CameraClearMode, HeadOutputDevice};
 
 use super::blackboard::BlackboardSlot;
+use super::world_mesh_cull::WorldMeshCullProjParams;
 use super::world_mesh_draw_prep::PipelineVariantKey;
 use super::world_mesh_draw_prep::{
     CameraTransformDrawFilter, InstancePlan, WorldMeshDrawCollection, WorldMeshDrawItem,
@@ -219,6 +220,61 @@ pub struct PreparedClearColorSkybox {
     pub view_bind_group: std::sync::Arc<wgpu::BindGroup>,
 }
 
+/// Snapshot-dependent helper work required by a prefetched world-mesh view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct WorldMeshHelperNeeds {
+    /// Whether any draw in the view samples the scene-depth snapshot for the intersection subpass.
+    pub depth_snapshot: bool,
+    /// Whether any draw in the view samples the scene-color snapshot for the grab-pass subpass.
+    pub color_snapshot: bool,
+}
+
+impl WorldMeshHelperNeeds {
+    /// Derives helper-pass requirements from the material flags on a collected draw list.
+    pub fn from_collection(collection: &WorldMeshDrawCollection) -> Self {
+        let mut needs = Self::default();
+        for item in &collection.items {
+            needs.depth_snapshot |= item.batch_key.embedded_requires_intersection_pass;
+            needs.color_snapshot |= item.batch_key.embedded_requires_grab_pass;
+            if needs.depth_snapshot && needs.color_snapshot {
+                break;
+            }
+        }
+        needs
+    }
+}
+
+/// Per-view prefetched world-mesh data seeded before graph execution.
+#[derive(Clone, Debug)]
+pub struct PrefetchedWorldMeshViewDraws {
+    /// Draw items and culling statistics collected for the view.
+    pub collection: WorldMeshDrawCollection,
+    /// Projection state used during culling, reused when capturing Hi-Z temporal feedback.
+    pub cull_proj: Option<WorldMeshCullProjParams>,
+    /// Helper snapshots and tail passes required by this view's collected materials.
+    pub helper_needs: WorldMeshHelperNeeds,
+}
+
+impl PrefetchedWorldMeshViewDraws {
+    /// Builds a prefetched view packet and derives helper-pass requirements from `collection`.
+    pub fn new(
+        collection: WorldMeshDrawCollection,
+        cull_proj: Option<WorldMeshCullProjParams>,
+    ) -> Self {
+        let helper_needs = WorldMeshHelperNeeds::from_collection(&collection);
+        Self {
+            collection,
+            cull_proj,
+            helper_needs,
+        }
+    }
+
+    /// Builds an explicit empty draw packet for views that should skip world-mesh work.
+    pub fn empty() -> Self {
+        Self::new(WorldMeshDrawCollection::empty(), None)
+    }
+}
+
 /// Per-view forward-pass preparation shared by future split graph nodes.
 pub struct PreparedWorldMeshForwardFrame {
     /// Sorted world mesh draw items for this view.
@@ -304,7 +360,7 @@ impl BlackboardSlot for WorldMeshForwardPlanSlot {
 /// skips draw collection and uses this list instead.
 pub struct PrefetchedWorldMeshDrawsSlot;
 impl BlackboardSlot for PrefetchedWorldMeshDrawsSlot {
-    type Value = WorldMeshDrawCollection;
+    type Value = PrefetchedWorldMeshViewDraws;
 }
 
 /// One resolved per-batch draw packet covering a contiguous range of sorted draws with the same
@@ -516,7 +572,9 @@ impl<'a> FrameRenderParams<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::FrameViewClear;
+    use super::{FrameViewClear, WorldMeshHelperNeeds};
+    use crate::render_graph::test_fixtures::{dummy_world_mesh_draw_item, DummyDrawItemSpec};
+    use crate::render_graph::WorldMeshDrawCollection;
     use crate::shared::{CameraClearMode, CameraState};
 
     #[test]
@@ -536,5 +594,49 @@ mod tests {
         let clear = FrameViewClear::from_camera_state(&state);
         assert_eq!(clear.mode, CameraClearMode::Color);
         assert_eq!(clear.color, glam::Vec4::new(0.1, 0.2, 0.3, 0.4));
+    }
+
+    #[test]
+    fn helper_needs_are_derived_from_collected_material_flags() {
+        let regular = dummy_world_mesh_draw_item(DummyDrawItemSpec {
+            material_asset_id: 1,
+            property_block: None,
+            skinned: false,
+            sorting_order: 0,
+            mesh_asset_id: 1,
+            node_id: 0,
+            slot_index: 0,
+            collect_order: 0,
+            alpha_blended: false,
+        });
+        let mut intersection = regular.clone();
+        intersection.batch_key.embedded_requires_intersection_pass = true;
+        let mut grab = regular.clone();
+        grab.batch_key.embedded_requires_grab_pass = true;
+
+        let collection = WorldMeshDrawCollection {
+            items: vec![regular.clone()],
+            draws_pre_cull: 1,
+            draws_culled: 0,
+            draws_hi_z_culled: 0,
+        };
+        assert_eq!(
+            WorldMeshHelperNeeds::from_collection(&collection),
+            WorldMeshHelperNeeds::default()
+        );
+
+        let collection = WorldMeshDrawCollection {
+            items: vec![regular, intersection, grab],
+            draws_pre_cull: 3,
+            draws_culled: 0,
+            draws_hi_z_culled: 0,
+        };
+        assert_eq!(
+            WorldMeshHelperNeeds::from_collection(&collection),
+            WorldMeshHelperNeeds {
+                depth_snapshot: true,
+                color_snapshot: true,
+            }
+        );
     }
 }

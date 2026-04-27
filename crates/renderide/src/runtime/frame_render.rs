@@ -17,8 +17,9 @@ use crate::render_graph::{
     host_camera_frame_for_render_texture, CameraTransformDrawFilter, DrawCollectionContext,
     ExternalFrameTargets, ExternalOffscreenTargets, FramePreparedRenderables, FrameView,
     FrameViewClear, FrameViewTarget, GraphExecuteError, HiZCullData, HiZTemporalState,
-    HostCameraFrame, OcclusionViewId, OutputDepthMode, WorldMeshCullInput, WorldMeshCullProjParams,
-    WorldMeshDrawCollectParallelism, WorldMeshDrawPlan,
+    HostCameraFrame, OcclusionViewId, OutputDepthMode, PrefetchedWorldMeshViewDraws,
+    WorldMeshCullInput, WorldMeshCullProjParams, WorldMeshDrawCollectParallelism,
+    WorldMeshDrawPlan,
 };
 use crate::scene::SceneCoordinator;
 
@@ -264,13 +265,14 @@ fn collect_view_draws(
             let material_cache =
                 (shader_perm == ShaderPermutation(0)).then_some(ctx.material_cache);
             let dict = MaterialDictionary::new(ctx.property_store);
+            let cull_proj = snap.as_ref().map(|s| s.proj);
             let culling = snap.as_ref().map(|s| WorldMeshCullInput {
                 proj: s.proj,
                 host_camera: &prep.host_camera,
                 hi_z: s.hi_z.clone(),
                 hi_z_temporal: s.hi_z_temporal.clone(),
             });
-            WorldMeshDrawPlan::Prefetched(collect_and_sort_world_mesh_draws_with_parallelism(
+            let collection = collect_and_sort_world_mesh_draws_with_parallelism(
                 &DrawCollectionContext {
                     scene: ctx.scene,
                     mesh_pool: ctx.mesh_pool,
@@ -287,7 +289,10 @@ fn collect_view_draws(
                     prepared: Some(ctx.prepared),
                 },
                 ctx.inner_parallelism,
-            ))
+            );
+            WorldMeshDrawPlan::Prefetched(Box::new(PrefetchedWorldMeshViewDraws::new(
+                collection, cull_proj,
+            )))
         })
         .collect()
 }

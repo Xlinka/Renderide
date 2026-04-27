@@ -59,6 +59,11 @@ fn pipeline_cache() -> &'static MsaaResolveHdrPipelineCache {
     CACHE.get_or_init(MsaaResolveHdrPipelineCache::default)
 }
 
+/// Returns whether a runtime view needs the MSAA color resolve draw.
+fn color_resolve_raster_needed(sample_count: u32) -> bool {
+    sample_count > 1
+}
+
 impl RasterPass for WorldMeshForwardColorResolvePass {
     fn name(&self) -> &str {
         "WorldMeshForwardColorResolve"
@@ -107,6 +112,15 @@ impl RasterPass for WorldMeshForwardColorResolvePass {
         } else {
             template.multiview_mask
         }
+    }
+
+    fn should_record(&self, ctx: &RasterPassCtx<'_, '_>) -> Result<bool, RenderPassError> {
+        let Some(frame) = ctx.frame.as_ref() else {
+            return Err(RenderPassError::MissingFrameParams {
+                pass: self.name().to_string(),
+            });
+        };
+        Ok(color_resolve_raster_needed(frame.view.sample_count))
     }
 
     fn record(
@@ -225,5 +239,18 @@ impl RasterPass for WorldMeshForwardColorResolvePass {
         rpass.set_bind_group(0, &bind_group, &[]);
         rpass.draw(0..3, 0..1);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::color_resolve_raster_needed;
+
+    /// Runtime 1x views skip the raster pass; MSAA views keep the resolve draw.
+    #[test]
+    fn color_resolve_raster_needed_tracks_runtime_sample_count() {
+        assert!(!color_resolve_raster_needed(1));
+        assert!(color_resolve_raster_needed(2));
+        assert!(color_resolve_raster_needed(4));
     }
 }

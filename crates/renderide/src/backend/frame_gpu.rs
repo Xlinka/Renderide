@@ -70,6 +70,22 @@ pub struct SceneColorSnapshotCopyParams {
     pub stereo_cluster: bool,
 }
 
+/// Requested scene snapshot shape and families for pre-record synchronization.
+pub struct SceneSnapshotSyncParams {
+    /// Extent in pixels used for any requested snapshot texture.
+    pub viewport: (u32, u32),
+    /// Depth snapshot format for `_CameraDepthTexture`-style material sampling.
+    pub depth_format: wgpu::TextureFormat,
+    /// HDR scene-color snapshot format for grab-pass material sampling.
+    pub color_format: wgpu::TextureFormat,
+    /// When true, synchronize the stereo-array snapshot layout instead of the mono layout.
+    pub multiview: bool,
+    /// Whether the depth snapshot family should be grown for this layout.
+    pub needs_depth_snapshot: bool,
+    /// Whether the color snapshot family should be grown for this layout.
+    pub needs_color_snapshot: bool,
+}
+
 impl FrameGpuResources {
     /// Layout for `@group(0)`: uniform frame + lights + cluster counts + cluster indices +
     /// single-view / multiview scene depth snapshots.
@@ -325,36 +341,36 @@ impl FrameGpuResources {
         true
     }
 
-    /// Ensures sampled scene snapshot textures exist for the active view layout and formats.
+    /// Ensures requested sampled scene snapshot textures exist for the active view layout and formats.
     ///
     /// This must run before per-view `@group(0)` bind groups are created for graph recording: the
     /// graph copy passes encode with `&self` and therefore cannot recreate texture views while
-    /// recording. Returns `true` when the shared frame bind group was rebuilt.
+    /// recording. Unrequested snapshot families keep their existing fallback views. Returns `true`
+    /// when the shared frame bind group was rebuilt.
     pub fn sync_scene_snapshot_textures(
         &mut self,
         device: &wgpu::Device,
-        viewport: (u32, u32),
-        depth_format: wgpu::TextureFormat,
-        color_format: wgpu::TextureFormat,
-        multiview: bool,
+        params: SceneSnapshotSyncParams,
     ) -> bool {
-        let layout = SceneSnapshotLayout::from_multiview(multiview);
-        let depth_changed = self.scene_snapshots.ensure(
-            device,
-            self.limits.as_ref(),
-            SceneSnapshotKind::Depth,
-            layout,
-            viewport,
-            depth_format,
-        );
-        let color_changed = self.scene_snapshots.ensure(
-            device,
-            self.limits.as_ref(),
-            SceneSnapshotKind::Color,
-            layout,
-            viewport,
-            color_format,
-        );
+        let layout = SceneSnapshotLayout::from_multiview(params.multiview);
+        let depth_changed = params.needs_depth_snapshot
+            && self.scene_snapshots.ensure(
+                device,
+                self.limits.as_ref(),
+                SceneSnapshotKind::Depth,
+                layout,
+                params.viewport,
+                params.depth_format,
+            );
+        let color_changed = params.needs_color_snapshot
+            && self.scene_snapshots.ensure(
+                device,
+                self.limits.as_ref(),
+                SceneSnapshotKind::Color,
+                layout,
+                params.viewport,
+                params.color_format,
+            );
         if !(depth_changed || color_changed) {
             return false;
         }

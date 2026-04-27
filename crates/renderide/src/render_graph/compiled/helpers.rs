@@ -349,6 +349,13 @@ pub(super) fn execute_graph_raster_pass_node(
     let sample_count = frame_sample_count_from_raster_ctx(ctx);
     let pass_name = pass.name();
 
+    if !pass
+        .should_record_raster(ctx)
+        .map_err(GraphExecuteError::Pass)?
+    {
+        return Ok(());
+    }
+
     let color_attachments = {
         profiling::scope!("graph::raster::resolve_color_attachments");
         let mut color_attachments = Vec::with_capacity(template.color_attachments.len());

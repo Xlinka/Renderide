@@ -181,6 +181,17 @@ impl PassNode {
         }
     }
 
+    /// Returns whether a raster pass should be opened for this view. Returns `true` for non-raster variants.
+    pub(crate) fn should_record_raster(
+        &self,
+        ctx: &RasterPassCtx<'_, '_>,
+    ) -> Result<bool, RenderPassError> {
+        match self {
+            Self::Raster(p) => p.should_record(ctx),
+            _ => Ok(true),
+        }
+    }
+
     /// Runtime multiview mask override for raster passes. Returns the template's mask for others.
     pub(crate) fn multiview_mask_override(
         &self,

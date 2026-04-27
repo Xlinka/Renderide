@@ -38,6 +38,14 @@ pub trait RasterPass: Send + Sync {
         rpass: &mut wgpu::RenderPass<'_>,
     ) -> Result<(), RenderPassError>;
 
+    /// Optional: returns whether the executor should open and record this raster pass.
+    ///
+    /// Runs before attachment resolution and `wgpu::CommandEncoder::begin_render_pass`, so passes
+    /// with no view-local work can skip render-pass load/store overhead. Defaults to recording.
+    fn should_record(&self, _ctx: &RasterPassCtx<'_, '_>) -> Result<bool, RenderPassError> {
+        Ok(true)
+    }
+
     /// Optional: runtime multiview mask override for the render pass.
     ///
     /// Defaults to the mask baked into the compiled attachment template. Passes that select

@@ -50,6 +50,7 @@ use crate::render_graph::resources::{
     BufferAccess, ImportedBufferHandle, ImportedTextureHandle, StorageAccess, TextureAccess,
     TextureHandle,
 };
+use crate::render_graph::InstancePlan;
 
 use execute_helpers::{
     encode_msaa_depth_resolve_after_clear_only, encode_world_mesh_forward_color_snapshot,
@@ -130,6 +131,16 @@ pub struct WorldMeshForwardGraphResources {
     pub per_draw_slab: ImportedBufferHandle,
     /// Imported frame uniform buffer.
     pub frame_uniforms: ImportedBufferHandle,
+}
+
+/// Returns whether the intersection raster tail has view-local work to record.
+fn forward_intersection_raster_needed(opaque_recorded: bool, plan: &InstancePlan) -> bool {
+    opaque_recorded && !plan.intersect_groups.is_empty()
+}
+
+/// Returns whether the grab-pass transparent raster tail has view-local work to record.
+fn forward_transparent_raster_needed(opaque_recorded: bool, plan: &InstancePlan) -> bool {
+    opaque_recorded && !plan.transparent_groups.is_empty()
 }
 
 impl WorldMeshForwardPreparePass {
@@ -456,6 +467,15 @@ impl RasterPass for WorldMeshForwardIntersectPass {
         Ok(())
     }
 
+    fn should_record(&self, ctx: &RasterPassCtx<'_, '_>) -> Result<bool, RenderPassError> {
+        Ok(ctx
+            .blackboard
+            .get::<WorldMeshForwardPlanSlot>()
+            .is_some_and(|prepared| {
+                forward_intersection_raster_needed(prepared.opaque_recorded, &prepared.plan)
+            }))
+    }
+
     fn multiview_mask_override(
         &self,
         ctx: &RasterPassCtx<'_, '_>,
@@ -582,6 +602,15 @@ impl RasterPass for WorldMeshForwardTransparentPass {
         Ok(())
     }
 
+    fn should_record(&self, ctx: &RasterPassCtx<'_, '_>) -> Result<bool, RenderPassError> {
+        Ok(ctx
+            .blackboard
+            .get::<WorldMeshForwardPlanSlot>()
+            .is_some_and(|prepared| {
+                forward_transparent_raster_needed(prepared.opaque_recorded, &prepared.plan)
+            }))
+    }
+
     fn multiview_mask_override(
         &self,
         ctx: &RasterPassCtx<'_, '_>,
@@ -699,5 +728,37 @@ impl ComputePass for WorldMeshForwardDepthResolvePass {
         );
         // No blackboard interaction needed: depth resolve is purely encoder-driven.
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        forward_intersection_raster_needed, forward_transparent_raster_needed, InstancePlan,
+    };
+    use crate::render_graph::DrawGroup;
+
+    /// Empty helper plans skip their raster pass even after opaque work records successfully.
+    #[test]
+    fn helper_raster_needed_requires_matching_groups() {
+        let empty = InstancePlan::default();
+        assert!(!forward_intersection_raster_needed(true, &empty));
+        assert!(!forward_transparent_raster_needed(true, &empty));
+
+        let mut intersect = InstancePlan::default();
+        intersect.intersect_groups.push(DrawGroup {
+            representative_draw_idx: 0,
+            instance_range: 0..1,
+        });
+        assert!(forward_intersection_raster_needed(true, &intersect));
+        assert!(!forward_intersection_raster_needed(false, &intersect));
+
+        let mut transparent = InstancePlan::default();
+        transparent.transparent_groups.push(DrawGroup {
+            representative_draw_idx: 0,
+            instance_range: 0..1,
+        });
+        assert!(forward_transparent_raster_needed(true, &transparent));
+        assert!(!forward_transparent_raster_needed(false, &transparent));
     }
 }
