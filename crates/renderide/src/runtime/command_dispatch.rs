@@ -3,8 +3,8 @@
 //! Keeps the runtime entrypoint as a thin wrapper while grouping related [`RendererCommand`] arms.
 
 use crate::shared::{
-    FrameStartData, MaterialPropertyIdRequest, MaterialPropertyIdResult, MeshUploadData,
-    RenderDecouplingConfig, RendererCommand, SetCubemapData, SetCubemapFormat,
+    DesktopConfig, FrameStartData, MaterialPropertyIdRequest, MaterialPropertyIdResult,
+    MeshUploadData, RenderDecouplingConfig, RendererCommand, SetCubemapData, SetCubemapFormat,
     SetCubemapProperties, SetTexture2DData, SetTexture2DFormat, SetTexture2DProperties,
     SetTexture3DData, SetTexture3DFormat, SetTexture3DProperties,
 };
@@ -85,6 +85,9 @@ pub(super) fn dispatch_running_command(runtime: &mut RendererRuntime, cmd: Rende
             logger::trace!(
                 "runtime: renderer_engine_ready from host (post-init lifecycle ack; no action)"
             );
+        }
+        RendererCommand::DesktopConfig(cfg) => {
+            apply_desktop_config(runtime, cfg);
         }
         RendererCommand::RenderDecouplingConfig(cfg) => {
             apply_render_decoupling_config(runtime, cfg);
@@ -177,6 +180,45 @@ fn apply_render_decoupling_config(runtime: &mut RendererRuntime, cfg: RenderDeco
         cfg.recouple_frame_count
     );
     runtime.frontend.set_decoupling_config(cfg);
+}
+
+/// Applies host desktop FPS caps to the live renderer settings store.
+///
+/// The host command also carries a `v_sync` boolean, but the renderer exposes a richer
+/// [`crate::config::VsyncMode`] policy (`Off` / `On` / `Auto`). The renderer config remains
+/// authoritative for vsync so host IPC cannot collapse `Auto` back to a boolean mode.
+fn apply_desktop_config(runtime: &mut RendererRuntime, cfg: DesktopConfig) {
+    let focused_fps_cap = desktop_config_fps_cap(cfg.maximum_foreground_framerate);
+    let unfocused_fps_cap = desktop_config_fps_cap(cfg.maximum_background_framerate);
+
+    match runtime.settings().write() {
+        Ok(mut settings) => {
+            settings.display.focused_fps_cap = focused_fps_cap;
+            settings.display.unfocused_fps_cap = unfocused_fps_cap;
+            logger::info!(
+                "runtime: desktop_config applied focused_fps_cap={} unfocused_fps_cap={} host_vsync_ignored={} renderer_vsync={:?}",
+                focused_fps_cap,
+                unfocused_fps_cap,
+                cfg.v_sync,
+                settings.rendering.vsync
+            );
+        }
+        Err(e) => {
+            logger::warn!("runtime: desktop_config ignored because settings lock is poisoned: {e}");
+        }
+    }
+}
+
+/// Converts host desktop framerate caps into renderer display settings.
+///
+/// [`None`] means uncapped. [`Some`] mirrors the host renderer's behavior by enforcing a minimum
+/// capped rate of 5 fps; normal host UI ranges should already be above that, but the wire command
+/// is still sanitized here.
+fn desktop_config_fps_cap(host_cap: Option<i32>) -> u32 {
+    match host_cap {
+        Some(cap) => cap.max(5) as u32,
+        None => 0,
+    }
 }
 
 fn material_property_id_request(runtime: &mut RendererRuntime, req: MaterialPropertyIdRequest) {
