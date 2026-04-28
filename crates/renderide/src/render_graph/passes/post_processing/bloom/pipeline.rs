@@ -13,7 +13,11 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 
 use crate::embedded_shaders::{BLOOM_DEFAULT_WGSL, BLOOM_MULTIVIEW_WGSL};
-use crate::render_graph::gpu_cache::{BindGroupMap, OnceGpu, RenderPipelineMap};
+use crate::render_graph::gpu_cache::{
+    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
+    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
+    RenderPipelineMap,
+};
 
 /// Debug label for the mono shader module (no `MULTIVIEW` define).
 const SHADER_LABEL_MONO: &str = "bloom_default";
@@ -156,18 +160,8 @@ impl Default for BloomPipelineCache {
 impl BloomPipelineCache {
     /// Linear clamp sampler shared across every bloom stage.
     pub(super) fn sampler(&self, device: &wgpu::Device) -> &wgpu::Sampler {
-        self.sampler.get_or_create(|| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("bloom"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                ..Default::default()
-            })
-        })
+        self.sampler
+            .get_or_create(|| create_linear_clamp_sampler(device, "bloom"))
     }
 
     /// Process-wide bloom params UBO. Overwritten once per frame by the first downsample pass.
@@ -253,10 +247,7 @@ impl BloomPipelineCache {
             } else {
                 (SHADER_LABEL_MONO, BLOOM_DEFAULT_WGSL)
             };
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            })
+            create_wgsl_shader_module(device, label, source)
         })
     }
 
@@ -284,42 +275,18 @@ impl BloomPipelineCache {
                 &[Some(bgl0)]
             };
             let label = format!("bloom-{:?}", key.kind);
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(&label),
-                bind_group_layouts: layouts,
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(&label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            create_fullscreen_render_pipeline(
+                device,
+                FullscreenRenderPipelineDesc {
+                    label: &label,
+                    bind_group_layouts: layouts,
+                    shader: &shader,
+                    fragment_entry: key.kind.entry_point(),
+                    output_format: key.output_format,
+                    blend: key.kind.color_blend(),
+                    multiview_stereo: key.multiview_stereo,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some(key.kind.entry_point()),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: key.output_format,
-                        blend: key.kind.color_blend(),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: key
-                    .multiview_stereo
-                    .then(|| std::num::NonZeroU32::new(3))
-                    .flatten(),
-                cache: None,
-            })
+            )
         })
     }
 
@@ -334,18 +301,7 @@ impl BloomPipelineCache {
         let key = (texture.clone(), multiview_stereo);
         self.group0_bind_groups.get_or_create(key, |key| {
             let (texture, multiview_stereo) = key;
-            let layers_in_texture = texture.size().depth_or_array_layers.max(1);
-            let array_layer_count = if *multiview_stereo {
-                2.min(layers_in_texture)
-            } else {
-                1
-            };
-            let view = texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("bloom-group0-src"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(array_layer_count),
-                ..Default::default()
-            });
+            let view = create_d2_array_view(texture, "bloom-group0-src", *multiview_stereo);
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("bloom-group0"),
                 layout: self.bind_group_layout_0(device),
@@ -377,18 +333,7 @@ impl BloomPipelineCache {
         let key = (bloom_mip0.clone(), multiview_stereo);
         self.group1_bind_groups.get_or_create(key, |key| {
             let (bloom_mip0, multiview_stereo) = key;
-            let layers_in_texture = bloom_mip0.size().depth_or_array_layers.max(1);
-            let array_layer_count = if *multiview_stereo {
-                2.min(layers_in_texture)
-            } else {
-                1
-            };
-            let view = bloom_mip0.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("bloom-group1-mip0"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(array_layer_count),
-                ..Default::default()
-            });
+            let view = create_d2_array_view(bloom_mip0, "bloom-group1-mip0", *multiview_stereo);
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("bloom-group1"),
                 layout: self.bind_group_layout_1(device),

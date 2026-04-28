@@ -4,6 +4,7 @@ use std::num::NonZeroU32;
 
 use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::{GraphResolvedResources, RasterPassCtx};
+use crate::render_graph::gpu_cache::stereo_mask_or_template;
 
 /// Returns `NonZeroU32::new(3)` (both stereo layers) when the current frame is multiview stereo,
 /// otherwise forwards the template's preset. Matches the policy used by
@@ -16,11 +17,7 @@ pub(super) fn stereo_mask_override(
         .frame
         .as_ref()
         .is_some_and(|frame| frame.view.multiview_stereo);
-    if stereo {
-        NonZeroU32::new(3)
-    } else {
-        template.multiview_mask
-    }
+    stereo_mask_or_template(stereo, template.multiview_mask)
 }
 
 /// Resolves the color attachment format for a transient handle; falls back to the bloom texture

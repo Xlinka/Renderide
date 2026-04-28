@@ -11,6 +11,7 @@ use super::super::cubemap_task::CubemapUploadTask;
 use super::super::integrator::AssetTask;
 use super::super::AssetTransferQueue;
 use super::allocations::flush_pending_cubemap_allocations;
+use super::texture_common::{admit_texture_upload_data, TextureUploadAdmission};
 use super::MAX_PENDING_CUBEMAP_UPLOADS;
 
 fn send_cubemap_result(
@@ -99,45 +100,22 @@ pub fn on_set_cubemap_data(
     _shm: Option<&mut SharedMemoryAccessor>,
     _ipc: Option<&mut DualQueueIpc>,
 ) {
-    if d.data.length <= 0 {
-        return;
-    }
-    if !queue.cubemap_formats.contains_key(&d.asset_id) {
-        logger::warn!(
-            "cubemap {}: SetCubemapData before format; ignored",
-            d.asset_id
-        );
-        return;
-    }
-    if queue.gpu_device.is_none() || queue.gpu_queue.is_none() {
-        if queue.pending_cubemap_uploads.len() >= MAX_PENDING_CUBEMAP_UPLOADS {
-            logger::warn!(
-                "cubemap {}: pending cubemap upload queue full; dropping",
-                d.asset_id
-            );
-            return;
-        }
-        queue.pending_cubemap_uploads.push_back(d);
-        return;
-    }
-    let Some(ref device) = queue.gpu_device.clone() else {
+    let Some(d) = admit_texture_upload_data(TextureUploadAdmission {
+        asset_id: d.asset_id,
+        payload_len: d.data.length,
+        data: d,
+        kind: "cubemap",
+        format_command: "SetCubemapData",
+        max_pending: MAX_PENDING_CUBEMAP_UPLOADS,
+        queue,
+        has_format: |queue, id| queue.cubemap_formats.contains_key(&id),
+        pending_len: |queue| queue.pending_cubemap_uploads.len(),
+        push_pending: |queue, data| queue.pending_cubemap_uploads.push_back(data),
+        has_resident: |queue, id| queue.cubemap_pool.get_texture(id).is_some(),
+        flush_allocations: flush_pending_cubemap_allocations,
+    }) else {
         return;
     };
-    if queue.cubemap_pool.get_texture(d.asset_id).is_none() {
-        flush_pending_cubemap_allocations(queue, device);
-    }
-    if queue.cubemap_pool.get_texture(d.asset_id).is_none() {
-        if queue.pending_cubemap_uploads.len() >= MAX_PENDING_CUBEMAP_UPLOADS {
-            logger::warn!(
-                "cubemap {}: no GPU texture and pending full; dropping data",
-                d.asset_id
-            );
-            return;
-        }
-        queue.pending_cubemap_uploads.push_back(d);
-        return;
-    }
-
     let asset_id = d.asset_id;
     logger::trace!(
         "cubemap_upload enqueue asset_id={} payload_bytes={} high_priority={}",

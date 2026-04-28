@@ -18,6 +18,7 @@ use crate::render_graph::builder::GraphBuilder;
 use crate::render_graph::compiled::RenderPassTemplate;
 use crate::render_graph::context::RasterPassCtx;
 use crate::render_graph::error::{RenderPassError, SetupError};
+use crate::render_graph::gpu_cache::stereo_mask_or_template;
 use crate::render_graph::pass::{PassBuilder, RasterPass};
 use crate::render_graph::post_processing::{EffectPasses, PostProcessEffect, PostProcessEffectId};
 use crate::render_graph::resources::{TextureAccess, TextureHandle};
@@ -87,11 +88,7 @@ impl RasterPass for AcesTonemapPass {
             .frame
             .as_ref()
             .is_some_and(|frame| frame.view.multiview_stereo);
-        if stereo {
-            NonZeroU32::new(3)
-        } else {
-            template.multiview_mask
-        }
+        stereo_mask_or_template(stereo, template.multiview_mask)
     }
 
     fn record(

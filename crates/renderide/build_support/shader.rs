@@ -216,6 +216,70 @@ fn parse_pass_directives(source: &str, file: &str) -> Result<Vec<BuildPassDirect
     Ok(passes)
 }
 
+/// Parses an optional `//#source_alias <stem>` directive from a thin shader wrapper.
+fn parse_source_alias(source: &str, file: &str) -> Result<Option<String>, BuildError> {
+    let mut alias = None;
+    for (line_idx, line) in source.lines().enumerate() {
+        let line_no = line_idx + 1;
+        let Some(rest) = line.trim_start().strip_prefix("//#source_alias") else {
+            continue;
+        };
+        if alias.is_some() {
+            return Err(BuildError::Message(format!(
+                "{file}:{line_no}: duplicate `//#source_alias` directive"
+            )));
+        }
+        let mut tokens = rest.split_whitespace();
+        let Some(stem) = tokens.next() else {
+            return Err(BuildError::Message(format!(
+                "{file}:{line_no}: `//#source_alias` requires a source file stem"
+            )));
+        };
+        if tokens.next().is_some() {
+            return Err(BuildError::Message(format!(
+                "{file}:{line_no}: `//#source_alias` accepts exactly one source file stem"
+            )));
+        }
+        if stem.contains('/') || stem.contains('\\') || stem.ends_with(".wgsl") {
+            return Err(BuildError::Message(format!(
+                "{file}:{line_no}: `//#source_alias` must be a sibling WGSL file stem, got `{stem}`"
+            )));
+        }
+        alias = Some(stem.to_string());
+    }
+    Ok(alias)
+}
+
+/// Loads the WGSL source used for composition, following `//#source_alias` when present.
+fn shader_source_for_compile(source_path: &Path) -> Result<(String, String), BuildError> {
+    let wrapper_source = fs::read_to_string(source_path)
+        .map_err(|e| BuildError::Message(format!("read {}: {e}", source_path.display())))?;
+    let wrapper_file_path = source_path.to_str().ok_or_else(|| {
+        BuildError::Message(format!(
+            "shader path must be UTF-8: {}",
+            source_path.display()
+        ))
+    })?;
+    let Some(alias) = parse_source_alias(&wrapper_source, wrapper_file_path)? else {
+        return Ok((wrapper_source, wrapper_file_path.to_string()));
+    };
+    let alias_path = source_path.with_file_name(format!("{alias}.wgsl"));
+    if alias_path == source_path {
+        return Err(BuildError::Message(format!(
+            "{wrapper_file_path}: `//#source_alias` cannot point at itself"
+        )));
+    }
+    let alias_source = fs::read_to_string(&alias_path)
+        .map_err(|e| BuildError::Message(format!("read {}: {e}", alias_path.display())))?;
+    let alias_file_path = alias_path.to_str().ok_or_else(|| {
+        BuildError::Message(format!(
+            "shader alias path must be UTF-8: {}",
+            alias_path.display()
+        ))
+    })?;
+    Ok((alias_source, alias_file_path.to_string()))
+}
+
 fn pass_literal(pass: &BuildPassDirective) -> String {
     if pass.vertex_entry == "vs_main" {
         format!(
@@ -833,15 +897,8 @@ fn compile_shader_job(
         .file_stem()
         .and_then(|s| s.to_str())
         .ok_or_else(|| BuildError::Message(format!("invalid stem: {}", source_path.display())))?;
-    let source = fs::read_to_string(source_path)
-        .map_err(|e| BuildError::Message(format!("read {}: {e}", source_path.display())))?;
-    let file_path = source_path.to_str().ok_or_else(|| {
-        BuildError::Message(format!(
-            "shader path must be UTF-8: {}",
-            source_path.display()
-        ))
-    })?;
-    let pass_directives = parse_pass_directives(&source, file_path)?;
+    let (source, file_path) = shader_source_for_compile(source_path)?;
+    let pass_directives = parse_pass_directives(&source, &file_path)?;
     if job.opts.require_pass_directive && pass_directives.is_empty() {
         return Err(BuildError::Message(format!(
             "{file_path}: material WGSL must declare at least one //#pass directive (e.g. //#pass forward)"
@@ -851,13 +908,13 @@ fn compile_shader_job(
     let default_module = compose_material(
         shader_modules,
         &source,
-        file_path,
+        &file_path,
         multiview_shader_defs(false),
     )?;
     let multiview_module = compose_material(
         shader_modules,
         &source,
-        file_path,
+        &file_path,
         multiview_shader_defs(true),
     )?;
     validate_entry_points(
@@ -1384,5 +1441,26 @@ mod tests {
             "MaterialPassDesc { vertex_entry: \"vs_outline\", ..crate::materials::pass_from_kind(crate::materials::PassKind::Outline, \"fs_outline\") }"
         ));
         Ok(())
+    }
+
+    /// Source-alias wrappers carry exactly one sibling WGSL stem.
+    #[test]
+    fn source_alias_parses_sibling_stem() -> Result<(), BuildError> {
+        let source = "//! wrapper\n//#source_alias blur\n";
+
+        assert_eq!(
+            parse_source_alias(source, "blur_perobject.wgsl")?.as_deref(),
+            Some("blur")
+        );
+        Ok(())
+    }
+
+    /// Source-alias wrappers reject paths so build output stays deterministic and local.
+    #[test]
+    fn source_alias_rejects_paths() {
+        let err = parse_source_alias("//#source_alias ../blur\n", "bad.wgsl")
+            .expect_err("path aliases must be rejected");
+
+        assert!(err.to_string().contains("sibling WGSL file stem"));
     }
 }

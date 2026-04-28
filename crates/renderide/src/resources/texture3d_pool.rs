@@ -1,6 +1,5 @@
 //! GPU-resident [`SetTexture3DFormat`](crate::shared::SetTexture3DFormat) pool ([`GpuTexture3d`]) with VRAM accounting.
 
-use hashbrown::HashMap;
 use std::sync::Arc;
 
 use crate::assets::texture::{estimate_gpu_texture3d_bytes, resolve_texture3d_wgpu_format};
@@ -10,9 +9,9 @@ use crate::shared::{
     TextureWrapMode,
 };
 
-use super::budget::{TextureResidencyMeta, VramAccounting};
-use super::resource_pool::{GpuResourcePool, TexturePoolAccess};
-use super::{GpuResource, StreamingPolicy};
+use super::budget::TextureResidencyMeta;
+use super::resource_pool::{impl_texture_pool_facade, GpuResourcePool, TexturePoolAccess};
+use super::GpuResource;
 
 /// Sampler-related fields mirrored from [`SetTexture3DProperties`](crate::shared::SetTexture3DProperties).
 #[derive(Clone, Debug)]
@@ -190,67 +189,4 @@ pub struct Texture3dPool {
     inner: GpuResourcePool<GpuTexture3d, TexturePoolAccess>,
 }
 
-impl Texture3dPool {
-    /// Creates an empty pool with the given streaming policy.
-    pub fn new(streaming: Box<dyn StreamingPolicy>) -> Self {
-        Self {
-            inner: GpuResourcePool::new(TexturePoolAccess::new(streaming)),
-        }
-    }
-
-    /// Default pool with [`crate::resources::NoopStreamingPolicy`].
-    pub fn default_pool() -> Self {
-        Self {
-            inner: GpuResourcePool::new(TexturePoolAccess::noop()),
-        }
-    }
-
-    /// VRAM accounting for resident textures.
-    pub fn accounting(&self) -> &VramAccounting {
-        self.inner.accounting()
-    }
-
-    /// Mutable VRAM totals (insert/remove update accounting).
-    pub fn accounting_mut(&mut self) -> &mut VramAccounting {
-        self.inner.accounting_mut()
-    }
-
-    /// Streaming policy for mip eviction suggestions.
-    pub fn streaming_mut(&mut self) -> &mut dyn StreamingPolicy {
-        self.inner.access_mut().streaming_mut()
-    }
-
-    /// Inserts or replaces a texture. Returns `true` if a previous entry was replaced.
-    pub fn insert_texture(&mut self, tex: GpuTexture3d) -> bool {
-        self.inner.insert(tex)
-    }
-
-    /// Removes a texture by host id; returns `true` if it was present.
-    pub fn remove_texture(&mut self, asset_id: i32) -> bool {
-        self.inner.remove(asset_id)
-    }
-
-    /// Borrows a resident texture by host asset id.
-    #[inline]
-    pub fn get_texture(&self, asset_id: i32) -> Option<&GpuTexture3d> {
-        self.inner.get(asset_id)
-    }
-
-    /// Mutably borrows a resident texture (mip uploads, property changes).
-    #[inline]
-    pub fn get_texture_mut(&mut self, asset_id: i32) -> Option<&mut GpuTexture3d> {
-        self.inner.get_mut(asset_id)
-    }
-
-    /// Full map for iteration and HUD stats.
-    #[inline]
-    pub fn textures(&self) -> &HashMap<i32, GpuTexture3d> {
-        self.inner.resources()
-    }
-
-    /// Number of resident Texture3D entries in the pool.
-    #[inline]
-    pub fn resident_texture_count(&self) -> usize {
-        self.inner.len()
-    }
-}
+impl_texture_pool_facade!(Texture3dPool, GpuTexture3d);

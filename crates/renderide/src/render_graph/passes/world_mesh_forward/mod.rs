@@ -45,6 +45,7 @@ use crate::render_graph::compiled::{DepthAttachmentTemplate, RenderPassTemplate}
 use crate::render_graph::context::{CallbackCtx, ComputePassCtx, RasterPassCtx};
 use crate::render_graph::error::{RenderPassError, SetupError};
 use crate::render_graph::frame_params::WorldMeshForwardPlanSlot;
+use crate::render_graph::gpu_cache::stereo_mask_or_template;
 use crate::render_graph::pass::{CallbackPass, ComputePass, PassBuilder, RasterPass};
 use crate::render_graph::resources::{
     BufferAccess, ImportedBufferHandle, ImportedTextureHandle, StorageAccess, TextureAccess,
@@ -315,11 +316,7 @@ impl RasterPass for WorldMeshForwardOpaquePass {
             .blackboard
             .get::<WorldMeshForwardPlanSlot>()
             .is_some_and(|prepared| prepared.pipeline.use_multiview);
-        if use_multiview {
-            NonZeroU32::new(3)
-        } else {
-            template.multiview_mask
-        }
+        stereo_mask_or_template(use_multiview, template.multiview_mask)
     }
 
     fn stencil_ops_override(
@@ -489,11 +486,7 @@ impl RasterPass for WorldMeshForwardIntersectPass {
             .blackboard
             .get::<WorldMeshForwardPlanSlot>()
             .is_some_and(|prepared| prepared.pipeline.use_multiview);
-        if use_multiview {
-            NonZeroU32::new(3)
-        } else {
-            template.multiview_mask
-        }
+        stereo_mask_or_template(use_multiview, template.multiview_mask)
     }
 
     fn stencil_ops_override(
@@ -624,11 +617,7 @@ impl RasterPass for WorldMeshForwardTransparentPass {
             .blackboard
             .get::<WorldMeshForwardPlanSlot>()
             .is_some_and(|prepared| prepared.pipeline.use_multiview);
-        if use_multiview {
-            NonZeroU32::new(3)
-        } else {
-            template.multiview_mask
-        }
+        stereo_mask_or_template(use_multiview, template.multiview_mask)
     }
 
     fn stencil_ops_override(

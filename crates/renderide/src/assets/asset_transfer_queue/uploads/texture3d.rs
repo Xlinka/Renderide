@@ -11,6 +11,7 @@ use super::super::integrator::AssetTask;
 use super::super::texture3d_task::Texture3dUploadTask;
 use super::super::AssetTransferQueue;
 use super::allocations::flush_pending_texture3d_allocations;
+use super::texture_common::{admit_texture_upload_data, TextureUploadAdmission};
 use super::MAX_PENDING_TEXTURE3D_UPLOADS;
 
 fn send_texture_3d_result(
@@ -102,45 +103,22 @@ pub fn on_set_texture_3d_data(
     _shm: Option<&mut SharedMemoryAccessor>,
     _ipc: Option<&mut DualQueueIpc>,
 ) {
-    if d.data.length <= 0 {
-        return;
-    }
-    if !queue.texture3d_formats.contains_key(&d.asset_id) {
-        logger::warn!(
-            "texture3d {}: SetTexture3DData before format; ignored",
-            d.asset_id
-        );
-        return;
-    }
-    if queue.gpu_device.is_none() || queue.gpu_queue.is_none() {
-        if queue.pending_texture3d_uploads.len() >= MAX_PENDING_TEXTURE3D_UPLOADS {
-            logger::warn!(
-                "texture3d {}: pending texture3d upload queue full; dropping",
-                d.asset_id
-            );
-            return;
-        }
-        queue.pending_texture3d_uploads.push_back(d);
-        return;
-    }
-    let Some(ref device) = queue.gpu_device.clone() else {
+    let Some(d) = admit_texture_upload_data(TextureUploadAdmission {
+        asset_id: d.asset_id,
+        payload_len: d.data.length,
+        data: d,
+        kind: "texture3d",
+        format_command: "SetTexture3DData",
+        max_pending: MAX_PENDING_TEXTURE3D_UPLOADS,
+        queue,
+        has_format: |queue, id| queue.texture3d_formats.contains_key(&id),
+        pending_len: |queue| queue.pending_texture3d_uploads.len(),
+        push_pending: |queue, data| queue.pending_texture3d_uploads.push_back(data),
+        has_resident: |queue, id| queue.texture3d_pool.get_texture(id).is_some(),
+        flush_allocations: flush_pending_texture3d_allocations,
+    }) else {
         return;
     };
-    if queue.texture3d_pool.get_texture(d.asset_id).is_none() {
-        flush_pending_texture3d_allocations(queue, device);
-    }
-    if queue.texture3d_pool.get_texture(d.asset_id).is_none() {
-        if queue.pending_texture3d_uploads.len() >= MAX_PENDING_TEXTURE3D_UPLOADS {
-            logger::warn!(
-                "texture3d {}: no GPU texture and pending full; dropping data",
-                d.asset_id
-            );
-            return;
-        }
-        queue.pending_texture3d_uploads.push_back(d);
-        return;
-    }
-
     let asset_id = d.asset_id;
     logger::trace!(
         "texture3d_upload enqueue asset_id={} payload_bytes={} high_priority={}",

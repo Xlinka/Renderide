@@ -12,7 +12,11 @@
 use std::sync::Arc;
 
 use crate::embedded_shaders::{ACES_TONEMAP_DEFAULT_WGSL, ACES_TONEMAP_MULTIVIEW_WGSL};
-use crate::render_graph::gpu_cache::{BindGroupMap, OnceGpu, RenderPipelineMap};
+use crate::render_graph::gpu_cache::{
+    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
+    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
+    RenderPipelineMap,
+};
 
 /// Debug label for the mono variant pipeline.
 const PIPELINE_LABEL_MONO: &str = "aces_tonemap_default";
@@ -51,15 +55,8 @@ impl Default for AcesTonemapPipelineCache {
 impl AcesTonemapPipelineCache {
     /// Linear clamp sampler used to read the HDR scene color.
     pub(super) fn sampler(&self, device: &wgpu::Device) -> &wgpu::Sampler {
-        self.sampler.get_or_create(|| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("aces_tonemap"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                ..Default::default()
-            })
-        })
+        self.sampler
+            .get_or_create(|| create_linear_clamp_sampler(device, "aces_tonemap"))
     }
 
     /// Bind group layout for the HDR scene color texture array + sampler.
@@ -112,45 +109,20 @@ impl AcesTonemapPipelineCache {
             } else {
                 (PIPELINE_LABEL_MONO, ACES_TONEMAP_DEFAULT_WGSL)
             };
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
-                bind_group_layouts: &[Some(self.bind_group_layout(device))],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            let shader = create_wgsl_shader_module(device, label, source);
+            let bind_group_layout = self.bind_group_layout(device);
+            create_fullscreen_render_pipeline(
+                device,
+                FullscreenRenderPipelineDesc {
+                    label,
+                    bind_group_layouts: &[Some(bind_group_layout)],
+                    shader: &shader,
+                    fragment_entry: "fs_main",
+                    output_format: *output_format,
+                    blend: None,
+                    multiview_stereo,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: *output_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: multiview_stereo
-                    .then(|| std::num::NonZeroU32::new(3))
-                    .flatten(),
-                cache: None,
-            })
+            )
         })
     }
 
@@ -167,18 +139,11 @@ impl AcesTonemapPipelineCache {
         let key = (scene_color_texture.clone(), multiview_stereo);
         self.bind_groups.get_or_create(key, |key| {
             let (scene_color_texture, multiview_stereo) = key;
-            let layers_in_texture = scene_color_texture.size().depth_or_array_layers.max(1);
-            let array_layer_count = if *multiview_stereo {
-                2.min(layers_in_texture)
-            } else {
-                1
-            };
-            let view = scene_color_texture.create_view(&wgpu::TextureViewDescriptor {
-                label: Some("aces_tonemap_sampled"),
-                dimension: Some(wgpu::TextureViewDimension::D2Array),
-                array_layer_count: Some(array_layer_count),
-                ..Default::default()
-            });
+            let view = create_d2_array_view(
+                scene_color_texture,
+                "aces_tonemap_sampled",
+                *multiview_stereo,
+            );
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("aces_tonemap"),
                 layout: self.bind_group_layout(device),

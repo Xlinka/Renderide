@@ -14,7 +14,11 @@ use std::sync::Arc;
 use bytemuck::{Pod, Zeroable};
 
 use crate::embedded_shaders::{GTAO_DEFAULT_WGSL, GTAO_MULTIVIEW_WGSL};
-use crate::render_graph::gpu_cache::{BindGroupMap, OnceGpu, RenderPipelineMap};
+use crate::render_graph::gpu_cache::{
+    create_d2_array_view, create_fullscreen_render_pipeline, create_linear_clamp_sampler,
+    create_wgsl_shader_module, BindGroupMap, FullscreenRenderPipelineDesc, OnceGpu,
+    RenderPipelineMap,
+};
 
 /// Debug label for the mono variant pipeline.
 const PIPELINE_LABEL_MONO: &str = "gtao_default";
@@ -100,18 +104,8 @@ impl Default for GtaoPipelineCache {
 impl GtaoPipelineCache {
     /// Linear-clamp sampler used to read the HDR scene color.
     fn sampler(&self, device: &wgpu::Device) -> &wgpu::Sampler {
-        self.sampler.get_or_create(|| {
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("gtao"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                address_mode_w: wgpu::AddressMode::ClampToEdge,
-                ..Default::default()
-            })
-        })
+        self.sampler
+            .get_or_create(|| create_linear_clamp_sampler(device, "gtao"))
     }
 
     /// Process-wide `GtaoParams` uniform buffer. Created on first access.
@@ -225,45 +219,20 @@ impl GtaoPipelineCache {
             } else {
                 (PIPELINE_LABEL_MONO, GTAO_DEFAULT_WGSL)
             };
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
-                bind_group_layouts: &[Some(self.bind_group_layout(device, multiview_stereo))],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
+            let shader = create_wgsl_shader_module(device, label, source);
+            let bind_group_layout = self.bind_group_layout(device, multiview_stereo);
+            create_fullscreen_render_pipeline(
+                device,
+                FullscreenRenderPipelineDesc {
+                    label,
+                    bind_group_layouts: &[Some(bind_group_layout)],
+                    shader: &shader,
+                    fragment_entry: "fs_main",
+                    output_format: *output_format,
+                    blend: None,
+                    multiview_stereo,
                 },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: *output_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                multisample: Default::default(),
-                multiview_mask: multiview_stereo
-                    .then(|| std::num::NonZeroU32::new(3))
-                    .flatten(),
-                cache: None,
-            })
+            )
         })
     }
 
@@ -288,20 +257,11 @@ impl GtaoPipelineCache {
             multiview_stereo,
         };
         self.bind_groups.get_or_create(key, |key| {
-            let color_layers = key.scene_color_texture.size().depth_or_array_layers.max(1);
-            let color_layer_count = if key.multiview_stereo {
-                2.min(color_layers)
-            } else {
-                1
-            };
-            let scene_color_view =
-                key.scene_color_texture
-                    .create_view(&wgpu::TextureViewDescriptor {
-                        label: Some("gtao_scene_color_sampled"),
-                        dimension: Some(wgpu::TextureViewDimension::D2Array),
-                        array_layer_count: Some(color_layer_count),
-                        ..Default::default()
-                    });
+            let scene_color_view = create_d2_array_view(
+                &key.scene_color_texture,
+                "gtao_scene_color_sampled",
+                key.multiview_stereo,
+            );
             let (depth_dim, depth_layer_count) = if key.multiview_stereo {
                 (wgpu::TextureViewDimension::D2Array, Some(2))
             } else {

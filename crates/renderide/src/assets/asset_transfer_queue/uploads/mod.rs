@@ -9,6 +9,7 @@ mod mesh;
 mod render_texture;
 mod texture2d;
 mod texture3d;
+mod texture_common;
 
 pub use attach::attach_flush_pending_asset_uploads;
 pub use cubemap::{

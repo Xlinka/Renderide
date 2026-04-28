@@ -13,7 +13,10 @@
 use std::sync::Arc;
 
 use crate::embedded_shaders::{MSAA_RESOLVE_HDR_DEFAULT_WGSL, MSAA_RESOLVE_HDR_MULTIVIEW_WGSL};
-use crate::render_graph::gpu_cache::{OnceGpu, RenderPipelineMap};
+use crate::render_graph::gpu_cache::{
+    create_fullscreen_render_pipeline, create_wgsl_shader_module, FullscreenRenderPipelineDesc,
+    OnceGpu, RenderPipelineMap,
+};
 
 /// Debug label for the mono pipeline.
 const PIPELINE_LABEL_MONO: &str = "msaa_resolve_hdr_default";
@@ -170,45 +173,15 @@ impl MsaaResolveHdrPipelineCache {
             logger::debug!(
                 "msaa_resolve_hdr: building pipeline (output format = {output_format:?}, multiview = {multiview_stereo})"
             );
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some(label),
-                source: wgpu::ShaderSource::Wgsl(source.into()),
-            });
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some(label),
+            let shader = create_wgsl_shader_module(device, label, source);
+            create_fullscreen_render_pipeline(device, FullscreenRenderPipelineDesc {
+                label,
                 bind_group_layouts: &[Some(layout_bgl)],
-                immediate_size: 0,
-            });
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some(label),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("vs_main"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("fs_main"),
-                    compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: *output_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleList,
-                    ..Default::default()
-                },
-                depth_stencil: None,
-                // Output is single-sample (`scene_color_hdr`), so the pipeline itself is non-MSAA.
-                multisample: Default::default(),
-                multiview_mask: multiview_stereo
-                    .then(|| std::num::NonZeroU32::new(3))
-                    .flatten(),
-                cache: None,
+                shader: &shader,
+                fragment_entry: "fs_main",
+                output_format: *output_format,
+                blend: None,
+                multiview_stereo,
             })
         })
     }

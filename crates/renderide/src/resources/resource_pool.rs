@@ -199,6 +199,82 @@ impl PoolResourceAccess for TexturePoolAccess {
     }
 }
 
+/// Implements the common resident texture-pool facade over [`GpuResourcePool`].
+macro_rules! impl_texture_pool_facade {
+    ($pool:ty, $resource:ty) => {
+        impl $pool {
+            /// Creates an empty pool with the given streaming policy.
+            pub fn new(streaming: Box<dyn $crate::resources::StreamingPolicy>) -> Self {
+                Self {
+                    inner: $crate::resources::resource_pool::GpuResourcePool::new(
+                        $crate::resources::resource_pool::TexturePoolAccess::new(streaming),
+                    ),
+                }
+            }
+
+            /// Default pool with [`crate::resources::NoopStreamingPolicy`].
+            pub fn default_pool() -> Self {
+                Self {
+                    inner: $crate::resources::resource_pool::GpuResourcePool::new(
+                        $crate::resources::resource_pool::TexturePoolAccess::noop(),
+                    ),
+                }
+            }
+
+            /// VRAM accounting for resident textures.
+            pub fn accounting(&self) -> &$crate::resources::VramAccounting {
+                self.inner.accounting()
+            }
+
+            /// Mutable VRAM totals (insert/remove update accounting).
+            pub fn accounting_mut(&mut self) -> &mut $crate::resources::VramAccounting {
+                self.inner.accounting_mut()
+            }
+
+            /// Streaming policy for mip eviction suggestions.
+            pub fn streaming_mut(&mut self) -> &mut dyn $crate::resources::StreamingPolicy {
+                self.inner.access_mut().streaming_mut()
+            }
+
+            /// Inserts or replaces a texture. Returns `true` if a previous entry was replaced.
+            pub fn insert_texture(&mut self, tex: $resource) -> bool {
+                self.inner.insert(tex)
+            }
+
+            /// Removes a texture by host id; returns `true` if it was present.
+            pub fn remove_texture(&mut self, asset_id: i32) -> bool {
+                self.inner.remove(asset_id)
+            }
+
+            /// Borrows a resident texture by host asset id.
+            #[inline]
+            pub fn get_texture(&self, asset_id: i32) -> Option<&$resource> {
+                self.inner.get(asset_id)
+            }
+
+            /// Mutably borrows a resident texture (mip uploads, property changes).
+            #[inline]
+            pub fn get_texture_mut(&mut self, asset_id: i32) -> Option<&mut $resource> {
+                self.inner.get_mut(asset_id)
+            }
+
+            /// Full map for iteration and HUD stats.
+            #[inline]
+            pub fn textures(&self) -> &hashbrown::HashMap<i32, $resource> {
+                self.inner.resources()
+            }
+
+            /// Number of resident texture entries in the pool.
+            #[inline]
+            pub fn resident_texture_count(&self) -> usize {
+                self.inner.len()
+            }
+        }
+    };
+}
+
+pub(crate) use impl_texture_pool_facade;
+
 /// Render-texture access behavior without streaming hooks.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct RenderTexturePoolAccess;
