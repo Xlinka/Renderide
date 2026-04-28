@@ -29,8 +29,6 @@ pub(super) const SPHERE_MATERIAL_ASSET_ID: i32 = 4;
 pub(super) const SPHERE_MESH_BUFFER_ID: i32 = 0;
 pub(super) const SCENE_STATE_BUFFER_ID: i32 = 1;
 pub(super) const RENDER_SPACE_ID: i32 = 1;
-/// Renderer CLI flag that rejects hardware adapters in headless mode.
-const HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG: &str = "--headless-require-software-adapter";
 
 /// Configuration for [`run_session`].
 #[derive(Clone, Debug)]
@@ -49,8 +47,6 @@ pub(crate) struct SceneSessionConfig {
     pub timeout: Duration,
     /// When `true`, inherit the renderer's stdout/stderr.
     pub verbose_renderer: bool,
-    /// When `true`, the spawned renderer must use a CPU/software adapter.
-    pub require_software_adapter: bool,
 }
 
 /// Result of a successful [`run_session`] call.
@@ -389,7 +385,7 @@ fn spawn_renderer(
 
 /// Builds the renderer process arguments for one harness session.
 fn renderer_spawn_args(cfg: &SceneSessionConfig, queue_name: &str) -> Vec<String> {
-    let mut args = vec![
+    vec![
         "--headless".to_string(),
         "--headless-output".to_string(),
         cfg.output_path.display().to_string(),
@@ -404,11 +400,7 @@ fn renderer_spawn_args(cfg: &SceneSessionConfig, queue_name: &str) -> Vec<String
         "-LogLevel".to_string(),
         "debug".to_string(),
         "--ignore-config".to_string(),
-    ];
-    if cfg.require_software_adapter {
-        args.push(HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG.to_string());
-    }
-    args
+    ]
 }
 
 fn _ipc_session_used(_: &IpcSession) {}
@@ -418,12 +410,9 @@ mod spawn_arg_tests {
     use std::path::PathBuf;
     use std::time::Duration;
 
-    use super::{
-        renderer_spawn_args, SceneSessionConfig, DEFAULT_QUEUE_CAPACITY_BYTES,
-        HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG,
-    };
+    use super::{renderer_spawn_args, SceneSessionConfig, DEFAULT_QUEUE_CAPACITY_BYTES};
 
-    fn minimal_config(require_software_adapter: bool) -> SceneSessionConfig {
+    fn minimal_config() -> SceneSessionConfig {
         SceneSessionConfig {
             renderer_path: PathBuf::from("target/debug/renderide"),
             output_path: PathBuf::from("target/headless.png"),
@@ -432,29 +421,12 @@ mod spawn_arg_tests {
             interval_ms: 250,
             timeout: Duration::from_secs(5),
             verbose_renderer: false,
-            require_software_adapter,
         }
     }
 
     #[test]
-    fn spawn_args_include_software_adapter_flag_when_requested() {
-        let args = renderer_spawn_args(&minimal_config(true), "queue-a");
-        assert!(args
-            .iter()
-            .any(|a| a == HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG));
-    }
-
-    #[test]
-    fn spawn_args_omit_software_adapter_flag_by_default() {
-        let args = renderer_spawn_args(&minimal_config(false), "queue-a");
-        assert!(!args
-            .iter()
-            .any(|a| a == HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG));
-    }
-
-    #[test]
     fn spawn_args_preserve_required_ipc_and_headless_values() {
-        let args = renderer_spawn_args(&minimal_config(false), "queue-a");
+        let args = renderer_spawn_args(&minimal_config(), "queue-a");
         let capacity = DEFAULT_QUEUE_CAPACITY_BYTES.to_string();
         assert_eq!(args[0], "--headless");
         assert!(args

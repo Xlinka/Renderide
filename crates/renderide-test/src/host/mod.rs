@@ -40,8 +40,6 @@ pub(crate) struct HostHarnessConfig {
     pub timeout: Duration,
     /// When `true`, inherit the renderer's stdout/stderr.
     pub verbose_renderer: bool,
-    /// When `true`, require the renderer to select a CPU/software adapter.
-    pub require_software_adapter: bool,
 }
 
 /// Outcome of a successful harness run. Holds an optional tempdir guard so callers (e.g. the
@@ -95,7 +93,6 @@ impl HostHarness {
             interval_ms: self.cfg.interval_ms,
             timeout: self.cfg.timeout,
             verbose_renderer: self.cfg.verbose_renderer,
-            require_software_adapter: self.cfg.require_software_adapter,
         };
         let outcome = scene_session::run_session(&session_cfg)?;
         Ok(HarnessRunOutcome {
@@ -134,7 +131,6 @@ mod harness_start_tests {
             interval_ms: 1,
             timeout: Duration::from_secs(1),
             verbose_renderer: false,
-            require_software_adapter: false,
         }
     }
 
