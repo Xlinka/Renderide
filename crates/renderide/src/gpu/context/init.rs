@@ -14,6 +14,25 @@ use super::{
 };
 use crate::config::VsyncMode;
 
+/// Adapter filtering mode used when creating a [`GpuContext`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AdapterSelectionPolicy {
+    /// Preserve Renderide's normal GPU preference ranking.
+    Default,
+    /// Require a CPU/software adapter and reject hardware adapters.
+    RequireSoftware,
+}
+
+impl AdapterSelectionPolicy {
+    /// Returns true when `device_type` is allowed by this policy.
+    fn allows_device_type(self, device_type: wgpu::DeviceType) -> bool {
+        match self {
+            Self::Default => true,
+            Self::RequireSoftware => device_type == wgpu::DeviceType::Cpu,
+        }
+    }
+}
+
 /// Lower scores rank earlier. Stable across systems so Vulkan ICD reordering does not flip the
 /// chosen adapter.
 ///
@@ -55,6 +74,7 @@ fn pick_adapter_index<F>(
     adapters: &[wgpu::Adapter],
     is_compatible: F,
     power_preference: wgpu::PowerPreference,
+    selection_policy: AdapterSelectionPolicy,
 ) -> Option<usize>
 where
     F: Fn(&wgpu::Adapter) -> bool,
@@ -62,7 +82,10 @@ where
     adapters
         .iter()
         .enumerate()
-        .filter(|(_, a)| is_compatible(a))
+        .filter(|(_, a)| {
+            let info = a.get_info();
+            is_compatible(a) && selection_policy.allows_device_type(info.device_type)
+        })
         .min_by_key(|(i, a)| {
             (
                 power_preference_score(a.get_info().device_type, power_preference),
@@ -96,8 +119,9 @@ fn log_adapter_candidates(adapters: &[wgpu::Adapter]) {
 fn build_wgpu_instance(gpu_validation_layers: bool) -> (wgpu::Instance, wgpu::InstanceFlags) {
     let mut instance_desc = wgpu::InstanceDescriptor::new_without_display_handle();
     instance_desc.backends = wgpu::Backends::all();
-    let instance_flags = instance_flags_for_gpu_init(gpu_validation_layers);
-    instance_desc.flags = instance_flags;
+    instance_desc.flags = instance_flags_for_gpu_init(gpu_validation_layers);
+    let instance_desc = instance_desc.with_env();
+    let instance_flags = instance_desc.flags;
     (wgpu::Instance::new(instance_desc), instance_flags)
 }
 
@@ -109,27 +133,20 @@ async fn select_adapter(
     instance: &wgpu::Instance,
     surface: Option<&wgpu::Surface<'_>>,
     power_preference: wgpu::PowerPreference,
+    selection_policy: AdapterSelectionPolicy,
 ) -> Result<wgpu::Adapter, GpuError> {
     let adapters = instance.enumerate_adapters(wgpu::Backends::all()).await;
     log_adapter_candidates(&adapters);
     let chosen = match surface {
-        Some(s) => pick_adapter_index(&adapters, |a| a.is_surface_supported(s), power_preference),
-        None => pick_adapter_index(&adapters, |_| true, power_preference),
-    }
-    .ok_or_else(|| {
-        match surface {
-        Some(_) => GpuError::Adapter(format!(
-            "no surface-compatible adapter found among {} candidate(s)",
-            adapters.len()
-        )),
-        None => GpuError::Adapter(
-            "no Vulkan adapter found. \
-             Install drivers for your GPU, or for software rendering install \
-             `mesa-vulkan-drivers` / `vulkan-swrast` (lavapipe) and verify a Vulkan ICD is present."
-                .into(),
+        Some(s) => pick_adapter_index(
+            &adapters,
+            |a| a.is_surface_supported(s),
+            power_preference,
+            selection_policy,
         ),
+        None => pick_adapter_index(&adapters, |_| true, power_preference, selection_policy),
     }
-    })?;
+    .ok_or_else(|| adapter_not_found_error(surface, selection_policy, adapters.len()))?;
     let adapter = adapters
         .into_iter()
         .nth(chosen)
@@ -141,13 +158,41 @@ async fn select_adapter(
         "wgpu adapter selected (headless)"
     };
     logger::info!(
-        "{label}: {} type={:?} backend={:?} (preference={:?})",
+        "{label}: {} type={:?} backend={:?} (preference={:?}, selection_policy={:?})",
         info.name,
         info.device_type,
         info.backend,
         power_preference,
+        selection_policy,
     );
     Ok(adapter)
+}
+
+/// Builds the user-facing adapter-selection failure for the active path and policy.
+fn adapter_not_found_error(
+    surface: Option<&wgpu::Surface<'_>>,
+    selection_policy: AdapterSelectionPolicy,
+    candidate_count: usize,
+) -> GpuError {
+    match (surface.is_some(), selection_policy) {
+        (true, AdapterSelectionPolicy::Default) => GpuError::Adapter(format!(
+            "no surface-compatible adapter found among {candidate_count} candidate(s)"
+        )),
+        (true, AdapterSelectionPolicy::RequireSoftware) => GpuError::Adapter(format!(
+            "no surface-compatible software adapter found among {candidate_count} candidate(s)"
+        )),
+        (false, AdapterSelectionPolicy::Default) => GpuError::Adapter(
+            "no headless adapter found. Install drivers for your GPU, or for software \
+             rendering install lavapipe, SwiftShader, or use Windows WARP, then verify the \
+             selected backend is available."
+                .into(),
+        ),
+        (false, AdapterSelectionPolicy::RequireSoftware) => GpuError::Adapter(format!(
+            "no headless software adapter found among {candidate_count} candidate(s). \
+             For software rendering use lavapipe or SwiftShader Vulkan with WGPU_BACKEND=vulkan, \
+             or Windows WARP with WGPU_BACKEND=dx12."
+        )),
+    }
 }
 
 /// MSAA sample-count support for desktop and stereo forward targets.
@@ -334,7 +379,13 @@ impl GpuContext {
             .create_surface(window.clone())
             .map_err(|e| GpuError::Surface(format!("{e:?}")))?;
 
-        let adapter = select_adapter(&instance, Some(&surface_safe), power_preference).await?;
+        let adapter = select_adapter(
+            &instance,
+            Some(&surface_safe),
+            power_preference,
+            AdapterSelectionPolicy::Default,
+        )
+        .await?;
 
         let required_features = adapter_render_features_intersection(&adapter);
         let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
@@ -412,15 +463,23 @@ impl GpuContext {
     ///
     /// The synthesized [`wgpu::SurfaceConfiguration`] has `format = Rgba8UnormSrgb` and the
     /// requested extent so the material system and render graph compile pipelines unchanged.
+    /// `require_software_adapter` is used by CI golden-image tests to prove the run is using a
+    /// CPU-backed adapter such as lavapipe, SwiftShader, or WARP.
     pub async fn new_headless(
         width: u32,
         height: u32,
         gpu_validation_layers: bool,
         power_preference: wgpu::PowerPreference,
+        require_software_adapter: bool,
     ) -> Result<Self, GpuError> {
         let (instance, instance_flags) = build_wgpu_instance(gpu_validation_layers);
 
-        let adapter = select_adapter(&instance, None, power_preference).await?;
+        let selection_policy = if require_software_adapter {
+            AdapterSelectionPolicy::RequireSoftware
+        } else {
+            AdapterSelectionPolicy::Default
+        };
+        let adapter = select_adapter(&instance, None, power_preference, selection_policy).await?;
 
         let required_features = adapter_render_features_intersection(&adapter);
         let (device, queue) = request_device_for_adapter(&adapter, required_features).await?;
@@ -566,7 +625,7 @@ impl GpuContext {
 
 #[cfg(test)]
 mod power_preference_score_tests {
-    use super::power_preference_score;
+    use super::{power_preference_score, AdapterSelectionPolicy};
     use wgpu::{DeviceType, PowerPreference};
 
     #[test]
@@ -611,6 +670,32 @@ mod power_preference_score_tests {
             let discrete = power_preference_score(DeviceType::DiscreteGpu, pref);
             assert!(virt > discrete);
             assert!(virt < cpu);
+        }
+    }
+
+    #[test]
+    fn default_policy_allows_all_device_types() {
+        for device_type in [
+            DeviceType::Other,
+            DeviceType::IntegratedGpu,
+            DeviceType::DiscreteGpu,
+            DeviceType::VirtualGpu,
+            DeviceType::Cpu,
+        ] {
+            assert!(AdapterSelectionPolicy::Default.allows_device_type(device_type));
+        }
+    }
+
+    #[test]
+    fn software_policy_only_allows_cpu_device_type() {
+        assert!(AdapterSelectionPolicy::RequireSoftware.allows_device_type(DeviceType::Cpu));
+        for device_type in [
+            DeviceType::Other,
+            DeviceType::IntegratedGpu,
+            DeviceType::DiscreteGpu,
+            DeviceType::VirtualGpu,
+        ] {
+            assert!(!AdapterSelectionPolicy::RequireSoftware.allows_device_type(device_type));
         }
     }
 }

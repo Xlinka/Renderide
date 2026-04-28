@@ -34,6 +34,63 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
 
+      - name: Install macOS Vulkan SDK
+        if: runner.os == 'macOS'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          cache: true
+
+      - name: Cache macOS SwiftShader
+        if: runner.os == 'macOS'
+        id: cache-swiftshader
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/swiftshader-install
+          key: swiftshader-${{ runner.os }}-${{ runner.arch }}-v1
+
+      - name: Build macOS SwiftShader
+        if: runner.os == 'macOS' && steps.cache-swiftshader.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          git clone --depth 1 https://swiftshader.googlesource.com/SwiftShader "$RUNNER_TEMP/SwiftShader"
+          cmake -S "$RUNNER_TEMP/SwiftShader" -B "$RUNNER_TEMP/SwiftShader/build" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DSWIFTSHADER_BUILD_TESTS=OFF \
+            -DSWIFTSHADER_BUILD_BENCHMARKS=OFF \
+            -DSWIFTSHADER_BUILD_PVR=OFF \
+            -DSWIFTSHADER_BUILD_SAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/SwiftShader/build" --target vk_swiftshader --parallel
+
+          swiftshader_lib="$(find "$RUNNER_TEMP/SwiftShader/build" -name libvk_swiftshader.dylib -print -quit)"
+          if [ -z "$swiftshader_lib" ]; then
+            echo "SwiftShader library not found" >&2
+            exit 1
+          fi
+          mkdir -p "$RUNNER_TEMP/swiftshader-install"
+          cp "$swiftshader_lib" "$RUNNER_TEMP/swiftshader-install/libvk_swiftshader.dylib"
+
+      - name: Configure macOS SwiftShader ICD
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          swiftshader_lib="$RUNNER_TEMP/swiftshader-install/libvk_swiftshader.dylib"
+          if [ ! -f "$swiftshader_lib" ]; then
+            echo "SwiftShader library not found at $swiftshader_lib" >&2
+            exit 1
+          fi
+          swiftshader_icd="$RUNNER_TEMP/swiftshader-install/vk_swiftshader_icd.json"
+          cat > "$swiftshader_icd" <<EOF
+          {
+            "file_format_version": "1.0.0",
+            "ICD": {
+              "library_path": "$swiftshader_lib",
+              "api_version": "1.3.0"
+            }
+          }
+          EOF
+          echo "VK_ICD_FILENAMES=$swiftshader_icd" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$(dirname "$swiftshader_lib"):${DYLD_LIBRARY_PATH:-}" >> "$GITHUB_ENV"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -61,15 +118,29 @@ jobs:
 
       # Spawns the renderer in `--headless` (no window; offscreen PNG), drives the full IPC
       # handshake + sphere upload + scene submission, and compares the rendered PNG against the
-      # committed golden via image-compare SSIM. On Linux CI the only Vulkan ICD is typically
-      # lavapipe (mesa-vulkan-drivers). Linux-only; Windows/macOS runners often lack a usable
-      # Vulkan stack for this harness.
-      #
-      # Build the `dev-fast` renderer (workspace `cargo build` is debug-only; the harness defaults
-      # to `target/dev-fast/renderide` when passed `--dev-fast`). `cargo run --profile dev-fast`
-      # for renderide-test does not build the renderer binary by itself.
-      - name: Golden image integration test
+      # committed golden via image-compare SSIM. Each OS forces a software adapter so this cannot
+      # pass accidentally on Metal, hardware DX12, or a host GPU.
+      - name: Golden image integration test (Linux lavapipe)
         if: runner.os == 'Linux'
+        env:
+          WGPU_BACKEND: vulkan
         run: |
           cargo build --locked -p renderide
-          cargo run --locked -p renderide-test -- check
+          cargo run --locked -p renderide-test -- check --software-renderer --timeout-seconds 90
+
+      - name: Golden image integration test (Windows WARP)
+        if: runner.os == 'Windows'
+        env:
+          WGPU_BACKEND: dx12
+          WGPU_DX12_COMPILER: static-dxc
+        run: |
+          cargo build --locked -p renderide
+          cargo run --locked -p renderide-test -- check --software-renderer --timeout-seconds 90
+
+      - name: Golden image integration test (macOS SwiftShader)
+        if: runner.os == 'macOS'
+        env:
+          WGPU_BACKEND: vulkan
+        run: |
+          cargo build --locked -p renderide
+          cargo run --locked -p renderide-test -- check --software-renderer --timeout-seconds 90

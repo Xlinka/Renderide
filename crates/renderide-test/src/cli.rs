@@ -113,6 +113,9 @@ struct CommonOpts {
     /// Print the renderer process's stdout/stderr instead of swallowing it.
     #[arg(long, default_value_t = false)]
     verbose_renderer: bool,
+    /// Require the spawned renderer to select a CPU/software adapter.
+    #[arg(long, default_value_t = false)]
+    software_renderer: bool,
 }
 
 fn dispatch(cli: Cli) -> Result<(), HarnessError> {
@@ -160,6 +163,7 @@ fn run_harness(common: &CommonOpts) -> Result<HarnessRunOutcome, HarnessError> {
         interval_ms: common.interval_ms,
         timeout,
         verbose_renderer: common.verbose_renderer,
+        require_software_adapter: common.software_renderer,
     };
     let mut harness = HostHarness::start(cfg)?;
     let outcome = harness.run()?;
@@ -252,7 +256,11 @@ fn renderide_next_to_this_test_binary() -> Option<PathBuf> {
 mod cli_tests {
     use std::path::PathBuf;
 
-    use super::{default_renderer_path, parse_resolution, resolve_renderer_path, BuildProfile};
+    use clap::Parser;
+
+    use super::{
+        default_renderer_path, parse_resolution, resolve_renderer_path, BuildProfile, Cli, Command,
+    };
 
     #[test]
     fn parse_resolution_accepts_lowercase_and_uppercase_x() {
@@ -309,6 +317,16 @@ mod cli_tests {
         assert_eq!(BuildProfile::from_flags(false, true), BuildProfile::DevFast);
         // dev_fast wins when both flags are set; clap rejects that combination at the CLI layer.
         assert_eq!(BuildProfile::from_flags(true, true), BuildProfile::DevFast);
+    }
+
+    #[test]
+    fn software_renderer_flag_parses_for_check() {
+        let cli =
+            Cli::try_parse_from(["renderide-test", "check", "--software-renderer"]).expect("parse");
+        match cli.command {
+            Command::Check { common, .. } => assert!(common.software_renderer),
+            other => panic!("unexpected command: {other:?}"),
+        }
     }
 
     fn expected_exe() -> &'static str {

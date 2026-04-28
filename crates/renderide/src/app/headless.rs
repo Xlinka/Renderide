@@ -42,11 +42,12 @@ pub fn run_headless(
     initial_power_preference: wgpu::PowerPreference,
 ) -> Result<Option<i32>, RunError> {
     logger::info!(
-        "Headless mode: output={} size={}x{} interval_ms={}",
+        "Headless mode: output={} size={}x{} interval_ms={} require_software_adapter={}",
         params.output_path.display(),
         params.width,
         params.height,
         params.interval_ms,
+        params.require_software_adapter,
     );
 
     let mut gpu = pollster::block_on(GpuContext::new_headless(
@@ -54,6 +55,7 @@ pub fn run_headless(
         params.height,
         initial_gpu_validation,
         initial_power_preference,
+        params.require_software_adapter,
     ))?;
     runtime.attach_gpu(&gpu);
 

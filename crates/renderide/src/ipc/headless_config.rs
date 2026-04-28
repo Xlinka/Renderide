@@ -16,6 +16,8 @@ pub const DEFAULT_HEADLESS_HEIGHT: u32 = 256;
 pub const DEFAULT_HEADLESS_INTERVAL_MS: u64 = 1000;
 /// Default output PNG path when `--headless-output` is omitted.
 pub const DEFAULT_HEADLESS_OUTPUT: &str = "renderide-headless.png";
+/// Flag that makes headless GPU startup reject non-software adapters.
+pub const HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG: &str = "--headless-require-software-adapter";
 
 /// Parsed headless-mode parameters from the process command line.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -28,6 +30,8 @@ pub struct HeadlessParams {
     pub height: u32,
     /// Interval between consecutive PNG writes (ms).
     pub interval_ms: u64,
+    /// When true, headless startup fails unless the selected adapter is CPU/software-backed.
+    pub require_software_adapter: bool,
 }
 
 impl Default for HeadlessParams {
@@ -37,6 +41,7 @@ impl Default for HeadlessParams {
             width: DEFAULT_HEADLESS_WIDTH,
             height: DEFAULT_HEADLESS_HEIGHT,
             interval_ms: DEFAULT_HEADLESS_INTERVAL_MS,
+            require_software_adapter: false,
         }
     }
 }
@@ -52,6 +57,11 @@ pub fn parse_headless_params(args: &[String]) -> Option<HeadlessParams> {
         let lower = arg.to_lowercase();
         if lower == "--headless" {
             headless = true;
+            i += 1;
+            continue;
+        }
+        if lower == HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG {
+            params.require_software_adapter = true;
             i += 1;
             continue;
         }
@@ -120,7 +130,10 @@ fn parse_wxh(value: &str) -> Option<(u32, u32)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_headless_params, parse_ignore_config, HeadlessParams};
+    use super::{
+        parse_headless_params, parse_ignore_config, HeadlessParams,
+        HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG,
+    };
     use std::path::PathBuf;
 
     fn s(args: &[&str]) -> Vec<String> {
@@ -161,12 +174,22 @@ mod tests {
             "640x480",
             "--headless-interval-ms",
             "500",
+            HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG,
         ]))
         .expect("present");
         assert_eq!(p.output_path, PathBuf::from("/tmp/out.png"));
         assert_eq!(p.width, 640);
         assert_eq!(p.height, 480);
         assert_eq!(p.interval_ms, 500);
+        assert!(p.require_software_adapter);
+    }
+
+    #[test]
+    fn software_adapter_flag_does_not_enable_headless_by_itself() {
+        assert_eq!(
+            parse_headless_params(&s(&["renderide", HEADLESS_REQUIRE_SOFTWARE_ADAPTER_FLAG])),
+            None
+        );
     }
 
     #[test]
