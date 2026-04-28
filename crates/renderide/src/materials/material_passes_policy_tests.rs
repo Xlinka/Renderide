@@ -1,0 +1,129 @@
+//! No-GPU coverage for pass-scoped material render-state policy.
+
+use super::super::render_state::{
+    MaterialCullOverride, MaterialDepthOffsetState, MaterialRenderState, MaterialStencilState,
+};
+use super::*;
+
+/// Builds a render-state override set that exercises every pass policy field.
+fn override_state(depth_write: bool) -> MaterialRenderState {
+    MaterialRenderState {
+        stencil: MaterialStencilState {
+            enabled: true,
+            reference: 9,
+            compare: 3,
+            pass_op: 2,
+            fail_op: 1,
+            depth_fail_op: 4,
+            read_mask: 0xf0,
+            write_mask: 0x0f,
+        },
+        color_mask: Some(15),
+        depth_write: Some(depth_write),
+        depth_compare: Some(6),
+        depth_offset: MaterialDepthOffsetState::new(2.0, 3),
+        cull_override: MaterialCullOverride::Off,
+    }
+}
+
+/// Asserts the resolved render-state fields most sensitive to pass-policy regressions.
+fn assert_resolved_pass(
+    pass: MaterialPassDesc,
+    state: MaterialRenderState,
+    color_writes: wgpu::ColorWrites,
+    depth_write: bool,
+    depth_compare: wgpu::CompareFunction,
+    cull_mode: Option<wgpu::Face>,
+) {
+    assert_eq!(pass.resolved_color_writes(state), color_writes);
+    assert_eq!(pass.resolved_depth_write(state), depth_write);
+    assert_eq!(pass.resolved_depth_compare(state), depth_compare);
+    assert_eq!(pass.resolved_cull_mode(state), cull_mode);
+    assert_eq!(
+        pass.resolved_stencil_state(state).front.pass_op,
+        wgpu::StencilOperation::Replace
+    );
+    let bias = pass.resolved_depth_bias(state);
+    assert_eq!(bias.constant, -3);
+    assert_eq!(bias.slope_scale, -2.0);
+}
+
+/// Verifies each pass kind admits only the material overrides listed in the policy table.
+#[test]
+fn pass_policy_resolves_expected_material_overrides_by_kind() {
+    let disabled_depth = override_state(false);
+    let enabled_depth = override_state(true);
+
+    assert_resolved_pass(
+        pass_from_kind(PassKind::DepthPrepass, "fs_depth_only"),
+        disabled_depth,
+        COLOR_WRITES_NONE,
+        true,
+        wgpu::CompareFunction::Always,
+        None,
+    );
+    assert_resolved_pass(
+        pass_from_kind(PassKind::Stencil, "fs_stencil"),
+        enabled_depth,
+        COLOR_WRITES_NONE,
+        true,
+        wgpu::CompareFunction::Always,
+        None,
+    );
+    assert_resolved_pass(
+        pass_from_kind(PassKind::Forward, "fs_main"),
+        disabled_depth,
+        wgpu::ColorWrites::ALL,
+        false,
+        wgpu::CompareFunction::Always,
+        None,
+    );
+    assert_resolved_pass(
+        pass_from_kind(PassKind::Outline, "fs_outline"),
+        disabled_depth,
+        wgpu::ColorWrites::ALL,
+        false,
+        wgpu::CompareFunction::Always,
+        Some(wgpu::Face::Front),
+    );
+    assert_resolved_pass(
+        pass_from_kind(PassKind::OverlayBehind, "fs_overlay"),
+        disabled_depth,
+        wgpu::ColorWrites::ALL,
+        true,
+        wgpu::CompareFunction::Less,
+        None,
+    );
+}
+
+/// Verifies PBSRim transparent zwrite variants preserve their depth-only stem before color.
+#[test]
+fn pbsrim_zwrite_stems_keep_depth_prepass_before_forward() {
+    for stem in [
+        "pbsrimtransparentzwrite_default",
+        "pbsrimtransparentzwritespecular_default",
+    ] {
+        let passes = crate::embedded_shaders::embedded_target_passes(stem);
+        assert_eq!(passes.len(), 2, "{stem} should declare two passes");
+        assert_eq!(passes[0].name, "depth_prepass");
+        assert_eq!(passes[1].name, "forward");
+
+        let state = MaterialRenderState {
+            color_mask: Some(15),
+            depth_write: Some(false),
+            ..MaterialRenderState::default()
+        };
+        let blend = MaterialBlendMode::UnityBlend { src: 1, dst: 10 };
+        let depth_prepass = materialized_pass_for_blend_mode(&passes[0], blend);
+        let forward = materialized_pass_for_blend_mode(&passes[1], blend);
+
+        assert!(depth_prepass.resolved_depth_write(state), "{stem}");
+        assert_eq!(
+            depth_prepass.resolved_color_writes(state),
+            COLOR_WRITES_NONE,
+            "{stem}"
+        );
+        assert!(!forward.resolved_depth_write(state), "{stem}");
+        assert!(forward.blend.is_some(), "{stem}");
+    }
+}

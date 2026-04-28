@@ -258,27 +258,26 @@ pub(crate) fn build_pipeline_from_pass(
                     targets: &[Some(wgpu::ColorTargetState {
                         format: shared.desc.surface_format,
                         blend: pass.blend,
-                        write_mask: render_state.color_writes(pass.write_mask),
+                        write_mask: pass.resolved_color_writes(render_state),
                     })],
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::TriangleList,
                     front_face: shared.front_face.to_wgpu(),
-                    cull_mode: render_state.resolved_cull_mode(pass.cull_mode),
+                    cull_mode: pass.resolved_cull_mode(render_state),
                     ..Default::default()
                 },
                 depth_stencil: shared.desc.depth_stencil_format.map(|format| {
                     wgpu::DepthStencilState {
                         format,
-                        depth_write_enabled: Some(render_state.depth_write(pass.depth_write)),
-                        depth_compare: Some(render_state.depth_compare(pass.depth_compare)),
+                        depth_write_enabled: Some(pass.resolved_depth_write(render_state)),
+                        depth_compare: Some(pass.resolved_depth_compare(render_state)),
                         stencil: if format.has_stencil_aspect() {
-                            render_state.stencil_state()
+                            pass.resolved_stencil_state(render_state)
                         } else {
                             wgpu::StencilState::default()
                         },
-                        bias: render_state
-                            .depth_bias(pass.depth_bias_constant, pass.depth_bias_slope_scale),
+                        bias: pass.resolved_depth_bias(render_state),
                     }
                 }),
                 multisample: wgpu::MultisampleState {

@@ -7,12 +7,11 @@
 //! one `wgpu::RenderPipeline`; the forward encode loop dispatches all pipelines for every draw that
 //! binds the material, in declared order.
 //!
-//! Render-state fields (depth compare, depth write, cull, blend, write mask) live entirely in
-//! [`pass_from_kind`]'s per-kind defaults plus the host's runtime material properties
-//! (`_ZWrite`, `_ZTest`, `_Cull`, `_ColorMask`, `_OffsetFactor`, `_OffsetUnits`, `_SrcBlend`,
-//! `_DstBlend`, stencil) resolved through
-//! [`MaterialRenderState`](super::render_state::MaterialRenderState). Shaders carry no depth /
-//! blend / cull metadata of their own.
+//! Render-state fields (depth compare, depth write, cull, blend, write mask) live in
+//! [`pass_from_kind`]'s per-kind defaults plus a per-pass [`MaterialRenderStatePolicy`] that decides
+//! which host runtime material properties (`_ZWrite`, `_ZTest`, `_Cull`, `_ColorMask`,
+//! `_OffsetFactor`, `_OffsetUnits`, `_SrcBlend`, `_DstBlend`, stencil) may override those defaults.
+//! Shaders carry no depth / blend / cull metadata of their own.
 //!
 //! Single-pass materials that declare no `//#material` tag fall through to [`default_pass`],
 //! preserving the pre-multi-pass opaque default exactly.
@@ -22,6 +21,7 @@ use crate::assets::material::{
 };
 
 use super::material_pass_tables::{unity_blend_factor, unity_blend_state};
+use super::render_state::MaterialRenderState;
 
 /// Const zero color-write mask for build-script-emitted pass tables.
 pub const COLOR_WRITES_NONE: wgpu::ColorWrites = wgpu::ColorWrites::empty();
@@ -218,12 +218,80 @@ pub enum MaterialPassState {
     Forward,
 }
 
+/// Controls which host-authored render-state fields may override a declared shader pass.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MaterialRenderStatePolicy {
+    /// Whether `_ColorMask` overrides the pass color write mask.
+    pub(crate) color_mask: bool,
+    /// Whether `_ZWrite` overrides the pass depth-write flag.
+    pub(crate) depth_write: bool,
+    /// Whether `_ZTest` overrides the pass depth compare function.
+    pub(crate) depth_compare: bool,
+    /// Whether `_Cull` overrides the pass cull mode.
+    pub(crate) cull: bool,
+    /// Whether `_Stencil*` properties override the pass stencil state.
+    pub(crate) stencil: bool,
+    /// Whether `_OffsetFactor` / `_OffsetUnits` override the pass depth bias.
+    pub(crate) depth_offset: bool,
+}
+
+impl MaterialRenderStatePolicy {
+    /// Main material color draw: all host-authored pipeline state applies.
+    pub(crate) const FORWARD: Self = Self {
+        color_mask: true,
+        depth_write: true,
+        depth_compare: true,
+        cull: true,
+        stencil: true,
+        depth_offset: true,
+    };
+
+    /// Depth-only draw: preserve authored color/depth writes while allowing test/mask/offset state.
+    pub(crate) const DEPTH_PREPASS: Self = Self {
+        color_mask: false,
+        depth_write: false,
+        depth_compare: true,
+        cull: true,
+        stencil: true,
+        depth_offset: true,
+    };
+
+    /// Stencil mask draw: keep the authored color mask while allowing material depth/stencil knobs.
+    pub(crate) const STENCIL: Self = Self {
+        color_mask: false,
+        depth_write: true,
+        depth_compare: true,
+        cull: true,
+        stencil: true,
+        depth_offset: true,
+    };
+
+    /// Outline shell draw: preserve authored culling while allowing depth/color/stencil overrides.
+    pub(crate) const OUTLINE: Self = Self {
+        color_mask: true,
+        depth_write: true,
+        depth_compare: true,
+        cull: false,
+        stencil: true,
+        depth_offset: true,
+    };
+
+    /// Overlay draws preserve authored color/depth behavior but still accept mask/cull/offset state.
+    pub(crate) const OVERLAY: Self = Self {
+        color_mask: false,
+        depth_write: false,
+        depth_compare: false,
+        cull: true,
+        stencil: true,
+        depth_offset: true,
+    };
+}
+
 /// Semantic pass kind authored as `//#material <kind>` above an `@fragment` entry point.
 ///
-/// Maps to a canonical set of static defaults (depth compare, cull, blend, write mask) plus the
-/// [`MaterialPassState`] that drives runtime blend-property overrides. Parsed in the build script;
-/// each tag produces one [`MaterialPassDesc`] via [`pass_from_kind`]. Runtime `MaterialRenderState`
-/// still overrides depth / cull / stencil / color-mask / depth-bias on top of these defaults.
+/// Maps to a canonical set of static defaults (depth compare, cull, blend, write mask) plus
+/// policies for runtime blend and render-state overrides. Parsed in the build script; each tag
+/// produces one [`MaterialPassDesc`] via [`pass_from_kind`].
 ///
 /// Unity's `ForwardBase` + `ForwardAdd` split is not preserved: this renderer is clustered
 /// forward, so directional + local lights are evaluated together inside a single fragment call
@@ -248,11 +316,10 @@ pub enum PassKind {
 
 /// Returns the canonical [`MaterialPassDesc`] for a given [`PassKind`] and fragment entry point.
 ///
-/// All render-state fields come from this table; the shader side only declares the kind and entry
-/// point name. Host material properties override depth / cull / stencil / color-mask / depth-bias at
-/// pipeline build time via [`MaterialRenderState`](super::render_state::MaterialRenderState), and
-/// blend state via [`materialized_pass_for_blend_mode`] when the kind's [`MaterialPassState`] is not
-/// [`MaterialPassState::Static`].
+/// All render-state defaults come from this table; the shader side only declares the kind and entry
+/// point name. Host material properties override only the fields allowed by the kind's
+/// [`MaterialRenderStatePolicy`], and blend state via [`materialized_pass_for_blend_mode`] when the
+/// kind's [`MaterialPassState`] is not [`MaterialPassState::Static`].
 pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> MaterialPassDesc {
     let base = MaterialPassDesc {
         name: pass_kind_label(kind),
@@ -266,6 +333,7 @@ pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> Mat
         depth_bias_slope_scale: 0.0,
         depth_bias_constant: 0,
         material_state: MaterialPassState::Static,
+        render_state_policy: MaterialRenderStatePolicy::FORWARD,
     };
     match kind {
         PassKind::Forward => MaterialPassDesc {
@@ -274,27 +342,32 @@ pub const fn pass_from_kind(kind: PassKind, fragment_entry: &'static str) -> Mat
         },
         PassKind::Outline => MaterialPassDesc {
             cull_mode: Some(wgpu::Face::Front),
+            render_state_policy: MaterialRenderStatePolicy::OUTLINE,
             ..base
         },
         PassKind::Stencil => MaterialPassDesc {
             depth_write: false,
             cull_mode: Some(wgpu::Face::Front),
             write_mask: COLOR_WRITES_NONE,
+            render_state_policy: MaterialRenderStatePolicy::STENCIL,
             ..base
         },
         PassKind::DepthPrepass => MaterialPassDesc {
             write_mask: COLOR_WRITES_NONE,
+            render_state_policy: MaterialRenderStatePolicy::DEPTH_PREPASS,
             ..base
         },
         PassKind::OverlayFront => MaterialPassDesc {
             blend: Some(OVERLAY_NOOP_COLOR_MAX_ALPHA_BLEND),
             write_mask: wgpu::ColorWrites::ALL,
+            render_state_policy: MaterialRenderStatePolicy::OVERLAY,
             ..base
         },
         PassKind::OverlayBehind => MaterialPassDesc {
             depth_compare: wgpu::CompareFunction::Less,
             blend: Some(OVERLAY_NOOP_COLOR_MAX_ALPHA_BLEND),
             write_mask: wgpu::ColorWrites::ALL,
+            render_state_policy: MaterialRenderStatePolicy::OVERLAY,
             ..base
         },
     }
@@ -338,6 +411,83 @@ pub struct MaterialPassDesc {
     pub depth_bias_constant: i32,
     /// Optional material-driven Unity pass-state override.
     pub material_state: MaterialPassState,
+    /// Per-field policy for host-authored Unity render-state overrides.
+    pub(crate) render_state_policy: MaterialRenderStatePolicy,
+}
+
+impl MaterialPassDesc {
+    /// Resolves the color write mask after applying any allowed material override.
+    pub(crate) fn resolved_color_writes(
+        &self,
+        render_state: MaterialRenderState,
+    ) -> wgpu::ColorWrites {
+        if self.render_state_policy.color_mask {
+            render_state.color_writes(self.write_mask)
+        } else {
+            self.write_mask
+        }
+    }
+
+    /// Resolves the depth-write flag after applying any allowed material override.
+    pub(crate) fn resolved_depth_write(&self, render_state: MaterialRenderState) -> bool {
+        if self.render_state_policy.depth_write {
+            render_state.depth_write(self.depth_write)
+        } else {
+            self.depth_write
+        }
+    }
+
+    /// Resolves the depth compare function after applying any allowed material override.
+    pub(crate) fn resolved_depth_compare(
+        &self,
+        render_state: MaterialRenderState,
+    ) -> wgpu::CompareFunction {
+        if self.render_state_policy.depth_compare {
+            render_state.depth_compare(self.depth_compare)
+        } else {
+            self.depth_compare
+        }
+    }
+
+    /// Resolves the cull mode after applying any allowed material override.
+    pub(crate) fn resolved_cull_mode(
+        &self,
+        render_state: MaterialRenderState,
+    ) -> Option<wgpu::Face> {
+        if self.render_state_policy.cull {
+            render_state.resolved_cull_mode(self.cull_mode)
+        } else {
+            self.cull_mode
+        }
+    }
+
+    /// Resolves the stencil state after applying any allowed material override.
+    pub(crate) fn resolved_stencil_state(
+        &self,
+        render_state: MaterialRenderState,
+    ) -> wgpu::StencilState {
+        if self.render_state_policy.stencil {
+            render_state.stencil_state()
+        } else {
+            wgpu::StencilState::default()
+        }
+    }
+
+    /// Resolves the depth bias after applying any allowed material offset override.
+    pub(crate) fn resolved_depth_bias(
+        &self,
+        render_state: MaterialRenderState,
+    ) -> wgpu::DepthBiasState {
+        if self.render_state_policy.depth_offset {
+            render_state.depth_bias(self.depth_bias_constant, self.depth_bias_slope_scale)
+        } else {
+            wgpu::DepthBiasState {
+                constant: self.depth_bias_constant,
+                slope_scale: self.depth_bias_slope_scale,
+                clamp: 0.0,
+            }
+        }
+    }
 }
 
 /// Inputs to [`default_pass`] — labels the two boolean knobs at every call site.
@@ -378,6 +528,7 @@ pub const fn default_pass(params: DefaultPassParams) -> MaterialPassDesc {
         depth_bias_slope_scale: 0.0,
         depth_bias_constant: 0,
         material_state: MaterialPassState::Static,
+        render_state_policy: MaterialRenderStatePolicy::FORWARD,
     }
 }
 
@@ -752,3 +903,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "material_passes_policy_tests.rs"]
+mod policy_tests;

@@ -57,9 +57,9 @@
 //! one `_SrcBlend`/`_ZWrite`/`_Cull`/etc. set per material — not per pass. The directive fills the
 //! gap host properties can't fill: multi-draw structure, auxiliary-pass state (e.g. `Outline`'s
 //! `Cull Front` when the host's `_Cull` belongs to the forward pass), and state Unity doesn't
-//! have a property for (`OverlayBehind`'s inverted depth compare). For the `forward` kind, host
-//! properties win — [`MaterialBlendMode`] + [`MaterialRenderState`] overlay the kind defaults at
-//! pipeline build time. For all other kinds, kind defaults are authoritative.
+//! have a property for (`OverlayBehind`'s inverted depth compare). Each kind carries a policy for
+//! which host properties may still overlay the kind defaults; `depth_prepass`, for example, accepts
+//! stencil / depth-test / offset state but preserves its authored `ZWrite On` and `ColorMask 0`.
 //!
 //! **Every material WGSL must declare at least one `//#pass`** — the build script rejects empty
 //! declarations. The runtime has no implicit "default forward" fallback; what you see in the
