@@ -800,8 +800,8 @@ mod post_processing_rebuild_tests {
             backend.frame_graph_cache.post_processing_signature(),
             PostProcessChainSignature {
                 aces_tonemap: true,
-                bloom: false,
-                bloom_max_mip_dimension: 0,
+                bloom: true,
+                bloom_max_mip_dimension: 512,
                 gtao: true,
             }
         );

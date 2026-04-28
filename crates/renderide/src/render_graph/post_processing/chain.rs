@@ -420,12 +420,14 @@ mod tests {
         let sig = PostProcessChainSignature::from_settings(&s);
         assert!(sig.aces_tonemap);
         assert!(sig.gtao);
-        assert!(!sig.bloom);
-        assert_eq!(sig.active_count(), 2);
+        assert!(sig.bloom);
+        assert_eq!(sig.active_count(), 3);
 
         s.tonemap.mode = crate::config::TonemapMode::None;
         assert!(PostProcessChainSignature::from_settings(&s).gtao);
+        assert!(PostProcessChainSignature::from_settings(&s).bloom);
         s.gtao.enabled = false;
+        s.bloom.enabled = false;
         assert!(PostProcessChainSignature::from_settings(&s).is_empty());
     }
 
@@ -438,6 +440,7 @@ mod tests {
             },
             ..Default::default()
         };
+        s.bloom.enabled = false;
         let sig = PostProcessChainSignature::from_settings(&s);
         assert!(sig.gtao);
         assert!(!sig.aces_tonemap);
@@ -461,6 +464,7 @@ mod tests {
             ..Default::default()
         };
         s.gtao.enabled = false;
+        s.bloom.enabled = false;
         assert!(PostProcessChainSignature::from_settings(&s).is_empty());
 
         s.bloom.enabled = true;
